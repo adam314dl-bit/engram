@@ -41,7 +41,7 @@ class LLMClient:
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
                 },
-                proxy=None,  # Direct connection, no proxy
+                trust_env=True,  # Use system proxy settings (respects NO_PROXY)
             )
         return self._client
 
