@@ -4,7 +4,7 @@
 import asyncio
 import sys
 
-import httpx
+import requests
 
 API_BASE = "http://localhost:8000"
 
@@ -28,18 +28,27 @@ Just type your question to chat!
 
 class EngramChat:
     def __init__(self):
-        self.client = httpx.AsyncClient(base_url=API_BASE, timeout=120.0)
+        self.session = requests.Session()
+        self.session.timeout = 120.0
+        self.base_url = API_BASE
         self.last_episode_id: str | None = None
 
-    async def close(self):
-        await self.client.aclose()
+    def close(self):
+        self.session.close()
+
+    def _get(self, path: str) -> requests.Response:
+        return self.session.get(f"{self.base_url}{path}", timeout=120.0)
+
+    def _post(self, path: str, json: dict) -> requests.Response:
+        return self.session.post(f"{self.base_url}{path}", json=json, timeout=120.0)
 
     async def chat(self, message: str) -> str:
         """Send a message and get a response."""
         try:
-            response = await self.client.post(
+            response = await asyncio.to_thread(
+                self._post,
                 "/v1/chat/completions",
-                json={"messages": [{"role": "user", "content": message}]},
+                {"messages": [{"role": "user", "content": message}]},
             )
             response.raise_for_status()
             data = response.json()
@@ -57,7 +66,7 @@ class EngramChat:
 
             return result
 
-        except httpx.HTTPError as e:
+        except requests.RequestException as e:
             return f"Error: {e}"
 
     async def feedback(self, positive: bool) -> str:
@@ -66,9 +75,10 @@ class EngramChat:
             return "No previous answer to give feedback on."
 
         try:
-            response = await self.client.post(
+            response = await asyncio.to_thread(
+                self._post,
                 "/v1/feedback",
-                json={
+                {
                     "episode_id": self.last_episode_id,
                     "feedback": "positive" if positive else "negative",
                 },
@@ -89,13 +99,13 @@ class EngramChat:
                     result += f"\n\nAlternative answer:\n{alt}"
                 return result
 
-        except httpx.HTTPError as e:
+        except requests.RequestException as e:
             return f"Error: {e}"
 
     async def stats(self) -> str:
         """Get system statistics."""
         try:
-            response = await self.client.get("/admin/stats")
+            response = await asyncio.to_thread(self._get, "/admin/stats")
             response.raise_for_status()
             data = response.json()
 
@@ -107,13 +117,13 @@ class EngramChat:
                 f"  Documents:        {data['documents_count']}"
             )
 
-        except httpx.HTTPError as e:
+        except requests.RequestException as e:
             return f"Error: {e}"
 
     async def concepts(self, limit: int = 20) -> str:
         """List top concepts."""
         try:
-            response = await self.client.get(f"/admin/concepts?limit={limit}")
+            response = await asyncio.to_thread(self._get, f"/admin/concepts?limit={limit}")
             response.raise_for_status()
             data = response.json()
 
@@ -123,13 +133,13 @@ class EngramChat:
 
             return "\n".join(lines)
 
-        except httpx.HTTPError as e:
+        except requests.RequestException as e:
             return f"Error: {e}"
 
     async def memories(self, limit: int = 10) -> str:
         """List recent memories."""
         try:
-            response = await self.client.get(f"/admin/memories?limit={limit}")
+            response = await asyncio.to_thread(self._get, f"/admin/memories?limit={limit}")
             response.raise_for_status()
             data = response.json()
 
@@ -140,13 +150,13 @@ class EngramChat:
 
             return "\n".join(lines)
 
-        except httpx.HTTPError as e:
+        except requests.RequestException as e:
             return f"Error: {e}"
 
     async def episodes(self, limit: int = 10) -> str:
         """List recent episodes."""
         try:
-            response = await self.client.get(f"/admin/episodes?limit={limit}")
+            response = await asyncio.to_thread(self._get, f"/admin/episodes?limit={limit}")
             response.raise_for_status()
             data = response.json()
 
@@ -161,7 +171,7 @@ class EngramChat:
 
             return "\n".join(lines)
 
-        except httpx.HTTPError as e:
+        except requests.RequestException as e:
             return f"Error: {e}"
 
 
@@ -172,9 +182,10 @@ async def main():
 
     # Check connection
     try:
-        await chat.client.get("/health")
+        response = await asyncio.to_thread(chat._get, "/health")
+        response.raise_for_status()
         print("Connected to Engram API at", API_BASE)
-    except httpx.HTTPError:
+    except requests.RequestException:
         print(f"Error: Cannot connect to Engram API at {API_BASE}")
         print("Make sure the API is running: python -m engram.api.main")
         return
@@ -239,7 +250,7 @@ async def main():
                 print(result)
 
     finally:
-        await chat.close()
+        chat.close()
 
 
 if __name__ == "__main__":
