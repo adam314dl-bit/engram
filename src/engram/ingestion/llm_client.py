@@ -19,11 +19,13 @@ class LLMClient:
         self,
         base_url: str | None = None,
         model: str | None = None,
+        api_key: str | None = None,
         timeout: float | None = None,
         max_concurrent: int | None = None,
     ) -> None:
         self.base_url = (base_url or settings.llm_base_url).rstrip("/")
         self.model = model or settings.llm_model
+        self.api_key = api_key or settings.llm_api_key
         self.timeout = timeout or settings.llm_timeout
         self.max_concurrent = max_concurrent or settings.llm_max_concurrent
 
@@ -35,6 +37,10 @@ class LLMClient:
         if self._client is None:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(self.timeout),
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
             )
         return self._client
 

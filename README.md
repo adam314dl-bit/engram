@@ -20,130 +20,193 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 - **Hybrid Search**: Combines graph traversal, vector similarity, and BM25
 - **Learning from Feedback**: Positive feedback strengthens memories, negative triggers re-reasoning
 - **Memory Consolidation**: Successful episodes crystallize into semantic memories
+- **OpenAI-Compatible API**: Works with Open WebUI and other clients
 
 ## Tech Stack
 
-- Python 3.11+
-- Neo4j 5.15+ (graph database)
-- FastAPI (API)
-- sentence-transformers (embeddings)
-- Ollama/Qwen3 (LLM)
+| Component | Choice |
+|-----------|--------|
+| Python | 3.11+ |
+| Package Manager | uv |
+| Graph DB | Neo4j 5 (Docker) |
+| API | FastAPI |
+| Embeddings | sentence-transformers (local HuggingFace) |
+| LLM | OpenAI-compatible endpoint (remote) |
 
 ## Quick Start
 
 ### Prerequisites
 
-- Docker and Docker Compose
-- Python 3.11+
+- Docker
 - uv (Python package manager)
 
-### Setup
+### Local Development
 
-1. Clone the repository:
 ```bash
+# Clone repository
 git clone <repo-url>
 cd engram
-```
 
-2. Start services:
-```bash
-docker-compose up -d
-```
+# Start Neo4j
+docker run -d --name neo4j -p 7474:7474 -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/engram_password neo4j:5
 
-3. Install dependencies:
-```bash
+# Install dependencies
 uv sync
-```
 
-4. Copy environment file:
-```bash
+# Copy and configure environment
 cp .env.example .env
-# Edit .env with your settings
-```
+# Edit .env with your LLM endpoint
 
-5. Run tests:
-```bash
+# Run tests
 uv run pytest
+
+# Start API
+uv run python -m engram.api.main
 ```
 
-### Using Ollama for LLM
-
-If using Ollama on Mac (not in Docker):
+### Production Setup (RHEL 9+)
 
 ```bash
-# Install Ollama (if not already)
-brew install ollama
+# Run setup script
+chmod +x scripts/setup_rhel.sh
+./scripts/setup_rhel.sh
 
-# Pull the model
-ollama pull qwen3:8b
+# Configure environment
+cp .env.production .env
+# Edit .env with your settings
 
-# Start Ollama server
-ollama serve
+# Start API
+source .venv/bin/activate
+python -m engram.api.main
 ```
 
-The default configuration expects Ollama at `http://localhost:11434`.
+## Configuration
+
+### Environment Variables
+
+```bash
+# LLM (remote OpenAI-compatible endpoint)
+LLM_BASE_URL=http://your-host:8888/v1
+LLM_MODEL=kimi-k2
+LLM_API_KEY=your-key
+
+# Neo4j
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=engram2024
+
+# Embeddings (local HuggingFace model)
+# Dev: all-MiniLM-L6-v2 (384 dims)
+# Prod: ai-sage/Giga-Embeddings-instruct (1024 dims)
+EMBEDDING_MODEL=ai-sage/Giga-Embeddings-instruct
+EMBEDDING_DIMENSIONS=1024
+```
+
+## API Endpoints
+
+### Chat (OpenAI-Compatible)
+
+```bash
+POST /v1/chat/completions
+```
+
+```json
+{
+  "messages": [{"role": "user", "content": "What is Docker?"}],
+  "model": "engram"
+}
+```
+
+### Feedback
+
+```bash
+POST /v1/feedback
+```
+
+```json
+{
+  "episode_id": "...",
+  "feedback": "positive"  // or "negative", "correction"
+}
+```
+
+### Admin
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health` | Health check |
+| `GET /admin/stats` | System statistics |
+| `GET /admin/concepts` | List concepts |
+| `GET /admin/memories` | List memories |
+| `GET /admin/episodes` | List episodes |
+| `POST /admin/calibrate` | Run memory calibration |
+
+## Interactive Chat CLI
+
+```bash
+uv run python scripts/chat.py
+```
+
+Commands:
+- `/stats` - Show system statistics
+- `/concepts [n]` - List top concepts
+- `/memories [n]` - List memories
+- `/episodes [n]` - List episodes
+- `/feedback +` - Positive feedback
+- `/feedback -` - Negative feedback
+- `/help` - Show help
+- `/quit` - Exit
+
+## Document Ingestion
+
+```bash
+# Generate mock documents (for testing)
+uv run python scripts/generate_mock_docs.py
+
+# Ingest documents
+uv run python scripts/run_ingestion.py
+```
 
 ## Project Structure
 
 ```
 engram/
 ├── src/engram/
-│   ├── models/          # Data models (Concept, Memory, etc.)
-│   ├── ingestion/       # Document parsing and extraction
+│   ├── models/          # Concept, SemanticMemory, EpisodicMemory
+│   ├── ingestion/       # Document parsing, concept/memory extraction
 │   ├── storage/         # Neo4j client and schema
-│   ├── retrieval/       # Embeddings and search
-│   ├── reasoning/       # Response synthesis
-│   ├── learning/        # Feedback and consolidation
-│   └── api/            # FastAPI endpoints
+│   ├── retrieval/       # Embeddings, spreading activation, hybrid search
+│   ├── reasoning/       # Response synthesis, episode management
+│   ├── learning/        # Feedback, consolidation, memory strength
+│   └── api/             # FastAPI routes
 ├── tests/
-│   ├── unit/           # Unit tests
-│   ├── integration/    # Integration tests
-│   └── fixtures/       # Test data
-└── scripts/            # Utility scripts
+│   ├── unit/            # 169 unit tests
+│   ├── integration/
+│   └── fixtures/mock_docs/  # 32 sample documents
+├── scripts/
+│   ├── setup_rhel.sh    # Production setup
+│   ├── chat.py          # Interactive CLI
+│   ├── generate_mock_docs.py
+│   └── run_ingestion.py
+└── CLAUDE.md            # AI assistant instructions
 ```
 
 ## Development
 
-### Running Tests
-
 ```bash
-# All tests
+# Run tests
 uv run pytest
 
 # With coverage
 uv run pytest --cov=engram
 
-# Specific test file
-uv run pytest tests/unit/test_models.py
-```
-
-### Type Checking
-
-```bash
+# Type checking
 uv run mypy src/engram
-```
 
-### Linting
-
-```bash
+# Linting
 uv run ruff check src/engram
 ```
-
-### Seeding Test Data
-
-```bash
-# Ensure Neo4j is running
-uv run python scripts/seed_test_data.py
-```
-
-## Implementation Phases
-
-- [x] **Phase 1**: Foundation (models, parsing, basic storage)
-- [ ] **Phase 2**: Spreading Activation
-- [ ] **Phase 3**: Hybrid Retrieval
-- [ ] **Phase 4**: Reasoning & Synthesis
-- [ ] **Phase 5**: Learning System
-- [ ] **Phase 6**: API & Integration
 
 ## License
 

@@ -12,9 +12,10 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # LLM Configuration
+    # LLM Configuration (remote OpenAI-compatible endpoint)
     llm_base_url: str = "http://localhost:11434/v1"
     llm_model: str = "qwen3:8b"
+    llm_api_key: str = "ollama"
     llm_max_concurrent: int = 16
     llm_timeout: float = 120.0
 
@@ -24,7 +25,9 @@ class Settings(BaseSettings):
     neo4j_password: str = "engram_password"
     neo4j_database: str = "neo4j"
 
-    # Embeddings Configuration
+    # Embeddings Configuration (local HuggingFace model)
+    # Dev: all-MiniLM-L6-v2 (384 dims)
+    # Prod: ai-sage/Giga-Embeddings-instruct (1024 dims)
     embedding_model: str = "all-MiniLM-L6-v2"
     embedding_dimensions: int = 384
 

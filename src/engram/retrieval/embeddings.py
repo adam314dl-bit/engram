@@ -1,4 +1,4 @@
-"""Embedding service using sentence-transformers."""
+"""Embedding service using sentence-transformers (local HuggingFace models)."""
 
 import asyncio
 import logging
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class EmbeddingService:
-    """Service for generating text embeddings."""
+    """Service for generating text embeddings using local models."""
 
     def __init__(self, model_name: str | None = None) -> None:
         self.model_name = model_name or settings.embedding_model
@@ -50,7 +50,6 @@ class EmbeddingService:
 
     async def embed(self, text: str) -> list[float]:
         """Generate embedding for a single text (async)."""
-        # Run in executor to not block event loop
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self.embed_sync, text)
 
