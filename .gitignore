@@ -42,7 +42,6 @@ htmlcov/
 # Environment
 .env
 .env.local
-.env.production
 
 # Data
 *.db
