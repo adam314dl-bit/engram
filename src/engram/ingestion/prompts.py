@@ -1,55 +1,55 @@
 """LLM prompts for knowledge extraction."""
 
 # System prompt for structured extraction tasks
-EXTRACTION_SYSTEM_PROMPT = """You extract information into a simple line format.
-Output ONLY the requested lines. No explanations, no markdown, no extra text."""
+EXTRACTION_SYSTEM_PROMPT = """Ты извлекаешь информацию в простой строчный формат.
+Выводи ТОЛЬКО запрошенные строки. Без объяснений, без markdown, без лишнего текста."""
 
-CONCEPT_EXTRACTION_PROMPT = """Extract concepts from this text.
+CONCEPT_EXTRACTION_PROMPT = """Извлеки концепты из этого текста.
 
-Text:
+Текст:
 {content}
 
-Output each concept on a new line in format:
-CONCEPT|name|type|description
+Выведи каждый концепт на новой строке в формате:
+CONCEPT|название|тип|описание
 
-Types: tool, resource, action, state, config, error, general
+Типы: tool, resource, action, state, config, error, general
 
-Example:
-CONCEPT|docker|tool|containerization platform
-CONCEPT|container|resource|isolated environment
-CONCEPT|dockerfile|config|build instructions
+Пример:
+CONCEPT|docker|tool|платформа контейнеризации
+CONCEPT|контейнер|resource|изолированная среда выполнения
+CONCEPT|dockerfile|config|инструкции для сборки образа
 
-Also output relations:
-RELATION|source|target|type
+Также выведи связи:
+RELATION|источник|цель|тип
 
-Relation types: uses, needs, causes, contains, is_a, related_to
+Типы связей: uses, needs, causes, contains, is_a, related_to
 
-Example:
-RELATION|docker|container|uses
-RELATION|dockerfile|image|creates
+Пример:
+RELATION|docker|контейнер|uses
+RELATION|dockerfile|образ|causes
 
-Output:"""
+Вывод:"""
 
 
-MEMORY_EXTRACTION_PROMPT = """Extract knowledge from this document.
+MEMORY_EXTRACTION_PROMPT = """Извлеки знания из этого документа.
 
-Document: {title}
-Content:
+Документ: {title}
+Содержимое:
 {content}
 
-Output 5-15 knowledge items, one per line:
-MEMORY|content|type|concepts|importance
+Выведи 5-15 единиц знаний, по одной на строку:
+MEMORY|содержание|тип|концепты|важность
 
-Types: fact, procedure, relationship
-Concepts: comma-separated list
-Importance: 1-10
+Типы: fact, procedure, relationship
+Концепты: список через запятую
+Важность: 1-10
 
-Example:
-MEMORY|Docker uses containers for app isolation|fact|docker,container|8
-MEMORY|Run docker system prune to free space|procedure|docker,disk|7
-MEMORY|Kubernetes requires Docker or containerd|relationship|kubernetes,docker|9
+Пример:
+MEMORY|Docker использует контейнеры для изоляции приложений|fact|docker,контейнер|8
+MEMORY|Команда docker system prune освобождает место на диске|procedure|docker,диск|7
+MEMORY|Kubernetes требует Docker или containerd для работы|relationship|kubernetes,docker|9
 
-Output:"""
+Вывод:"""
 
 
 BEHAVIOR_EXTRACTION_PROMPT = """Проанализируй ответ и извлеки стратегию рассуждения.

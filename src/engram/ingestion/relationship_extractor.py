@@ -23,26 +23,26 @@ RELATION_TYPE_WEIGHTS: dict[str, float] = {
 }
 
 
-RELATIONSHIP_EXTRACTION_PROMPT = """Extract relationships between concepts from this text.
+RELATIONSHIP_EXTRACTION_PROMPT = """Извлеки связи между концептами из этого текста.
 
-Text:
+Текст:
 {content}
 
-Concepts to analyze: {concepts}
+Концепты для анализа: {concepts}
 
-Output each relationship on a new line in format:
-RELATION|source|target|type|description|strength
+Выведи каждую связь на новой строке в формате:
+RELATION|источник|цель|тип|описание|сила
 
-Types: is_a, contains, uses, needs, causes, related_to
-Strength: 0.1-1.0 (1.0 = very strong direct relationship)
+Типы: is_a, contains, uses, needs, causes, related_to
+Сила: 0.1-1.0 (1.0 = очень сильная прямая связь)
 
-Example:
-RELATION|docker|container|uses|Docker creates and manages containers|0.9
-RELATION|kubernetes|docker|needs|Kubernetes requires container runtime|0.8
+Пример:
+RELATION|docker|контейнер|uses|Docker создаёт и управляет контейнерами|0.9
+RELATION|kubernetes|docker|needs|Kubernetes требует среду выполнения контейнеров|0.8
 
-Output ONLY the RELATION lines. No explanations, no other text.
+Выводи ТОЛЬКО строки RELATION. Без объяснений, без другого текста.
 
-Output:"""
+Вывод:"""
 
 
 @dataclass
@@ -95,7 +95,7 @@ class RelationshipExtractor:
         try:
             result = await self.llm.generate(
                 prompt,
-                system_prompt="You extract relationships into a simple line format. Output ONLY the requested lines. No explanations, no markdown, no extra text.",
+                system_prompt="Ты извлекаешь связи в простой строчный формат. Выводи ТОЛЬКО запрошенные строки. Без объяснений, без markdown, без лишнего текста.",
                 temperature=0.3,
                 max_tokens=4096,
             )
