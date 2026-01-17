@@ -1,7 +1,10 @@
 """Ingestion pipeline - orchestrates document processing."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -195,8 +198,16 @@ class IngestionPipeline:
         directory: Path | str,
         extensions: list[str] | None = None,
         max_concurrent: int | None = None,
+        progress_callback: "Callable[[IngestionResult], None] | None" = None,
     ) -> list[IngestionResult]:
-        """Ingest all matching files in a directory with parallel processing."""
+        """Ingest all matching files in a directory with parallel processing.
+
+        Args:
+            directory: Directory to process
+            extensions: File extensions to include
+            max_concurrent: Max parallel documents
+            progress_callback: Called after each document completes (for progress bars)
+        """
         if isinstance(directory, str):
             directory = Path(directory)
 
@@ -209,9 +220,17 @@ class IngestionPipeline:
         concurrency = max_concurrent or settings.ingestion_max_concurrent
         semaphore = asyncio.Semaphore(concurrency)
 
+        final_results: list[IngestionResult] = []
+        results_lock = asyncio.Lock()
+
         async def ingest_with_semaphore(doc: Document) -> IngestionResult:
             async with semaphore:
-                return await self.ingest_document(doc)
+                result = await self.ingest_document(doc)
+                async with results_lock:
+                    final_results.append(result)
+                    if progress_callback:
+                        progress_callback(result)
+                return result
 
         # Process documents in parallel
         logger.info(f"Ingesting {len(documents)} documents with max {concurrency} concurrent")
@@ -220,20 +239,22 @@ class IngestionPipeline:
             return_exceptions=True,
         )
 
-        # Handle any exceptions
-        final_results: list[IngestionResult] = []
+        # Handle any exceptions that weren't caught
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 logger.error(f"Error ingesting document {documents[i].title}: {result}")
-                final_results.append(IngestionResult(
+                error_result = IngestionResult(
                     document=documents[i],
                     concepts_created=0,
                     memories_created=0,
                     relations_created=0,
                     errors=[str(result)],
-                ))
-            else:
-                final_results.append(result)
+                )
+                # Check if already added via callback
+                if error_result.document.id not in [r.document.id for r in final_results]:
+                    final_results.append(error_result)
+                    if progress_callback:
+                        progress_callback(error_result)
 
         total_concepts = sum(r.concepts_created for r in final_results)
         total_memories = sum(r.memories_created for r in final_results)

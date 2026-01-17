@@ -6,8 +6,10 @@ import logging
 import sys
 from pathlib import Path
 
+from tqdm import tqdm
+
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,  # Reduce noise during progress bar
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -21,13 +23,13 @@ async def run_ingestion():
     docs_dir = Path(__file__).parent.parent / "tests" / "fixtures" / "mock_docs"
 
     if not docs_dir.exists():
-        logger.error(f"Documents directory not found: {docs_dir}")
-        logger.info("Run 'python scripts/generate_mock_docs.py' first to create documents.")
+        print(f"Documents directory not found: {docs_dir}")
+        print("Run 'python scripts/generate_mock_docs.py' first to create documents.")
         return False
 
     # Count documents
     md_files = list(docs_dir.glob("*.md"))
-    logger.info(f"Found {len(md_files)} documents to ingest")
+    print(f"Found {len(md_files)} documents to ingest")
 
     # Connect to Neo4j
     db = Neo4jClient()
@@ -40,32 +42,52 @@ async def run_ingestion():
         # Create pipeline
         pipeline = IngestionPipeline(neo4j_client=db)
 
-        # Ingest directory
-        logger.info(f"Ingesting documents from {docs_dir}...")
-        results = await pipeline.ingest_directory(docs_dir, extensions=[".md"])
+        # Create progress bar
+        pbar = tqdm(total=len(md_files), desc="Ingesting documents", unit="doc")
+
+        # Track totals
+        totals = {"concepts": 0, "memories": 0, "relations": 0, "errors": []}
+
+        def on_progress(result):
+            """Update progress bar after each document."""
+            totals["concepts"] += result.concepts_created
+            totals["memories"] += result.memories_created
+            totals["relations"] += result.relations_created
+            if result.errors:
+                totals["errors"].append(result)
+            pbar.set_postfix(
+                concepts=totals["concepts"],
+                memories=totals["memories"],
+                relations=totals["relations"],
+            )
+            pbar.update(1)
+
+        # Ingest directory with progress callback
+        results = await pipeline.ingest_directory(
+            docs_dir,
+            extensions=[".md"],
+            progress_callback=on_progress,
+        )
+
+        pbar.close()
 
         # Summary
-        total_concepts = sum(r.concepts_created for r in results)
-        total_memories = sum(r.memories_created for r in results)
-        total_relations = sum(r.relations_created for r in results)
-        failed = [r for r in results if r.errors]
-
         print("\n" + "=" * 60)
         print("INGESTION COMPLETE")
         print("=" * 60)
         print(f"Documents processed: {len(results)}")
-        print(f"Concepts created:    {total_concepts}")
-        print(f"Memories created:    {total_memories}")
-        print(f"Relations created:   {total_relations}")
+        print(f"Concepts created:    {totals['concepts']}")
+        print(f"Memories created:    {totals['memories']}")
+        print(f"Relations created:   {totals['relations']}")
 
-        if failed:
-            print(f"\nFailed documents: {len(failed)}")
-            for r in failed:
+        if totals["errors"]:
+            print(f"\nFailed documents: {len(totals['errors'])}")
+            for r in totals["errors"]:
                 print(f"  - {r.document.title}: {r.errors}")
 
         print("=" * 60)
 
-        return len(failed) == 0
+        return len(totals["errors"]) == 0
 
     finally:
         await db.close()
