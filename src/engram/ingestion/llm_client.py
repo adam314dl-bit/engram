@@ -112,7 +112,24 @@ class LLMClient:
         )
         response.raise_for_status()
         data = response.json()
-        content = data["choices"][0]["message"]["content"]
+
+        # Handle various response formats
+        choices = data.get("choices", [])
+        if not choices:
+            logger.error(f"LLM returned empty choices: {data}")
+            raise ValueError("LLM returned empty choices")
+
+        message = choices[0].get("message", {})
+        content = message.get("content")
+
+        # Some APIs use "text" instead of "content"
+        if content is None:
+            content = choices[0].get("text")
+
+        if content is None:
+            logger.error(f"LLM returned None content. Full response: {data}")
+            raise ValueError(f"LLM returned None content: {data}")
+
         # Strip thinking tags from models like Kimi, DeepSeek, etc.
         return strip_thinking_tags(content)
 
