@@ -149,33 +149,30 @@ GRAPH_HTML = """
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; }
-        body { background: #0d1117; font-family: -apple-system, sans-serif; }
+        body { background: #0a0a12; font-family: -apple-system, sans-serif; }
         #graph { width: 100vw; height: 100vh; }
         #info { position: absolute; top: 16px; left: 16px; color: #8b949e; z-index: 10; pointer-events: none; }
-        #info h1 { font-size: 11px; color: #6e7681; font-weight: 400; text-transform: uppercase; letter-spacing: 3px; margin-top: 6px; }
+        #info h1 { font-size: 11px; color: #5eead480; font-weight: 400; text-transform: uppercase; letter-spacing: 3px; margin-top: 6px; }
         #info .brand {
             font-family: 'Orbitron', sans-serif;
             font-size: 32px;
             font-weight: 700;
-            color: #7dd3fc;
-            text-shadow:
-                0 0 10px #0ea5e9,
-                0 0 20px #0ea5e9,
-                0 0 40px #0ea5e9,
-                0 0 80px #0284c7;
+            color: #5eead4;
+            text-shadow: 0 0 20px #5eead440;
             letter-spacing: 4px;
         }
         #legend {
             position: absolute;
             bottom: 16px;
             left: 16px;
-            background: rgba(13,17,23,0.9);
+            background: rgba(10,10,18,0.95);
             padding: 12px 16px;
             border-radius: 6px;
-            border: 1px solid #30363d;
+            border: 1px solid #1a1a2e;
             font-size: 11px;
             color: #8b949e;
             z-index: 100;
+            box-shadow: 0 0 15px rgba(94,234,212,0.08);
         }
         .legend-btn {
             display: flex;
@@ -183,18 +180,19 @@ GRAPH_HTML = """
             width: 100%;
             padding: 8px 12px;
             margin: 4px 0;
-            background: #21262d;
-            border: 1px solid #30363d;
+            background: #0f0f1a;
+            border: 1px solid #1a1a2e;
             border-radius: 6px;
-            color: #c9d1d9;
+            color: #e0e0ff;
             cursor: pointer;
             font-size: 12px;
             font-family: inherit;
+            transition: all 0.2s;
         }
-        .legend-btn:hover { background: #30363d; border-color: #484f58; }
-        .legend-btn.active { background: #388bfd20; border-color: #58a6ff; }
-        .legend-dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 10px; box-shadow: 0 0 6px currentColor; }
-        .legend-count { margin-left: auto; padding-left: 16px; color: #58a6ff; font-weight: 500; }
+        .legend-btn:hover { background: #1a1a2e; border-color: #5eead440; box-shadow: 0 0 8px rgba(94,234,212,0.15); }
+        .legend-btn.active { background: #5eead415; border-color: #5eead4; box-shadow: 0 0 10px rgba(94,234,212,0.2); }
+        .legend-dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 10px; box-shadow: 0 0 8px currentColor; }
+        .legend-count { margin-left: auto; padding-left: 16px; color: #5eead4; font-weight: 500; }
         #search-box {
             position: absolute;
             top: 16px;
@@ -205,15 +203,16 @@ GRAPH_HTML = """
         #search-input {
             width: 300px;
             padding: 10px 16px;
-            background: rgba(13,17,23,0.95);
-            border: 1px solid #30363d;
+            background: rgba(10,10,18,0.95);
+            border: 1px solid #1a1a2e;
             border-radius: 6px;
-            color: #c9d1d9;
+            color: #e0e0ff;
             font-size: 14px;
             font-family: inherit;
+            box-shadow: 0 0 20px rgba(0,240,255,0.05);
         }
-        #search-input:focus { outline: none; border-color: #58a6ff; }
-        #search-input::placeholder { color: #6e7681; }
+        #search-input:focus { outline: none; border-color: #5eead4; box-shadow: 0 0 10px rgba(94,234,212,0.2); }
+        #search-input::placeholder { color: #4a4a6a; }
         #search-results {
             position: absolute;
             top: 100%;
@@ -221,44 +220,47 @@ GRAPH_HTML = """
             right: 0;
             max-height: 300px;
             overflow-y: auto;
-            background: rgba(13,17,23,0.98);
-            border: 1px solid #30363d;
+            background: rgba(10,10,18,0.98);
+            border: 1px solid #1a1a2e;
             border-top: none;
             border-radius: 0 0 6px 6px;
             display: none;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
         }
         #search-results.visible { display: block; }
         .search-result {
             padding: 10px 16px;
             cursor: pointer;
-            border-bottom: 1px solid #21262d;
+            border-bottom: 1px solid #1a1a2e;
             display: flex;
             align-items: center;
         }
-        .search-result:hover { background: #21262d; }
+        .search-result:hover { background: #1a1a2e; }
         .search-result:last-child { border-bottom: none; }
-        .search-result-name { flex: 1; color: #c9d1d9; }
+        .search-result-name { flex: 1; color: #e0e0ff; }
         .search-result-type { font-size: 10px; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; }
         #stats {
             position: absolute;
             top: 16px;
             right: 16px;
-            background: rgba(13,17,23,0.9);
+            background: rgba(10,10,18,0.95);
             padding: 12px 16px;
             border-radius: 6px;
-            border: 1px solid #30363d;
+            border: 1px solid #1a1a2e;
             font-size: 11px;
-            color: #8b949e;
+            color: #8b8ba0;
             z-index: 10;
+            box-shadow: 0 0 15px rgba(94,234,212,0.08);
         }
         #loading {
             position: absolute;
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            color: #58a6ff;
+            color: #5eead4;
             z-index: 10;
             pointer-events: none;
+            text-shadow: 0 0 8px #5eead450;
         }
         #node-info {
             position: absolute;
@@ -267,14 +269,15 @@ GRAPH_HTML = """
             width: 280px;
             max-height: 400px;
             overflow-y: auto;
-            background: rgba(13,17,23,0.95);
+            background: rgba(10,10,18,0.95);
             padding: 16px;
             border-radius: 8px;
-            border: 1px solid #30363d;
+            border: 1px solid #1a1a2e;
             font-size: 12px;
-            color: #c9d1d9;
+            color: #e0e0ff;
             display: none;
             z-index: 10;
+            box-shadow: 0 0 20px rgba(94,234,212,0.08);
         }
         #node-info.visible { display: block; }
         #node-info h3 {
@@ -282,6 +285,7 @@ GRAPH_HTML = """
             font-size: 14px;
             color: #fff;
             word-break: break-word;
+            text-shadow: 0 0 10px rgba(255,255,255,0.3);
         }
         #node-info .type-badge {
             display: inline-block;
@@ -291,20 +295,22 @@ GRAPH_HTML = """
             font-weight: 500;
             text-transform: uppercase;
             margin-bottom: 12px;
+            box-shadow: 0 0 10px currentColor;
         }
         #node-info .info-row {
             margin: 8px 0;
             padding: 8px 0;
-            border-top: 1px solid #21262d;
+            border-top: 1px solid #1a1a2e;
         }
         #node-info .info-label {
-            color: #8b949e;
+            color: #6b6b8a;
             font-size: 10px;
             text-transform: uppercase;
             margin-bottom: 4px;
+            letter-spacing: 1px;
         }
         #node-info .info-value {
-            color: #c9d1d9;
+            color: #e0e0ff;
             word-break: break-word;
         }
         #node-info .close-btn {
@@ -313,34 +319,173 @@ GRAPH_HTML = """
             right: 8px;
             background: none;
             border: none;
-            color: #8b949e;
+            color: #6b6b8a;
             cursor: pointer;
             font-size: 16px;
         }
-        #node-info .close-btn:hover { color: #fff; }
+        #node-info .close-btn:hover { color: #5eead4; text-shadow: 0 0 8px #5eead450; }
         #edge-tooltip {
             position: absolute;
             padding: 6px 12px;
-            background: rgba(13,17,23,0.95);
-            border: 1px solid #30363d;
+            background: rgba(10,10,18,0.95);
+            border: 1px solid #1a1a2e;
             border-radius: 6px;
-            color: #c9d1d9;
+            color: #e0e0ff;
             font-size: 11px;
             pointer-events: none;
             z-index: 1000;
             display: none;
             white-space: nowrap;
+            box-shadow: 0 0 10px rgba(94,234,212,0.15);
         }
         #edge-tooltip.visible { display: block; }
         #edge-tooltip .rel-type {
-            color: #58a6ff;
+            color: #5eead4;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.5px;
+            text-shadow: none;
         }
         #edge-tooltip .rel-weight {
-            color: #8b949e;
+            color: #8b8ba0;
             margin-left: 8px;
+        }
+        /* Controls panel */
+        #controls {
+            position: absolute;
+            bottom: 16px;
+            right: 16px;
+            width: 180px;
+            background: rgba(10,10,18,0.95);
+            border: 1px solid #1a1a2e;
+            border-radius: 6px;
+            padding: 12px;
+            z-index: 100;
+            box-shadow: 0 0 15px rgba(94,234,212,0.08);
+        }
+        .control-label {
+            font-size: 9px;
+            color: #6b6b8a;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 6px;
+        }
+        .control-group {
+            margin-bottom: 12px;
+        }
+        .control-group:last-child {
+            margin-bottom: 0;
+        }
+        #importance-slider {
+            width: 100%;
+            height: 4px;
+            -webkit-appearance: none;
+            background: #1a1a2e;
+            border-radius: 2px;
+            outline: none;
+        }
+        #importance-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 14px;
+            height: 14px;
+            background: #5eead4;
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 0 10px #5eead4;
+        }
+        #importance-slider::-moz-range-thumb {
+            width: 14px;
+            height: 14px;
+            background: #5eead4;
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 0 10px #5eead4;
+        }
+        #importance-value {
+            font-size: 11px;
+            color: #5eead4;
+            text-align: right;
+            margin-top: 4px;
+        }
+        /* Path finder */
+        #pathfinder {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .path-node {
+            display: flex;
+            align-items: center;
+            padding: 6px 8px;
+            background: #0f0f1a;
+            border: 1px solid #1a1a2e;
+            border-radius: 4px;
+            font-size: 10px;
+            color: #e0e0ff;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .path-node:hover {
+            border-color: #5eead440;
+        }
+        .path-node.selected {
+            border-color: #5eead4;
+            box-shadow: 0 0 8px rgba(94,234,212,0.15);
+        }
+        .path-node .label {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .path-node .dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+        #find-path-btn {
+            padding: 6px 12px;
+            background: #0f0f1a;
+            border: 1px solid #1a1a2e;
+            border-radius: 4px;
+            color: #e0e0ff;
+            font-size: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        #find-path-btn:hover {
+            background: #1a1a2e;
+            border-color: #5eead4;
+            box-shadow: 0 0 10px rgba(0,240,255,0.3);
+        }
+        #find-path-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        #clear-path-btn {
+            padding: 6px 8px;
+            background: transparent;
+            border: none;
+            color: #6b6b8a;
+            font-size: 10px;
+            cursor: pointer;
+        }
+        #clear-path-btn:hover {
+            color: #f87171;
+        }
+        #path-result {
+            font-size: 10px;
+            color: #6b6b8a;
+            margin-top: 4px;
+            min-height: 14px;
+        }
+        #path-result.found {
+            color: #5eead4;
+        }
+        #path-result.not-found {
+            color: #f87171;
         }
     </style>
 </head>
@@ -356,18 +501,68 @@ GRAPH_HTML = """
         <div id="node-info-content"></div>
     </div>
     <div id="legend">
-        <button class="legend-btn" data-type="concept" onclick="toggleType('concept')"><span class="legend-dot" style="background:#58a6ff;color:#58a6ff"></span>Concept<span class="legend-count" id="c-count">0</span></button>
-        <button class="legend-btn" data-type="semantic" onclick="toggleType('semantic')"><span class="legend-dot" style="background:#a371f7;color:#a371f7"></span>Semantic<span class="legend-count" id="s-count">0</span></button>
-        <button class="legend-btn" data-type="episodic" onclick="toggleType('episodic')"><span class="legend-dot" style="background:#f97316;color:#f97316"></span>Episodic<span class="legend-count" id="e-count">0</span></button>
+        <button class="legend-btn" data-type="concept" onclick="toggleType('concept')"><span class="legend-dot" style="background:#5eead4;color:#5eead4"></span>Concept<span class="legend-count" id="c-count">0</span></button>
+        <button class="legend-btn" data-type="semantic" onclick="toggleType('semantic')"><span class="legend-dot" style="background:#a78bfa;color:#a78bfa"></span>Semantic<span class="legend-count" id="s-count">0</span></button>
+        <button class="legend-btn" data-type="episodic" onclick="toggleType('episodic')"><span class="legend-dot" style="background:#f472b6;color:#f472b6"></span>Episodic<span class="legend-count" id="e-count">0</span></button>
+        <div style="border-top:1px solid #1a1a2e;margin:8px 0;"></div>
+        <button class="legend-btn" id="cluster-btn" onclick="toggleClusterMode()"><span class="legend-dot" style="background:linear-gradient(135deg,#5eead4,#a78bfa,#f472b6);color:#5eead4"></span>Clusters<span class="legend-count" id="cluster-count">-</span></button>
     </div>
     <div id="stats">Loading...</div>
     <div id="loading">Loading graph...</div>
     <div id="edge-tooltip"><span class="rel-type"></span><span class="rel-weight"></span></div>
 
+    <!-- Controls Panel -->
+    <div id="controls">
+        <div class="control-group">
+            <div class="control-label">Importance Filter</div>
+            <input type="range" id="importance-slider" min="0" max="10" step="0.5" value="0">
+            <div id="importance-value">Show all</div>
+        </div>
+        <div class="control-group">
+            <div class="control-label">Path Finder</div>
+            <div id="pathfinder">
+                <div class="path-node" id="path-start" onclick="setPathNode('start')">
+                    <span class="dot" style="background:#5eead4"></span>
+                    <span class="label">Click to set start</span>
+                </div>
+                <div class="path-node" id="path-end" onclick="setPathNode('end')">
+                    <span class="dot" style="background:#5eead4"></span>
+                    <span class="label">Click to set end</span>
+                </div>
+                <div style="display:flex;gap:4px;">
+                    <button id="find-path-btn" onclick="findPath()" disabled>Find Path</button>
+                    <button id="clear-path-btn" onclick="clearPath()">Clear</button>
+                </div>
+                <div id="path-result"></div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://unpkg.com/force-graph"></script>
     <script>
-        const colors = { concept: '#58a6ff', semantic: '#a371f7', episodic: '#f97316' };
+        const typeColors = { concept: '#5eead4', semantic: '#a78bfa', episodic: '#f472b6' };
         const typeLabels = { concept: 'Concept', semantic: 'Semantic Memory', episodic: 'Episodic Memory' };
+
+        // Cluster color palette - soft, distinct colors
+        const clusterPalette = [
+            '#5eead4', // teal
+            '#a78bfa', // purple
+            '#f472b6', // pink
+            '#fbbf24', // amber
+            '#34d399', // emerald
+            '#60a5fa', // blue
+            '#fb7185', // rose
+            '#a3e635', // lime
+            '#22d3ee', // cyan
+            '#c084fc', // violet
+            '#f97316', // orange
+            '#2dd4bf', // teal-400
+        ];
+
+        let clusterColors = {};  // nodeId -> color
+        let colors = typeColors;  // default to type colors
+        let useClusterColors = false;
+
         let selected = null;
         let neighbors = new Set();
         let allNodes = {};
@@ -375,6 +570,211 @@ GRAPH_HTML = """
         let typeNeighbors = new Set();
         let hoveredNode = null;
         const edgeTooltip = document.getElementById('edge-tooltip');
+
+        // New feature state
+        let importanceThreshold = 0;
+        let pathStartNode = null;
+        let pathEndNode = null;
+        let pathNodes = new Set();
+        let pathLinks = new Set();
+        let settingPathNode = null;  // 'start' or 'end'
+
+        // Importance slider
+        const importanceSlider = document.getElementById('importance-slider');
+        const importanceValue = document.getElementById('importance-value');
+
+        importanceSlider.addEventListener('input', (e) => {
+            importanceThreshold = parseFloat(e.target.value);
+            if (importanceThreshold === 0) {
+                importanceValue.textContent = 'Show all';
+            } else {
+                importanceValue.textContent = `≥ ${importanceThreshold}`;
+            }
+            refresh();
+        });
+
+        // Path finder functions
+        function setPathNode(type) {
+            settingPathNode = type;
+            document.getElementById('path-start').classList.toggle('selected', type === 'start');
+            document.getElementById('path-end').classList.toggle('selected', type === 'end');
+            // Visual hint
+            document.body.style.cursor = 'crosshair';
+        }
+
+        function updatePathUI() {
+            const startEl = document.getElementById('path-start');
+            const endEl = document.getElementById('path-end');
+            const btn = document.getElementById('find-path-btn');
+
+            if (pathStartNode) {
+                startEl.querySelector('.label').textContent = pathStartNode.name.slice(0, 20) + (pathStartNode.name.length > 20 ? '..' : '');
+                startEl.querySelector('.dot').style.background = getNodeColor(pathStartNode);
+            } else {
+                startEl.querySelector('.label').textContent = 'Click to set start';
+                startEl.querySelector('.dot').style.background = '#5eead4';
+            }
+
+            if (pathEndNode) {
+                endEl.querySelector('.label').textContent = pathEndNode.name.slice(0, 20) + (pathEndNode.name.length > 20 ? '..' : '');
+                endEl.querySelector('.dot').style.background = getNodeColor(pathEndNode);
+            } else {
+                endEl.querySelector('.label').textContent = 'Click to set end';
+                endEl.querySelector('.dot').style.background = '#5eead4';
+            }
+
+            btn.disabled = !(pathStartNode && pathEndNode);
+        }
+
+        function findPath() {
+            if (!pathStartNode || !pathEndNode) return;
+
+            // BFS to find shortest path
+            const links = Graph.graphData().links;
+            const adjacency = {};
+
+            // Build adjacency list
+            links.forEach(l => {
+                const sourceId = l.source.id || l.source;
+                const targetId = l.target.id || l.target;
+                if (!adjacency[sourceId]) adjacency[sourceId] = [];
+                if (!adjacency[targetId]) adjacency[targetId] = [];
+                adjacency[sourceId].push({ node: targetId, link: l });
+                adjacency[targetId].push({ node: sourceId, link: l });
+            });
+
+            // BFS
+            const queue = [{ node: pathStartNode.id, path: [pathStartNode.id], links: [] }];
+            const visited = new Set([pathStartNode.id]);
+
+            while (queue.length > 0) {
+                const { node, path, links: pathLinksList } = queue.shift();
+
+                if (node === pathEndNode.id) {
+                    // Found path!
+                    pathNodes = new Set(path);
+                    pathLinks = new Set(pathLinksList);
+                    document.getElementById('path-result').textContent = `Path found: ${path.length} nodes`;
+                    document.getElementById('path-result').className = 'found';
+                    refresh();
+                    return;
+                }
+
+                const neighbors = adjacency[node] || [];
+                for (const { node: neighborId, link } of neighbors) {
+                    if (!visited.has(neighborId)) {
+                        visited.add(neighborId);
+                        queue.push({
+                            node: neighborId,
+                            path: [...path, neighborId],
+                            links: [...pathLinksList, link]
+                        });
+                    }
+                }
+            }
+
+            // No path found
+            pathNodes.clear();
+            pathLinks.clear();
+            document.getElementById('path-result').textContent = 'No path found';
+            document.getElementById('path-result').className = 'not-found';
+            refresh();
+        }
+
+        function clearPath() {
+            pathStartNode = null;
+            pathEndNode = null;
+            pathNodes.clear();
+            pathLinks.clear();
+            settingPathNode = null;
+            document.getElementById('path-start').classList.remove('selected');
+            document.getElementById('path-end').classList.remove('selected');
+            document.getElementById('path-result').textContent = '';
+            document.getElementById('path-result').className = '';
+            document.body.style.cursor = 'default';
+            updatePathUI();
+            refresh();
+        }
+
+        // Cluster detection using Label Propagation algorithm
+        function detectClusters(nodes, links) {
+            // Build adjacency list
+            const adj = {};
+            nodes.forEach(n => adj[n.id] = []);
+            links.forEach(l => {
+                const s = l.source.id || l.source;
+                const t = l.target.id || l.target;
+                if (adj[s]) adj[s].push(t);
+                if (adj[t]) adj[t].push(s);
+            });
+
+            // Initialize each node with its own label
+            const labels = {};
+            nodes.forEach((n, i) => labels[n.id] = i);
+
+            // Iterate until convergence (max 20 iterations)
+            for (let iter = 0; iter < 20; iter++) {
+                let changed = false;
+                // Shuffle nodes for randomness
+                const shuffled = [...nodes].sort(() => Math.random() - 0.5);
+
+                for (const node of shuffled) {
+                    const neighbors = adj[node.id];
+                    if (neighbors.length === 0) continue;
+
+                    // Count neighbor labels
+                    const labelCount = {};
+                    neighbors.forEach(nId => {
+                        const lbl = labels[nId];
+                        labelCount[lbl] = (labelCount[lbl] || 0) + 1;
+                    });
+
+                    // Find most common label
+                    let maxCount = 0;
+                    let maxLabel = labels[node.id];
+                    for (const [lbl, count] of Object.entries(labelCount)) {
+                        if (count > maxCount) {
+                            maxCount = count;
+                            maxLabel = parseInt(lbl);
+                        }
+                    }
+
+                    if (labels[node.id] !== maxLabel) {
+                        labels[node.id] = maxLabel;
+                        changed = true;
+                    }
+                }
+
+                if (!changed) break;
+            }
+
+            // Map labels to cluster indices
+            const uniqueLabels = [...new Set(Object.values(labels))];
+            const labelToCluster = {};
+            uniqueLabels.forEach((lbl, i) => labelToCluster[lbl] = i);
+
+            // Assign colors
+            clusterColors = {};
+            nodes.forEach(n => {
+                const cluster = labelToCluster[labels[n.id]];
+                clusterColors[n.id] = clusterPalette[cluster % clusterPalette.length];
+            });
+
+            return uniqueLabels.length;
+        }
+
+        function toggleClusterMode() {
+            useClusterColors = !useClusterColors;
+            document.getElementById('cluster-btn').classList.toggle('active', useClusterColors);
+            refresh();
+        }
+
+        function getNodeColor(node) {
+            if (useClusterColors && clusterColors[node.id]) {
+                return clusterColors[node.id];
+            }
+            return typeColors[node.type] || '#5eead4';
+        }
 
         function toggleType(type) {
             if (selectedTypes.has(type)) {
@@ -411,12 +811,12 @@ GRAPH_HTML = """
                 .filter(n => n.name.toLowerCase().includes(query) || (n.fullContent && n.fullContent.toLowerCase().includes(query)))
                 .slice(0, 10);
             if (matches.length === 0) {
-                searchResults.innerHTML = '<div style="padding:12px;color:#8b949e;">No results found</div>';
+                searchResults.innerHTML = '<div style="padding:12px;color:#6b6b8a;">No results found</div>';
             } else {
                 searchResults.innerHTML = matches.map(n => `
                     <div class="search-result" data-id="${n.id}">
                         <span class="search-result-name">${n.name.length > 40 ? n.name.slice(0,40) + '...' : n.name}</span>
-                        <span class="search-result-type" style="background:${colors[n.type]}20;color:${colors[n.type]}">${n.type}</span>
+                        <span class="search-result-type" style="background:${getNodeColor(n)}20;color:${getNodeColor(n)}">${n.type}</span>
                     </div>
                 `).join('');
             }
@@ -487,7 +887,7 @@ GRAPH_HTML = """
         function showNodeInfo(node) {
             const panel = document.getElementById('node-info');
             const content = document.getElementById('node-info-content');
-            const color = colors[node.type] || '#58a6ff';
+            const color = getNodeColor(node);
             const typeLabel = typeLabels[node.type] || node.type;
 
             let html = `
@@ -533,11 +933,11 @@ GRAPH_HTML = """
                         <div class="info-label">Connected To</div>
                         <div class="info-value">
                             ${connected.slice(0, 10).map(n =>
-                                `<div style="margin:4px 0;padding:4px 8px;background:#21262d;border-radius:4px;font-size:11px;">
-                                    <span style="color:${colors[n.type]}">\u25CF</span> ${n.name.slice(0,30)}${n.name.length > 30 ? '..' : ''}
+                                `<div style="margin:4px 0;padding:4px 8px;background:#0f0f1a;border:1px solid #1a1a2e;border-radius:4px;font-size:11px;">
+                                    <span style="color:${getNodeColor(n)}">\u25CF</span> ${n.name.slice(0,30)}${n.name.length > 30 ? '..' : ''}
                                 </div>`
                             ).join('')}
-                            ${connected.length > 10 ? `<div style="color:#8b949e;font-size:11px;margin-top:4px;">...and ${connected.length - 10} more</div>` : ''}
+                            ${connected.length > 10 ? `<div style="color:#6b6b8a;font-size:11px;margin-top:4px;">...and ${connected.length - 10} more</div>` : ''}
                         </div>
                     </div>
                 `;
@@ -553,19 +953,36 @@ GRAPH_HTML = """
 
         const Graph = ForceGraph()
             (document.getElementById('graph'))
-            .backgroundColor('#0d1117')
+            .backgroundColor('#0a0a12')
             .nodeCanvasObject((node, ctx, globalScale) => {
                 const size = Math.sqrt(node.conn || 1) * 4 + 4;
-                const color = colors[node.type] || '#58a6ff';
+                const color = getNodeColor(node);
+
+                // Importance filter
+                const meetsImportance = (node.weight || 0) >= importanceThreshold;
+                if (!meetsImportance) {
+                    // Draw very faint node
+                    ctx.beginPath();
+                    ctx.arc(node.x, node.y, size * 0.5, 0, 2 * Math.PI);
+                    ctx.fillStyle = '#0f0f1a';
+                    ctx.fill();
+                    return;
+                }
+
                 // Check if active based on node selection OR type filter
                 const isNodeActive = !selected || neighbors.has(node.id);
                 const isTypeActive = selectedTypes.size === 0 || typeNeighbors.has(node.id);
-                const isActive = isNodeActive && isTypeActive;
+                const isOnPath = pathNodes.has(node.id);
+                const isPathEndpoint = node === pathStartNode || node === pathEndNode;
+                const isActive = (isNodeActive && isTypeActive) || isOnPath;
                 const isHovered = hoveredNode === node;
                 const isSelected = selected === node;
 
-                // Outer glow for hover/selection
-                if (isHovered || isSelected) {
+                // Outer glow for hover/selection/path
+                if (isOnPath) {
+                    ctx.shadowColor = '#5eead4';
+                    ctx.shadowBlur = 25;
+                } else if (isHovered || isSelected) {
                     ctx.shadowColor = color;
                     ctx.shadowBlur = isSelected ? 20 : 15;
                 } else if (isActive) {
@@ -586,10 +1003,19 @@ GRAPH_HTML = """
 
                 // Draw node
                 ctx.beginPath();
-                ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
-                ctx.fillStyle = isActive ? color : '#21262d';
+                ctx.arc(node.x, node.y, isOnPath ? size * 1.2 : size, 0, 2 * Math.PI);
+                ctx.fillStyle = isActive ? color : '#1a1a2e';
                 ctx.fill();
                 ctx.shadowBlur = 0;
+
+                // Path endpoint markers
+                if (isPathEndpoint) {
+                    ctx.beginPath();
+                    ctx.arc(node.x, node.y, size + 4, 0, 2 * Math.PI);
+                    ctx.strokeStyle = '#5eead4';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
 
                 // White ring on hover/selection
                 if (isHovered || isSelected) {
@@ -601,7 +1027,8 @@ GRAPH_HTML = """
                 }
 
                 // Draw label - bigger nodes show first, then smaller as you zoom (NOT on hover)
-                const showLabel = (selected && neighbors.has(node.id)) ||
+                const showLabel = isOnPath ||
+                                  (selected && neighbors.has(node.id)) ||
                                   (selectedTypes.size > 0 && typeNeighbors.has(node.id)) ||
                                   (globalScale > 0.4 && size > 12) ||
                                   (globalScale > 0.7 && size > 8) ||
@@ -611,7 +1038,7 @@ GRAPH_HTML = """
                     const label = node.name.length > 20 ? node.name.slice(0,20) + '..' : node.name;
                     ctx.font = `${11/globalScale}px -apple-system, sans-serif`;
                     ctx.textAlign = 'center';
-                    ctx.fillStyle = '#c9d1d9';
+                    ctx.fillStyle = '#e0e0ff';
                     ctx.fillText(label, node.x, node.y + size + 12/globalScale);
                 }
             })
@@ -625,23 +1052,31 @@ GRAPH_HTML = """
             .linkColor(l => {
                 const sourceId = l.source.id || l.source;
                 const targetId = l.target.id || l.target;
+                // Path mode
+                if (pathLinks.has(l)) {
+                    return '#5eead4';
+                }
                 // Type filter mode
                 if (selectedTypes.size > 0) {
                     const sourceNode = allNodes[sourceId];
                     const targetNode = allNodes[targetId];
                     if (sourceNode && targetNode && selectedTypes.has(sourceNode.type) && selectedTypes.has(targetNode.type)) {
-                        return '#58a6ff';
+                        return '#5eead4';
                     }
-                    return '#161b22';
+                    return '#0a0a12';
                 }
                 // Node selection mode
-                if (!selected) return '#30363d';
-                return (sourceId === selected.id || targetId === selected.id) ? '#58a6ff' : '#161b22';
+                if (!selected) return '#3a3a5e';  // More visible default
+                return (sourceId === selected.id || targetId === selected.id) ? '#5eead4' : '#1a1a2e';
             })
             .linkWidth(l => {
                 const sourceId = l.source.id || l.source;
                 const targetId = l.target.id || l.target;
-                const baseWidth = 0.5 + (l.weight || 0.5) * 2;  // Weight-based thickness
+                const baseWidth = 1 + (l.weight || 0.5) * 2.5;  // Thicker base
+                // Path mode
+                if (pathLinks.has(l)) {
+                    return 5;
+                }
                 // Type filter mode
                 if (selectedTypes.size > 0) {
                     const sourceNode = allNodes[sourceId];
@@ -657,15 +1092,17 @@ GRAPH_HTML = """
             })
             .linkCurvature(0.2)  // Curved edges
             .linkDirectionalParticles(l => {
+                // Show particles on path links
+                if (pathLinks.has(l)) return 3;
                 // Show particles on selected links
                 if (!selected) return 0;
                 const sourceId = l.source.id || l.source;
                 const targetId = l.target.id || l.target;
                 return (sourceId === selected.id || targetId === selected.id) ? 2 : 0;
             })
-            .linkDirectionalParticleWidth(2)
-            .linkDirectionalParticleSpeed(0.005)
-            .linkDirectionalParticleColor(() => '#58a6ff')
+            .linkDirectionalParticleWidth(l => pathLinks.has(l) ? 3 : 2)
+            .linkDirectionalParticleSpeed(l => pathLinks.has(l) ? 0.008 : 0.005)
+            .linkDirectionalParticleColor(() => '#5eead4')
             .onNodeHover(node => {
                 hoveredNode = node;
                 document.body.style.cursor = node ? 'pointer' : 'default';
@@ -681,6 +1118,22 @@ GRAPH_HTML = """
                 }
             })
             .onNodeClick(node => {
+                // Handle path finder mode
+                if (settingPathNode) {
+                    if (settingPathNode === 'start') {
+                        pathStartNode = node;
+                    } else {
+                        pathEndNode = node;
+                    }
+                    settingPathNode = null;
+                    document.getElementById('path-start').classList.remove('selected');
+                    document.getElementById('path-end').classList.remove('selected');
+                    document.body.style.cursor = 'default';
+                    updatePathUI();
+                    refresh();
+                    return;
+                }
+
                 // Clear type filter when clicking a node
                 selectedTypes.clear();
                 typeNeighbors.clear();
@@ -712,7 +1165,8 @@ GRAPH_HTML = """
             })
             .onZoom(() => refresh())
             .d3VelocityDecay(0.4)
-            .cooldownTime(2500);
+            .cooldownTime(2500)
+            .nodeLabel(null);  // Disable hover tooltip
 
         // Position edge tooltip at mouse
         document.getElementById('graph').addEventListener('mousemove', e => {
@@ -741,6 +1195,8 @@ GRAPH_HTML = """
                 closeNodeInfo();
                 searchInput.value = '';
                 searchResults.classList.remove('visible');
+                // Clear path finder
+                clearPath();
                 refresh();
             }
         });
@@ -765,8 +1221,8 @@ GRAPH_HTML = """
                 document.getElementById('s-count').textContent = s;
                 document.getElementById('e-count').textContent = e;
                 document.getElementById('stats').innerHTML =
-                    '<div>Nodes: <strong style="color:#58a6ff">' + data.nodes.length + '</strong></div>' +
-                    '<div>Links: <strong style="color:#58a6ff">' + data.links.length + '</strong></div>';
+                    '<div>Nodes: <strong style="color:#5eead4;text-shadow:0 0 5px #5eead4">' + data.nodes.length + '</strong></div>' +
+                    '<div>Links: <strong style="color:#5eead4;text-shadow:0 0 5px #5eead4">' + data.links.length + '</strong></div>';
 
                 // Limit for performance
                 if (data.nodes.length > 400) {
@@ -783,6 +1239,10 @@ GRAPH_HTML = """
 
                 // Store nodes for lookup
                 data.nodes.forEach(n => allNodes[n.id] = n);
+
+                // Detect clusters
+                const numClusters = detectClusters(data.nodes, data.links);
+                document.getElementById('cluster-count').textContent = numClusters;
 
                 Graph.graphData(data);
             });

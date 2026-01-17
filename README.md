@@ -158,21 +158,27 @@ uv run python scripts/run_ingestion.py
 
 ## Memory Graph Visualization
 
-Engram includes an interactive 2D graph visualization of the memory network, accessible at `/admin/graph`.
+Engram includes an interactive 2D graph visualization of the memory network, accessible at `/admin/graph`. Features a cyberpunk-inspired dark theme with soft, eye-friendly colors.
 
 **Features:**
-- **Node Types**: Concepts (blue), Semantic Memories (purple), Episodic Memories (orange)
+- **Node Types**: Concepts (teal), Semantic Memories (purple), Episodic Memories (pink)
 - **Node Size**: Based on connection count — more connected nodes appear larger
 - **Search**: Find and focus on specific nodes by name or content
 - **Type Filtering**: Click legend buttons to highlight all nodes of a specific type
 - **Node Selection**: Click any node to see details and highlight its connections
 - **Progressive Labels**: Labels appear as you zoom in, larger nodes show labels first
+- **Cluster Detection**: Auto-detect communities using Label Propagation algorithm
+- **Path Finder**: Find shortest path between any two nodes with animated visualization
+- **Importance Filter**: Slider to filter nodes by weight/importance threshold
 
 **Controls:**
 - **Click node**: Select and show info panel with full content
 - **Click legend button**: Filter by type (multi-select supported)
+- **Click "Clusters"**: Toggle cluster-based coloring to see communities
+- **Path Finder**: Click start/end buttons, then click nodes, then "Find Path"
+- **Importance Slider**: Drag to hide low-importance nodes
 - **Search box**: Type 2+ characters to search, click result to focus
-- **Escape**: Clear all selections
+- **Escape**: Clear all selections and filters
 - **Mouse wheel**: Zoom in/out
 - **Drag**: Pan the view
 
