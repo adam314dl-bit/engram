@@ -122,6 +122,10 @@ class LLMClient:
         message = choices[0].get("message", {})
         content = message.get("content")
 
+        # Kimi K2 thinking model uses "reasoning" field
+        if content is None:
+            content = message.get("reasoning")
+
         # Some APIs use "text" instead of "content"
         if content is None:
             content = choices[0].get("text")
