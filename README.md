@@ -98,9 +98,9 @@ NEO4J_PASSWORD=engram2024
 
 # Embeddings (local HuggingFace model)
 # Dev: all-MiniLM-L6-v2 (384 dims)
-# Prod: ai-sage/Giga-Embeddings-instruct (1024 dims)
+# Prod: ai-sage/Giga-Embeddings-instruct (2048 dims)
 EMBEDDING_MODEL=ai-sage/Giga-Embeddings-instruct
-EMBEDDING_DIMENSIONS=1024
+EMBEDDING_DIMENSIONS=2048
 ```
 
 ## API Endpoints
@@ -141,7 +141,20 @@ POST /v1/feedback
 | `GET /admin/memories` | List memories |
 | `GET /admin/episodes` | List episodes |
 | `POST /admin/calibrate` | Run memory calibration |
+| `POST /admin/reset?confirm=true` | Reset database (delete all data) |
 | `GET /admin/graph` | Interactive memory graph visualization |
+
+#### Reset Database
+
+To clear all data and re-ingest (useful when changing embedding models):
+
+```bash
+# Reset database (WARNING: deletes ALL data)
+curl -X POST "http://localhost:8000/admin/reset?confirm=true"
+
+# Re-run ingestion
+uv run python scripts/run_ingestion.py
+```
 
 ## Memory Graph Visualization
 

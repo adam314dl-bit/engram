@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     # Embeddings Configuration (local HuggingFace model)
     # Dev: all-MiniLM-L6-v2 (384 dims)
-    # Prod: ai-sage/Giga-Embeddings-instruct (1024 dims)
+    # Prod: ai-sage/Giga-Embeddings-instruct (2048 dims)
     embedding_model: str = "all-MiniLM-L6-v2"
     embedding_dimensions: int = 384
 
