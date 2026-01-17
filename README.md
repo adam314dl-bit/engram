@@ -88,7 +88,7 @@ python -m engram.api.main
 ```bash
 # LLM (remote OpenAI-compatible endpoint)
 LLM_BASE_URL=http://your-host:8888/v1
-LLM_MODEL=kimi-k2
+LLM_MODEL=kimi-k2-thinking
 LLM_API_KEY=your-key
 
 # Neo4j

@@ -1,10 +1,12 @@
 """Ingestion pipeline - orchestrates document processing."""
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from engram.config import settings
 from engram.ingestion.concept_extractor import ConceptExtractor
 from engram.ingestion.memory_extractor import MemoryExtractor
 from engram.ingestion.parser import DocumentParser
@@ -87,16 +89,15 @@ class IngestionPipeline:
             document.status = "processing"
             await self.db.save_document(document)
 
-            # Extract concepts and relations
-            logger.debug(f"Extracting concepts from: {document.title}")
-            concept_result = await self.concept_extractor.extract(document.content)
-
-            # Extract memories
-            logger.debug(f"Extracting memories from: {document.title}")
-            memory_result = await self.memory_extractor.extract(
-                document.content,
-                document.title,
-                document.id,
+            # Extract concepts and memories in parallel
+            logger.debug(f"Extracting concepts and memories from: {document.title}")
+            concept_result, memory_result = await asyncio.gather(
+                self.concept_extractor.extract(document.content),
+                self.memory_extractor.extract(
+                    document.content,
+                    document.title,
+                    document.id,
+                ),
             )
 
             # Merge concepts
@@ -193,23 +194,52 @@ class IngestionPipeline:
         self,
         directory: Path | str,
         extensions: list[str] | None = None,
+        max_concurrent: int | None = None,
     ) -> list[IngestionResult]:
-        """Ingest all matching files in a directory."""
+        """Ingest all matching files in a directory with parallel processing."""
         if isinstance(directory, str):
             directory = Path(directory)
 
         documents = await self.parser.parse_directory(directory, extensions)
-        results: list[IngestionResult] = []
 
-        for doc in documents:
-            result = await self.ingest_document(doc)
-            results.append(result)
+        if not documents:
+            return []
 
-        total_concepts = sum(r.concepts_created for r in results)
-        total_memories = sum(r.memories_created for r in results)
+        # Use configured or provided concurrency limit
+        concurrency = max_concurrent or settings.ingestion_max_concurrent
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def ingest_with_semaphore(doc: Document) -> IngestionResult:
+            async with semaphore:
+                return await self.ingest_document(doc)
+
+        # Process documents in parallel
+        logger.info(f"Ingesting {len(documents)} documents with max {concurrency} concurrent")
+        results = await asyncio.gather(
+            *[ingest_with_semaphore(doc) for doc in documents],
+            return_exceptions=True,
+        )
+
+        # Handle any exceptions
+        final_results: list[IngestionResult] = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Error ingesting document {documents[i].title}: {result}")
+                final_results.append(IngestionResult(
+                    document=documents[i],
+                    concepts_created=0,
+                    memories_created=0,
+                    relations_created=0,
+                    errors=[str(result)],
+                ))
+            else:
+                final_results.append(result)
+
+        total_concepts = sum(r.concepts_created for r in final_results)
+        total_memories = sum(r.memories_created for r in final_results)
         logger.info(
-            f"Directory ingestion complete: {len(results)} documents, "
+            f"Directory ingestion complete: {len(final_results)} documents, "
             f"{total_concepts} concepts, {total_memories} memories"
         )
 
-        return results
+        return final_results

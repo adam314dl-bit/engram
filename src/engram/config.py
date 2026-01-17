@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     llm_api_key: str = "ollama"
     llm_max_concurrent: int = 16
     llm_timeout: float = 120.0
+    ingestion_max_concurrent: int = 8  # Max parallel document ingestion
 
     # Neo4j Configuration
     neo4j_uri: str = "bolt://localhost:7687"
