@@ -1,45 +1,55 @@
 """LLM prompts for knowledge extraction."""
 
-# System prompt for JSON extraction tasks
-JSON_SYSTEM_PROMPT = """You are a JSON extraction assistant.
-IMPORTANT: Output ONLY valid JSON. No explanations, no markdown, no thinking out loud.
-Start your response with {{ or [ and end with }} or ]."""
+# System prompt for structured extraction tasks
+EXTRACTION_SYSTEM_PROMPT = """You extract information into a simple line format.
+Output ONLY the requested lines. No explanations, no markdown, no extra text."""
 
-CONCEPT_EXTRACTION_PROMPT = """Extract concepts from this text and output as JSON.
+CONCEPT_EXTRACTION_PROMPT = """Extract concepts from this text.
 
 Text:
 {content}
 
-Output format (JSON only, no explanations):
-{{
-  "concepts": [
-    {{"name": "concept name lowercase", "type": "tool|resource|action|state|config|error|general", "description": "brief description or null"}}
-  ],
-  "relations": [
-    {{"source": "concept1", "target": "concept2", "type": "uses|needs|causes|contains|is_a|related_to"}}
-  ]
-}}
+Output each concept on a new line in format:
+CONCEPT|name|type|description
 
-JSON:"""
+Types: tool, resource, action, state, config, error, general
+
+Example:
+CONCEPT|docker|tool|containerization platform
+CONCEPT|container|resource|isolated environment
+CONCEPT|dockerfile|config|build instructions
+
+Also output relations:
+RELATION|source|target|type
+
+Relation types: uses, needs, causes, contains, is_a, related_to
+
+Example:
+RELATION|docker|container|uses
+RELATION|dockerfile|image|creates
+
+Output:"""
 
 
-MEMORY_EXTRACTION_PROMPT = """Extract knowledge units from this document and output as JSON.
+MEMORY_EXTRACTION_PROMPT = """Extract knowledge from this document.
 
 Document: {title}
 Content:
 {content}
 
-Extract 5-15 knowledge units: facts, procedures, relationships.
+Output 5-15 knowledge items, one per line:
+MEMORY|content|type|concepts|importance
 
-Output format (JSON only, no explanations):
-{{
-  "memories": [
-    {{"content": "Docker uses containers for isolation", "type": "fact", "concepts": ["docker", "container"], "importance": 8}},
-    {{"content": "Run docker system prune to free disk space", "type": "procedure", "concepts": ["docker", "disk"], "importance": 7}}
-  ]
-}}
+Types: fact, procedure, relationship
+Concepts: comma-separated list
+Importance: 1-10
 
-JSON:"""
+Example:
+MEMORY|Docker uses containers for app isolation|fact|docker,container|8
+MEMORY|Run docker system prune to free space|procedure|docker,disk|7
+MEMORY|Kubernetes requires Docker or containerd|relationship|kubernetes,docker|9
+
+Output:"""
 
 
 BEHAVIOR_EXTRACTION_PROMPT = """Проанализируй ответ и извлеки стратегию рассуждения.

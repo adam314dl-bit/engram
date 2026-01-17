@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from engram.ingestion.concept_extractor import ConceptExtractor, normalize_concept_name
 from engram.ingestion.llm_client import LLMClient, get_llm_client
 from engram.ingestion.parser import generate_id
-from engram.ingestion.prompts import MEMORY_EXTRACTION_PROMPT, JSON_SYSTEM_PROMPT
+from engram.ingestion.prompts import MEMORY_EXTRACTION_PROMPT, EXTRACTION_SYSTEM_PROMPT
 from engram.models import Concept, MemoryType, SemanticMemory
 
 logger = logging.getLogger(__name__)
@@ -72,17 +72,73 @@ class MemoryExtractor:
         )
 
         try:
-            result = await self.llm.generate_json(prompt, system_prompt=JSON_SYSTEM_PROMPT, temperature=0.3)
-        except ValueError as e:
+            result = await self.llm.generate(
+                prompt,
+                system_prompt=EXTRACTION_SYSTEM_PROMPT,
+                temperature=0.3,
+                max_tokens=4096,
+            )
+        except Exception as e:
             logger.warning(f"Failed to extract memories: {e}")
             return MemoryExtractionResult(memories=[], concepts=[])
 
-        if not isinstance(result, dict):
-            logger.warning(f"Unexpected result type: {type(result)}")
-            return MemoryExtractionResult(memories=[], concepts=[])
+        return self._parse_memory_lines(result, doc_id)
 
-        raw_memories = result.get("memories", [])
-        return self._parse_memories(raw_memories, doc_id)
+    def _parse_memory_lines(
+        self,
+        text: str,
+        doc_id: str | None,
+    ) -> MemoryExtractionResult:
+        """Parse MEMORY|content|type|concepts|importance lines."""
+        memories: list[SemanticMemory] = []
+        all_concepts: dict[str, Concept] = {}  # name -> Concept
+
+        for line in text.split("\n"):
+            line = line.strip()
+            if not line.startswith("MEMORY|"):
+                continue
+
+            parts = line.split("|")
+            if len(parts) < 4:
+                continue
+
+            content = parts[1].strip()
+            if not content or len(content) < 10:
+                continue
+
+            memory_type = validate_memory_type(parts[2]) if len(parts) > 2 else "fact"
+
+            # Parse concepts (comma-separated)
+            concept_ids: list[str] = []
+            if len(parts) > 3:
+                concept_names = [c.strip() for c in parts[3].split(",")]
+                for name in concept_names:
+                    normalized = normalize_concept_name(name)
+                    if not normalized:
+                        continue
+
+                    if normalized not in all_concepts:
+                        concept = self.concept_extractor.get_or_create_concept(normalized)
+                        all_concepts[normalized] = concept
+
+                    concept_ids.append(all_concepts[normalized].id)
+
+            importance = validate_importance(parts[4]) if len(parts) > 4 else 5.0
+
+            memory = SemanticMemory(
+                id=generate_id(),
+                content=content,
+                concept_ids=concept_ids,
+                source_doc_ids=[doc_id] if doc_id else [],
+                memory_type=memory_type,
+                importance=importance,
+            )
+            memories.append(memory)
+
+        return MemoryExtractionResult(
+            memories=memories,
+            concepts=list(all_concepts.values()),
+        )
 
     def _parse_memories(
         self,

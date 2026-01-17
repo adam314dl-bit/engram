@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from engram.ingestion.llm_client import LLMClient, get_llm_client
 from engram.ingestion.parser import generate_id
-from engram.ingestion.prompts import CONCEPT_EXTRACTION_PROMPT, JSON_SYSTEM_PROMPT
+from engram.ingestion.prompts import CONCEPT_EXTRACTION_PROMPT, EXTRACTION_SYSTEM_PROMPT
 from engram.models import Concept, ConceptRelation, ConceptType
 
 logger = logging.getLogger(__name__)
@@ -62,19 +62,93 @@ class ConceptExtractor:
         prompt = CONCEPT_EXTRACTION_PROMPT.format(content=content[:8000])  # Limit content size
 
         try:
-            result = await self.llm.generate_json(prompt, system_prompt=JSON_SYSTEM_PROMPT, temperature=0.3)
-        except ValueError as e:
+            result = await self.llm.generate(
+                prompt,
+                system_prompt=EXTRACTION_SYSTEM_PROMPT,
+                temperature=0.3,
+                max_tokens=4096,
+            )
+        except Exception as e:
             logger.warning(f"Failed to extract concepts: {e}")
             return ExtractionResult(concepts=[], relations=[])
 
-        if not isinstance(result, dict):
-            logger.warning(f"Unexpected result type: {type(result)}")
-            return ExtractionResult(concepts=[], relations=[])
-
-        concepts = self._parse_concepts(result.get("concepts", []))
-        relations = self._parse_relations(result.get("relations", []), concepts)
+        concepts = self._parse_concept_lines(result)
+        relations = self._parse_relation_lines(result, concepts)
 
         return ExtractionResult(concepts=concepts, relations=relations)
+
+    def _parse_concept_lines(self, text: str) -> list[Concept]:
+        """Parse CONCEPT|name|type|description lines."""
+        concepts: list[Concept] = []
+
+        for line in text.split("\n"):
+            line = line.strip()
+            if not line.startswith("CONCEPT|"):
+                continue
+
+            parts = line.split("|")
+            if len(parts) < 3:
+                continue
+
+            name = normalize_concept_name(parts[1])
+            if not name:
+                continue
+
+            # Check cache to avoid duplicates
+            if name in self._concept_cache:
+                concepts.append(self._concept_cache[name])
+                continue
+
+            concept_type = validate_concept_type(parts[2]) if len(parts) > 2 else "general"
+            description = parts[3].strip() if len(parts) > 3 else None
+
+            concept = Concept(
+                id=generate_id(),
+                name=name,
+                type=concept_type,
+                description=description,
+            )
+
+            self._concept_cache[name] = concept
+            concepts.append(concept)
+
+        return concepts
+
+    def _parse_relation_lines(self, text: str, concepts: list[Concept]) -> list[ConceptRelation]:
+        """Parse RELATION|source|target|type lines."""
+        # Build name -> id mapping
+        name_to_id: dict[str, str] = {}
+        for concept in concepts:
+            name_to_id[concept.name] = concept.id
+        for name, concept in self._concept_cache.items():
+            name_to_id[name] = concept.id
+
+        relations: list[ConceptRelation] = []
+
+        for line in text.split("\n"):
+            line = line.strip()
+            if not line.startswith("RELATION|"):
+                continue
+
+            parts = line.split("|")
+            if len(parts) < 4:
+                continue
+
+            source_name = normalize_concept_name(parts[1])
+            target_name = normalize_concept_name(parts[2])
+
+            if source_name not in name_to_id or target_name not in name_to_id:
+                continue
+
+            relation = ConceptRelation(
+                source_id=name_to_id[source_name],
+                target_id=name_to_id[target_name],
+                relation_type=validate_relation_type(parts[3]),
+                weight=0.7,
+            )
+            relations.append(relation)
+
+        return relations
 
     def _parse_concepts(self, raw_concepts: list[dict]) -> list[Concept]:
         """Parse raw concept data into Concept objects."""
