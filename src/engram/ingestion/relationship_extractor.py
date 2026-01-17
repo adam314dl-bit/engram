@@ -23,35 +23,26 @@ RELATION_TYPE_WEIGHTS: dict[str, float] = {
 }
 
 
-RELATIONSHIP_EXTRACTION_PROMPT = """Проанализируй связи между концептами в тексте.
+RELATIONSHIP_EXTRACTION_PROMPT = """Extract relationships between concepts from this text.
 
-Текст:
+Text:
 {content}
 
-Концепты для анализа: {concepts}
+Concepts to analyze: {concepts}
 
-Для каждой пары связанных концептов определи:
-- source: исходный концепт
-- target: целевой концепт
-- type: тип связи (is_a, contains, uses, needs, causes, related_to)
-- description: краткое описание связи (5-10 слов)
-- strength: сила связи 0.1-1.0 (1.0 = очень сильная, прямая связь)
+Output each relationship on a new line in format:
+RELATION|source|target|type|description|strength
 
-Выведи ТОЛЬКО валидный JSON:
-{{
-  "relations": [
-    {{
-      "source": "docker",
-      "target": "container",
-      "type": "uses",
-      "description": "Docker creates and manages containers",
-      "strength": 0.9
-    }}
-  ]
-}}
+Types: is_a, contains, uses, needs, causes, related_to
+Strength: 0.1-1.0 (1.0 = very strong direct relationship)
 
-Извлеки только явные связи, присутствующие в тексте.
-Не добавляй комментарии, только JSON."""
+Example:
+RELATION|docker|container|uses|Docker creates and manages containers|0.9
+RELATION|kubernetes|docker|needs|Kubernetes requires container runtime|0.8
+
+Output ONLY the RELATION lines. No explanations, no other text.
+
+Output:"""
 
 
 @dataclass
@@ -102,24 +93,30 @@ class RelationshipExtractor:
         )
 
         try:
-            result = await self.llm.generate_json(prompt, temperature=0.3)
-        except ValueError as e:
+            result = await self.llm.generate(
+                prompt,
+                system_prompt="You extract relationships into a simple line format. Output ONLY the requested lines. No explanations, no markdown, no extra text.",
+                temperature=0.3,
+                max_tokens=4096,
+            )
+        except Exception as e:
             logger.warning(f"Failed to extract relationships: {e}")
             return []
 
-        if not isinstance(result, dict):
-            return []
-
-        raw_relations = result.get("relations", [])
         relations: list[ConceptRelation] = []
         descriptions: list[str] = []
 
-        for raw in raw_relations:
-            if not isinstance(raw, dict):
+        for line in result.split("\n"):
+            line = line.strip()
+            if not line.startswith("RELATION|"):
                 continue
 
-            source_name = raw.get("source", "").strip().lower()
-            target_name = raw.get("target", "").strip().lower()
+            parts = line.split("|")
+            if len(parts) < 4:
+                continue
+
+            source_name = parts[1].strip().lower()
+            target_name = parts[2].strip().lower()
 
             # Skip if concepts not found
             if source_name not in name_to_id or target_name not in name_to_id:
@@ -129,12 +126,16 @@ class RelationshipExtractor:
             if source_name == target_name:
                 continue
 
-            relation_type = raw.get("type", "related_to").strip().lower()
+            relation_type = parts[3].strip().lower() if len(parts) > 3 else "related_to"
             if relation_type not in RELATION_TYPE_WEIGHTS:
                 relation_type = "related_to"
 
-            description = raw.get("description", f"{source_name} {relation_type} {target_name}")
-            raw_strength = float(raw.get("strength", 0.5))
+            description = parts[4].strip() if len(parts) > 4 else f"{source_name} {relation_type} {target_name}"
+
+            try:
+                raw_strength = float(parts[5]) if len(parts) > 5 else 0.5
+            except ValueError:
+                raw_strength = 0.5
             raw_strength = max(0.1, min(1.0, raw_strength))
 
             # Compute final weight: type_weight × raw_strength
