@@ -625,7 +625,7 @@ async def reset_database(
     confirm: bool = False,
 ) -> dict:
     """
-    Reset the database by deleting all nodes and relationships.
+    Reset the database by deleting all nodes, relationships, and indexes.
 
     WARNING: This will delete ALL data!
     Requires confirm=true query parameter.
@@ -639,24 +639,35 @@ async def reset_database(
     db = get_db(request)
 
     try:
+        # Drop vector indexes (they have dimension locked in)
+        vector_indexes = [
+            "concept_embeddings",
+            "semantic_embeddings",
+            "episodic_embeddings",
+        ]
+        for idx in vector_indexes:
+            try:
+                await db.execute_query(f"DROP INDEX {idx} IF EXISTS")
+                logger.info(f"Dropped index: {idx}")
+            except Exception as e:
+                logger.warning(f"Could not drop index {idx}: {e}")
+
+        # Drop fulltext index
+        try:
+            await db.execute_query("DROP INDEX semantic_content IF EXISTS")
+        except Exception:
+            pass
+
         # Delete all nodes and relationships
         await db.execute_query("MATCH (n) DETACH DELETE n")
 
-        # Recreate indexes
-        await db.execute_query(
-            "CREATE INDEX concept_name IF NOT EXISTS FOR (c:Concept) ON (c.name)"
-        )
-        await db.execute_query(
-            "CREATE INDEX memory_type IF NOT EXISTS FOR (m:SemanticMemory) ON (m.memory_type)"
-        )
-        await db.execute_query(
-            "CREATE INDEX doc_path IF NOT EXISTS FOR (d:Document) ON (d.path)"
-        )
+        # Recreate schema (including vector indexes with correct dimensions)
+        await db.setup_schema()
 
         logger.warning("Database reset completed")
         return {
             "reset": True,
-            "message": "All data deleted. Indexes recreated. Ready for re-ingestion.",
+            "message": "All data and indexes deleted. Schema recreated. Ready for re-ingestion.",
         }
 
     except Exception as e:
