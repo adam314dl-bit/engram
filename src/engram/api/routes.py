@@ -617,3 +617,51 @@ async def calibrate_memories(
             status_code=500,
             detail=f"Calibration failed: {str(e)}",
         )
+
+
+@router.post("/admin/reset")
+async def reset_database(
+    request: Request,
+    confirm: bool = False,
+) -> dict:
+    """
+    Reset the database by deleting all nodes and relationships.
+
+    WARNING: This will delete ALL data!
+    Requires confirm=true query parameter.
+    """
+    if not confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Add ?confirm=true to confirm database reset. This will delete ALL data!",
+        )
+
+    db = get_db(request)
+
+    try:
+        # Delete all nodes and relationships
+        await db.execute_query("MATCH (n) DETACH DELETE n")
+
+        # Recreate indexes
+        await db.execute_query(
+            "CREATE INDEX concept_name IF NOT EXISTS FOR (c:Concept) ON (c.name)"
+        )
+        await db.execute_query(
+            "CREATE INDEX memory_type IF NOT EXISTS FOR (m:SemanticMemory) ON (m.memory_type)"
+        )
+        await db.execute_query(
+            "CREATE INDEX doc_path IF NOT EXISTS FOR (d:Document) ON (d.path)"
+        )
+
+        logger.warning("Database reset completed")
+        return {
+            "reset": True,
+            "message": "All data deleted. Indexes recreated. Ready for re-ingestion.",
+        }
+
+    except Exception as e:
+        logger.exception(f"Error resetting database: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Reset failed: {str(e)}",
+        )
