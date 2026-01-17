@@ -90,7 +90,7 @@ async def get_graph_data(request: Request) -> dict:
         """
         MATCH (c1:Concept)-[r:RELATED_TO]->(c2:Concept)
         RETURN c1.id as source, c2.id as target,
-               r.type as type, coalesce(r.weight, 0.5) as weight
+               r.type as relType, coalesce(r.weight, 0.5) as weight
         LIMIT 1000
         """
     )
@@ -99,6 +99,7 @@ async def get_graph_data(request: Request) -> dict:
             "source": r["source"],
             "target": r["target"],
             "type": "concept_rel",
+            "relType": r["relType"] or "related_to",
             "weight": r["weight"],
         })
 
@@ -115,6 +116,7 @@ async def get_graph_data(request: Request) -> dict:
             "source": r["source"],
             "target": r["target"],
             "type": "memory_concept",
+            "relType": "about",
             "weight": 0.3,
         })
 
@@ -131,6 +133,7 @@ async def get_graph_data(request: Request) -> dict:
             "source": r["source"],
             "target": r["target"],
             "type": "episode_concept",
+            "relType": "activated",
             "weight": 0.2,
         })
 
@@ -315,6 +318,30 @@ GRAPH_HTML = """
             font-size: 16px;
         }
         #node-info .close-btn:hover { color: #fff; }
+        #edge-tooltip {
+            position: absolute;
+            padding: 6px 12px;
+            background: rgba(13,17,23,0.95);
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            color: #c9d1d9;
+            font-size: 11px;
+            pointer-events: none;
+            z-index: 1000;
+            display: none;
+            white-space: nowrap;
+        }
+        #edge-tooltip.visible { display: block; }
+        #edge-tooltip .rel-type {
+            color: #58a6ff;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        #edge-tooltip .rel-weight {
+            color: #8b949e;
+            margin-left: 8px;
+        }
     </style>
 </head>
 <body>
@@ -335,6 +362,7 @@ GRAPH_HTML = """
     </div>
     <div id="stats">Loading...</div>
     <div id="loading">Loading graph...</div>
+    <div id="edge-tooltip"><span class="rel-type"></span><span class="rel-weight"></span></div>
 
     <script src="https://unpkg.com/force-graph"></script>
     <script>
@@ -345,6 +373,8 @@ GRAPH_HTML = """
         let allNodes = {};
         let selectedTypes = new Set();
         let typeNeighbors = new Set();
+        let hoveredNode = null;
+        const edgeTooltip = document.getElementById('edge-tooltip');
 
         function toggleType(type) {
             if (selectedTypes.has(type)) {
@@ -531,11 +561,27 @@ GRAPH_HTML = """
                 const isNodeActive = !selected || neighbors.has(node.id);
                 const isTypeActive = selectedTypes.size === 0 || typeNeighbors.has(node.id);
                 const isActive = isNodeActive && isTypeActive;
+                const isHovered = hoveredNode === node;
+                const isSelected = selected === node;
 
-                // Glow
-                if (isActive) {
+                // Outer glow for hover/selection
+                if (isHovered || isSelected) {
                     ctx.shadowColor = color;
-                    ctx.shadowBlur = 8;
+                    ctx.shadowBlur = isSelected ? 20 : 15;
+                } else if (isActive) {
+                    ctx.shadowColor = color;
+                    ctx.shadowBlur = 6;
+                }
+
+                // Importance border (thicker for higher weight)
+                const borderWidth = Math.min(3, (node.weight || 1) / 2);
+                if (isActive && borderWidth > 1) {
+                    ctx.beginPath();
+                    ctx.arc(node.x, node.y, size + borderWidth, 0, 2 * Math.PI);
+                    ctx.fillStyle = isHovered || isSelected ? '#fff' : color;
+                    ctx.globalAlpha = 0.3;
+                    ctx.fill();
+                    ctx.globalAlpha = 1;
                 }
 
                 // Draw node
@@ -545,18 +591,28 @@ GRAPH_HTML = """
                 ctx.fill();
                 ctx.shadowBlur = 0;
 
+                // White ring on hover/selection
+                if (isHovered || isSelected) {
+                    ctx.beginPath();
+                    ctx.arc(node.x, node.y, size + 2, 0, 2 * Math.PI);
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = isSelected ? 2 : 1.5;
+                    ctx.stroke();
+                }
+
                 // Draw label - bigger nodes show first, then smaller as you zoom
                 const showLabel = (selected && neighbors.has(node.id)) ||
                                   (selectedTypes.size > 0 && typeNeighbors.has(node.id)) ||
+                                  isHovered ||
                                   (globalScale > 0.4 && size > 12) ||
                                   (globalScale > 0.7 && size > 8) ||
                                   (globalScale > 1.0 && size > 5) ||
                                   (globalScale > 1.5);
                 if (showLabel && isActive) {
                     const label = node.name.length > 20 ? node.name.slice(0,20) + '..' : node.name;
-                    ctx.font = `${11/globalScale}px -apple-system, sans-serif`;
+                    ctx.font = `${(isHovered ? 12 : 11)/globalScale}px -apple-system, sans-serif`;
                     ctx.textAlign = 'center';
-                    ctx.fillStyle = '#c9d1d9';
+                    ctx.fillStyle = isHovered ? '#fff' : '#c9d1d9';
                     ctx.fillText(label, node.x, node.y + size + 12/globalScale);
                 }
             })
@@ -586,18 +642,44 @@ GRAPH_HTML = """
             .linkWidth(l => {
                 const sourceId = l.source.id || l.source;
                 const targetId = l.target.id || l.target;
+                const baseWidth = 0.5 + (l.weight || 0.5) * 2;  // Weight-based thickness
                 // Type filter mode
                 if (selectedTypes.size > 0) {
                     const sourceNode = allNodes[sourceId];
                     const targetNode = allNodes[targetId];
                     if (sourceNode && targetNode && selectedTypes.has(sourceNode.type) && selectedTypes.has(targetNode.type)) {
-                        return 1.5;
+                        return baseWidth * 1.5;
                     }
                     return 0.2;
                 }
                 // Node selection mode
-                if (!selected) return 0.5;
-                return (sourceId === selected.id || targetId === selected.id) ? 2 : 0.2;
+                if (!selected) return baseWidth;
+                return (sourceId === selected.id || targetId === selected.id) ? baseWidth * 2 : 0.2;
+            })
+            .linkCurvature(0.2)  // Curved edges
+            .linkDirectionalParticles(l => {
+                // Show particles on selected links
+                if (!selected) return 0;
+                const sourceId = l.source.id || l.source;
+                const targetId = l.target.id || l.target;
+                return (sourceId === selected.id || targetId === selected.id) ? 2 : 0;
+            })
+            .linkDirectionalParticleWidth(2)
+            .linkDirectionalParticleSpeed(0.005)
+            .linkDirectionalParticleColor(() => '#58a6ff')
+            .onNodeHover(node => {
+                hoveredNode = node;
+                document.body.style.cursor = node ? 'pointer' : 'default';
+                refresh();
+            })
+            .onLinkHover((link, prevLink) => {
+                if (link) {
+                    edgeTooltip.querySelector('.rel-type').textContent = link.relType || 'related';
+                    edgeTooltip.querySelector('.rel-weight').textContent = `(${((link.weight || 0.5) * 100).toFixed(0)}%)`;
+                    edgeTooltip.classList.add('visible');
+                } else {
+                    edgeTooltip.classList.remove('visible');
+                }
             })
             .onNodeClick(node => {
                 // Clear type filter when clicking a node
@@ -632,6 +714,12 @@ GRAPH_HTML = """
             .onZoom(() => refresh())
             .d3VelocityDecay(0.4)
             .cooldownTime(2500);
+
+        // Position edge tooltip at mouse
+        document.getElementById('graph').addEventListener('mousemove', e => {
+            edgeTooltip.style.left = (e.clientX + 15) + 'px';
+            edgeTooltip.style.top = (e.clientY + 15) + 'px';
+        });
 
         // Force refresh function
         function refresh() {
