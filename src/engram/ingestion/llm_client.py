@@ -5,7 +5,7 @@ import json
 import logging
 from typing import Any
 
-import httpx
+import requests
 
 from engram.config import settings
 
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class LLMClient:
-    """Async client for OpenAI-compatible LLM APIs."""
+    """Async-wrapped client for OpenAI-compatible LLM APIs using requests."""
 
     def __init__(
         self,
@@ -30,26 +30,50 @@ class LLMClient:
         self.max_concurrent = max_concurrent or settings.llm_max_concurrent
 
         self._semaphore = asyncio.Semaphore(self.max_concurrent)
-        self._client: httpx.AsyncClient | None = None
+        self._session: requests.Session | None = None
 
-    async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client."""
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                timeout=httpx.Timeout(self.timeout),
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                trust_env=True,  # Use system proxy settings (respects NO_PROXY)
-            )
-        return self._client
+    def _get_session(self) -> requests.Session:
+        """Get or create requests session."""
+        if self._session is None:
+            self._session = requests.Session()
+            self._session.headers.update({
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            })
+        return self._session
 
     async def close(self) -> None:
-        """Close the HTTP client."""
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        """Close the HTTP session."""
+        if self._session is not None:
+            self._session.close()
+            self._session = None
+
+    def _sync_chat(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+        **kwargs: Any,
+    ) -> str:
+        """Synchronous chat request (runs in thread)."""
+        session = self._get_session()
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            **kwargs,
+        }
+
+        response = session.post(
+            f"{self.base_url}/chat/completions",
+            json=payload,
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
 
     async def generate(
         self,
@@ -81,26 +105,18 @@ class LLMClient:
     ) -> str:
         """Send chat messages and get response."""
         async with self._semaphore:
-            client = await self._get_client()
-
-            payload = {
-                "model": self.model,
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                **kwargs,
-            }
-
             try:
-                response = await client.post(
-                    f"{self.base_url}/chat/completions",
-                    json=payload,
+                # Run sync request in thread pool to not block event loop
+                response = await asyncio.to_thread(
+                    self._sync_chat,
+                    messages,
+                    temperature,
+                    max_tokens,
+                    **kwargs,
                 )
-                response.raise_for_status()
-                data = response.json()
-                return data["choices"][0]["message"]["content"]
+                return response
 
-            except httpx.HTTPStatusError as e:
+            except requests.HTTPError as e:
                 logger.error(f"LLM API error: {e.response.status_code} - {e.response.text}")
                 raise
             except Exception as e:
