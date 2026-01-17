@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from engram.ingestion.llm_client import LLMClient, get_llm_client
 from engram.ingestion.parser import generate_id
-from engram.ingestion.prompts import CONCEPT_EXTRACTION_PROMPT
+from engram.ingestion.prompts import CONCEPT_EXTRACTION_PROMPT, JSON_SYSTEM_PROMPT
 from engram.models import Concept, ConceptRelation, ConceptType
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ class ConceptExtractor:
         prompt = CONCEPT_EXTRACTION_PROMPT.format(content=content[:8000])  # Limit content size
 
         try:
-            result = await self.llm.generate_json(prompt, temperature=0.3)
+            result = await self.llm.generate_json(prompt, system_prompt=JSON_SYSTEM_PROMPT, temperature=0.3)
         except ValueError as e:
             logger.warning(f"Failed to extract concepts: {e}")
             return ExtractionResult(concepts=[], relations=[])

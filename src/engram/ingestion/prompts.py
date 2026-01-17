@@ -1,70 +1,45 @@
 """LLM prompts for knowledge extraction."""
 
-CONCEPT_EXTRACTION_PROMPT = """Извлеки концепты (сущности, идеи, термины) из текста.
+# System prompt for JSON extraction tasks
+JSON_SYSTEM_PROMPT = """You are a JSON extraction assistant.
+IMPORTANT: Output ONLY valid JSON. No explanations, no markdown, no thinking out loud.
+Start your response with {{ or [ and end with }} or ]."""
 
-Текст:
+CONCEPT_EXTRACTION_PROMPT = """Extract concepts from this text and output as JSON.
+
+Text:
 {content}
 
-Для каждого концепта укажи:
-- name: название (нормализованное, в нижнем регистре, на английском если технический термин)
-- type: один из [tool, resource, action, state, config, error, general]
-- description: краткое определение если понятно из текста (или null)
-
-Также укажи связи между концептами:
-- source: название исходного концепта
-- target: название целевого концепта
-- type: один из [uses, needs, causes, contains, is_a, related_to]
-
-Выведи ТОЛЬКО валидный JSON в формате:
+Output format (JSON only, no explanations):
 {{
   "concepts": [
-    {{"name": "docker", "type": "tool", "description": "платформа контейнеризации"}}
+    {{"name": "concept name lowercase", "type": "tool|resource|action|state|config|error|general", "description": "brief description or null"}}
   ],
   "relations": [
-    {{"source": "docker", "target": "container", "type": "uses"}}
+    {{"source": "concept1", "target": "concept2", "type": "uses|needs|causes|contains|is_a|related_to"}}
   ]
 }}
 
-Не добавляй комментарии или пояснения, только JSON."""
+JSON:"""
 
 
-MEMORY_EXTRACTION_PROMPT = """Извлеки единицы знаний из документа.
+MEMORY_EXTRACTION_PROMPT = """Extract knowledge units from this document and output as JSON.
 
-Документ: {title}
-Содержимое:
+Document: {title}
+Content:
 {content}
 
-Извлеки:
-1. ФАКТЫ — определения, описания ("X это Y", "X представляет собой Y")
-2. ПРОЦЕДУРЫ — инструкции ("чтобы сделать X, нужно Y", "для X используй Y")
-3. СВЯЗИ — зависимости ("X требует Y", "X влияет на Y", "X связан с Y")
+Extract 5-15 knowledge units: facts, procedures, relationships.
 
-Для каждой единицы знания укажи:
-- content: текст знания (одно-два предложения, полные и понятные без контекста)
-- type: один из [fact, procedure, relationship]
-- concepts: список связанных концептов (названия в нижнем регистре)
-- importance: 1-10 (насколько критично знать: 1=тривиально, 10=критически важно)
-
-Выведи ТОЛЬКО валидный JSON в формате:
+Output format (JSON only, no explanations):
 {{
   "memories": [
-    {{
-      "content": "Docker использует контейнеры для изоляции приложений",
-      "type": "fact",
-      "concepts": ["docker", "container", "isolation"],
-      "importance": 8
-    }},
-    {{
-      "content": "Чтобы освободить место на диске, выполните docker system prune",
-      "type": "procedure",
-      "concepts": ["docker", "disk space", "prune"],
-      "importance": 7
-    }}
+    {{"content": "Docker uses containers for isolation", "type": "fact", "concepts": ["docker", "container"], "importance": 8}},
+    {{"content": "Run docker system prune to free disk space", "type": "procedure", "concepts": ["docker", "disk"], "importance": 7}}
   ]
 }}
 
-Извлеки 5-15 единиц знаний. Каждая должна быть самодостаточной.
-Не добавляй комментарии или пояснения, только JSON."""
+JSON:"""
 
 
 BEHAVIOR_EXTRACTION_PROMPT = """Проанализируй ответ и извлеки стратегию рассуждения.

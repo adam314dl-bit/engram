@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from engram.ingestion.concept_extractor import ConceptExtractor, normalize_concept_name
 from engram.ingestion.llm_client import LLMClient, get_llm_client
 from engram.ingestion.parser import generate_id
-from engram.ingestion.prompts import MEMORY_EXTRACTION_PROMPT
+from engram.ingestion.prompts import MEMORY_EXTRACTION_PROMPT, JSON_SYSTEM_PROMPT
 from engram.models import Concept, MemoryType, SemanticMemory
 
 logger = logging.getLogger(__name__)
@@ -72,7 +72,7 @@ class MemoryExtractor:
         )
 
         try:
-            result = await self.llm.generate_json(prompt, temperature=0.3)
+            result = await self.llm.generate_json(prompt, system_prompt=JSON_SYSTEM_PROMPT, temperature=0.3)
         except ValueError as e:
             logger.warning(f"Failed to extract memories: {e}")
             return MemoryExtractionResult(memories=[], concepts=[])
