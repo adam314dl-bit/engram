@@ -3,13 +3,44 @@
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 
 import requests
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
 
 from engram.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Thinking tag patterns for models like Kimi, GLM, DeepSeek, etc.
+THINKING_PATTERNS = [
+    re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE),
+    re.compile(r'<thinking>.*?</thinking>', re.DOTALL | re.IGNORECASE),
+    re.compile(r'<thought>.*?</thought>', re.DOTALL | re.IGNORECASE),
+    re.compile(r'<reason>.*?</reason>', re.DOTALL | re.IGNORECASE),
+    re.compile(r'<reasoning>.*?</reasoning>', re.DOTALL | re.IGNORECASE),
+    re.compile(r'<reflection>.*?</reflection>', re.DOTALL | re.IGNORECASE),
+    re.compile(r'<inner_monologue>.*?</inner_monologue>', re.DOTALL | re.IGNORECASE),
+    # Orphan closing tags (without opening tag)
+    re.compile(r'</think>', re.IGNORECASE),
+    re.compile(r'</thinking>', re.IGNORECASE),
+    re.compile(r'</thought>', re.IGNORECASE),
+    re.compile(r'</reason>', re.IGNORECASE),
+    re.compile(r'</reasoning>', re.IGNORECASE),
+    re.compile(r'</reflection>', re.IGNORECASE),
+]
+
+
+def strip_thinking_tags(text: str) -> str:
+    """Remove thinking/reasoning tags from model output."""
+    result = text
+    for pattern in THINKING_PATTERNS:
+        result = pattern.sub('', result)
+    # Clean up extra whitespace left after removal
+    result = re.sub(r'\n{3,}', '\n\n', result)
+    return result.strip()
 
 
 class LLMClient:
@@ -33,13 +64,21 @@ class LLMClient:
         self._session: requests.Session | None = None
 
     def _get_session(self) -> requests.Session:
-        """Get or create requests session."""
+        """Get or create requests session with connection pooling."""
         if self._session is None:
             self._session = requests.Session()
             self._session.headers.update({
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
             })
+            # Increase connection pool size for parallel requests
+            adapter = HTTPAdapter(
+                pool_connections=self.max_concurrent,
+                pool_maxsize=self.max_concurrent * 2,
+                max_retries=Retry(total=2, backoff_factor=0.5),
+            )
+            self._session.mount("http://", adapter)
+            self._session.mount("https://", adapter)
         return self._session
 
     async def close(self) -> None:
@@ -73,7 +112,9 @@ class LLMClient:
         )
         response.raise_for_status()
         data = response.json()
-        return data["choices"][0]["message"]["content"]
+        content = data["choices"][0]["message"]["content"]
+        # Strip thinking tags from models like Kimi, DeepSeek, etc.
+        return strip_thinking_tags(content)
 
     async def generate(
         self,
@@ -155,14 +196,21 @@ class LLMClient:
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse JSON response: {e}")
             logger.debug(f"Raw response: {response}")
-            # Try to extract JSON from response
-            import re
+            # Try to extract JSON object from response
             json_match = re.search(r"\{[\s\S]*\}", cleaned)
             if json_match:
                 try:
                     return json.loads(json_match.group())
                 except json.JSONDecodeError:
                     pass
+            # Try to extract JSON array from response
+            array_match = re.search(r"\[[\s\S]*\]", cleaned)
+            if array_match:
+                try:
+                    return json.loads(array_match.group())
+                except json.JSONDecodeError:
+                    pass
+            logger.warning(f"Could not parse LLM response as JSON: {response[:200]}")
             raise ValueError(f"Could not parse LLM response as JSON: {response[:200]}")
 
 
