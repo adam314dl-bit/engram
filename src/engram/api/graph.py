@@ -143,18 +143,24 @@ GRAPH_HTML = """
 <head>
     <meta charset="utf-8">
     <title>Engram - Knowledge Graph</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; }
         body { background: #0d1117; font-family: -apple-system, sans-serif; }
         #graph { width: 100vw; height: 100vh; }
         #info { position: absolute; top: 16px; left: 16px; color: #8b949e; z-index: 10; pointer-events: none; }
-        #info h1 { font-size: 12px; color: #6e7681; font-weight: 400; text-transform: uppercase; letter-spacing: 2px; }
+        #info h1 { font-size: 11px; color: #6e7681; font-weight: 400; text-transform: uppercase; letter-spacing: 3px; margin-top: 6px; }
         #info .brand {
-            font-size: 28px;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 32px;
             font-weight: 700;
-            color: #58a6ff;
-            text-shadow: 0 0 20px #58a6ff, 0 0 40px #58a6ff40;
-            letter-spacing: 1px;
+            color: #7dd3fc;
+            text-shadow:
+                0 0 10px #0ea5e9,
+                0 0 20px #0ea5e9,
+                0 0 40px #0ea5e9,
+                0 0 80px #0284c7;
+            letter-spacing: 4px;
         }
         #legend {
             position: absolute;

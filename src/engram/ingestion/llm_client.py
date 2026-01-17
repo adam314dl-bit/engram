@@ -41,6 +41,7 @@ class LLMClient:
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
                 },
+                trust_env=True,  # Respect HTTP_PROXY/HTTPS_PROXY env vars
             )
         return self._client
 
