@@ -11,6 +11,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from engram.api.graph import router as graph_router
 from engram.api.routes import router
 from engram.config import settings
 from engram.storage.neo4j_client import Neo4jClient
@@ -73,6 +74,7 @@ def create_app() -> FastAPI:
 
     # Include routes
     app.include_router(router)
+    app.include_router(graph_router)
 
     return app
 

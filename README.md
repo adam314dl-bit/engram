@@ -141,6 +141,27 @@ POST /v1/feedback
 | `GET /admin/memories` | List memories |
 | `GET /admin/episodes` | List episodes |
 | `POST /admin/calibrate` | Run memory calibration |
+| `GET /admin/graph` | Interactive memory graph visualization |
+
+## Memory Graph Visualization
+
+Engram includes an interactive 2D graph visualization of the memory network, accessible at `/admin/graph`.
+
+**Features:**
+- **Node Types**: Concepts (blue), Semantic Memories (purple), Episodic Memories (orange)
+- **Node Size**: Based on connection count — more connected nodes appear larger
+- **Search**: Find and focus on specific nodes by name or content
+- **Type Filtering**: Click legend buttons to highlight all nodes of a specific type
+- **Node Selection**: Click any node to see details and highlight its connections
+- **Progressive Labels**: Labels appear as you zoom in, larger nodes show labels first
+
+**Controls:**
+- **Click node**: Select and show info panel with full content
+- **Click legend button**: Filter by type (multi-select supported)
+- **Search box**: Type 2+ characters to search, click result to focus
+- **Escape**: Clear all selections
+- **Mouse wheel**: Zoom in/out
+- **Drag**: Pan the view
 
 ## Interactive Chat CLI
 
