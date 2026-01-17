@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Ingest mock documents into Engram."""
+"""Ingest documents into Engram.
+
+Usage:
+    python scripts/run_ingestion.py [directory]
+
+If no directory is specified, uses tests/fixtures/mock_docs.
+Recursively finds all .md and .txt files in the directory.
+"""
 
 import asyncio
 import logging
@@ -15,21 +22,27 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def run_ingestion():
-    """Ingest all mock documents."""
+async def run_ingestion(docs_dir: Path | None = None):
+    """Ingest all documents from directory."""
     from engram.ingestion.pipeline import IngestionPipeline
     from engram.storage.neo4j_client import Neo4jClient
 
-    docs_dir = Path(__file__).parent.parent / "tests" / "fixtures" / "mock_docs"
+    # Use provided directory or default to mock_docs
+    if docs_dir is None:
+        docs_dir = Path(__file__).parent.parent / "tests" / "fixtures" / "mock_docs"
 
     if not docs_dir.exists():
         print(f"Documents directory not found: {docs_dir}")
-        print("Run 'python scripts/generate_mock_docs.py' first to create documents.")
         return False
 
-    # Count documents
-    md_files = list(docs_dir.glob("*.md"))
-    print(f"Found {len(md_files)} documents to ingest")
+    print(f"Scanning directory (recursive): {docs_dir}")
+
+    # Count documents (recursive)
+    extensions = [".md", ".txt", ".markdown"]
+    all_files = []
+    for ext in extensions:
+        all_files.extend(docs_dir.rglob(f"*{ext}"))
+    print(f"Found {len(all_files)} documents to ingest")
 
     # Connect to Neo4j
     db = Neo4jClient()
@@ -43,7 +56,7 @@ async def run_ingestion():
         pipeline = IngestionPipeline(neo4j_client=db)
 
         # Create progress bar
-        pbar = tqdm(total=len(md_files), desc="Ingesting documents", unit="doc")
+        pbar = tqdm(total=len(all_files), desc="Ingesting documents", unit="doc")
 
         # Track totals
         totals = {"concepts": 0, "memories": 0, "relations": 0, "errors": []}
@@ -62,10 +75,10 @@ async def run_ingestion():
             )
             pbar.update(1)
 
-        # Ingest directory with progress callback
+        # Ingest directory with progress callback (recursive)
         results = await pipeline.ingest_directory(
             docs_dir,
-            extensions=[".md"],
+            extensions=extensions,
             progress_callback=on_progress,
         )
 
@@ -95,8 +108,16 @@ async def run_ingestion():
 
 async def main():
     """Main entry point."""
+    # Parse command line argument
+    docs_dir = None
+    if len(sys.argv) > 1:
+        docs_dir = Path(sys.argv[1])
+        if not docs_dir.exists():
+            print(f"Error: Directory not found: {docs_dir}")
+            return False
+
     try:
-        success = await run_ingestion()
+        success = await run_ingestion(docs_dir)
         return success
     except Exception as e:
         logger.exception(f"Ingestion failed: {e}")

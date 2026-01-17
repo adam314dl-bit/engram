@@ -600,19 +600,18 @@ GRAPH_HTML = """
                     ctx.stroke();
                 }
 
-                // Draw label - bigger nodes show first, then smaller as you zoom
+                // Draw label - bigger nodes show first, then smaller as you zoom (NOT on hover)
                 const showLabel = (selected && neighbors.has(node.id)) ||
                                   (selectedTypes.size > 0 && typeNeighbors.has(node.id)) ||
-                                  isHovered ||
                                   (globalScale > 0.4 && size > 12) ||
                                   (globalScale > 0.7 && size > 8) ||
                                   (globalScale > 1.0 && size > 5) ||
                                   (globalScale > 1.5);
                 if (showLabel && isActive) {
                     const label = node.name.length > 20 ? node.name.slice(0,20) + '..' : node.name;
-                    ctx.font = `${(isHovered ? 12 : 11)/globalScale}px -apple-system, sans-serif`;
+                    ctx.font = `${11/globalScale}px -apple-system, sans-serif`;
                     ctx.textAlign = 'center';
-                    ctx.fillStyle = isHovered ? '#fff' : '#c9d1d9';
+                    ctx.fillStyle = '#c9d1d9';
                     ctx.fillText(label, node.x, node.y + size + 12/globalScale);
                 }
             })
