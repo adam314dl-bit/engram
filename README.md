@@ -103,6 +103,41 @@ EMBEDDING_MODEL=ai-sage/Giga-Embeddings-instruct
 EMBEDDING_DIMENSIONS=2048
 ```
 
+## Running the Server
+
+```bash
+# Start the API server (default: http://localhost:8000)
+uv run python -m engram.api.main
+
+# Or with custom host/port
+uv run python -m engram.api.main --host 0.0.0.0 --port 8080
+```
+
+The server exposes an OpenAI-compatible API at `/v1/chat/completions`.
+
+## Open WebUI Integration
+
+Engram works as a custom OpenAI-compatible endpoint in [Open WebUI](https://github.com/open-webui/open-webui).
+
+**Setup:**
+
+1. Start the Engram server:
+   ```bash
+   uv run python -m engram.api.main
+   ```
+
+2. In Open WebUI, go to **Admin Panel** → **Settings** → **Connections**
+
+3. Under **OpenAI API**, click **+** to add a new connection:
+   - **URL**: `http://localhost:8000/v1` (or your server address)
+   - **API Key**: `engram` (any value works, not validated)
+
+4. Click **Save**
+
+5. In the chat interface, select **engram** from the model dropdown
+
+Now you can chat with your knowledge base through Open WebUI.
+
 ## API Endpoints
 
 ### Chat (OpenAI-Compatible)
