@@ -1,6 +1,9 @@
 """3D Graph visualization endpoint."""
 
 import logging
+import math
+import random
+from collections import defaultdict
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, Response
@@ -10,6 +13,141 @@ from engram.storage.neo4j_client import Neo4jClient
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def compute_static_layout(nodes: list, links: list) -> None:
+    """Compute static x, y positions for nodes using cluster-based layout.
+
+    This runs server-side so the client doesn't need force simulation.
+    Modifies nodes in-place to add x, y coordinates.
+    """
+    if not nodes:
+        return
+
+    # Build adjacency list
+    adj: dict[str, list[str]] = defaultdict(list)
+    for link in links:
+        s, t = link["source"], link["target"]
+        adj[s].append(t)
+        adj[t].append(s)
+
+    # Label Propagation clustering
+    labels = {n["id"]: i for i, n in enumerate(nodes)}
+
+    for _ in range(15):  # Max iterations
+        changed = False
+        shuffled = nodes.copy()
+        random.shuffle(shuffled)
+
+        for node in shuffled:
+            nid = node["id"]
+            neighbors = adj[nid]
+            if not neighbors:
+                continue
+
+            # Count neighbor labels
+            label_count: dict[int, int] = defaultdict(int)
+            for neighbor_id in neighbors:
+                if neighbor_id in labels:
+                    label_count[labels[neighbor_id]] += 1
+
+            if label_count:
+                # Find most common label
+                max_label = max(label_count.items(), key=lambda x: x[1])[0]
+                if labels[nid] != max_label:
+                    labels[nid] = max_label
+                    changed = True
+
+        if not changed:
+            break
+
+    # Count cluster sizes
+    cluster_sizes: dict[int, int] = defaultdict(int)
+    for label in labels.values():
+        cluster_sizes[label] += 1
+
+    # Merge small clusters (< 3 nodes) into largest neighbor's cluster
+    for node in nodes:
+        nid = node["id"]
+        if cluster_sizes[labels[nid]] < 3:
+            neighbors = adj[nid]
+            if neighbors:
+                best_neighbor = max(
+                    (n for n in neighbors if n in labels),
+                    key=lambda n: cluster_sizes.get(labels.get(n, 0), 0),
+                    default=None,
+                )
+                if best_neighbor:
+                    labels[nid] = labels[best_neighbor]
+
+    # Recount after merging
+    cluster_sizes = defaultdict(int)
+    for label in labels.values():
+        cluster_sizes[label] += 1
+
+    # Map labels to cluster indices (0, 1, 2, ...)
+    unique_labels = sorted(set(labels.values()))
+    label_to_cluster = {lbl: i for i, lbl in enumerate(unique_labels)}
+
+    # Assign cluster index to nodes
+    for node in nodes:
+        node["cluster"] = label_to_cluster[labels[node["id"]]]
+
+    # Sort clusters by size (largest first)
+    num_clusters = len(unique_labels)
+    cluster_order = sorted(
+        range(num_clusters),
+        key=lambda c: sum(1 for n in nodes if n["cluster"] == c),
+        reverse=True,
+    )
+
+    # Compute grid layout for clusters
+    cols = max(1, math.ceil(math.sqrt(num_clusters)))
+    rows = max(1, math.ceil(num_clusters / cols))
+    base_spacing = math.sqrt(len(nodes)) * 25  # Spacing between clusters
+
+    cluster_centers: dict[int, tuple[float, float, int]] = {}
+    for order_idx, cluster_idx in enumerate(cluster_order):
+        size = sum(1 for n in nodes if n["cluster"] == cluster_idx)
+        col = order_idx % cols
+        row = order_idx // cols
+
+        # Add some jitter to avoid perfect grid
+        jitter_x = (random.random() - 0.5) * base_spacing * 0.1
+        jitter_y = (random.random() - 0.5) * base_spacing * 0.1
+
+        cx = (col - cols / 2 + 0.5) * base_spacing + jitter_x
+        cy = (row - rows / 2 + 0.5) * base_spacing + jitter_y
+
+        cluster_centers[cluster_idx] = (cx, cy, size)
+
+    # Position nodes within their clusters
+    # High-connection nodes ("hubs") go near center, others orbit around
+    cluster_nodes: dict[int, list] = defaultdict(list)
+    for node in nodes:
+        cluster_nodes[node["cluster"]].append(node)
+
+    for cluster_idx, cnodes in cluster_nodes.items():
+        cx, cy, size = cluster_centers[cluster_idx]
+
+        # Sort by connection count (most connected first)
+        cnodes.sort(key=lambda n: n.get("conn", 0), reverse=True)
+
+        # Position using spiral pattern from center outward
+        for i, node in enumerate(cnodes):
+            if i == 0:
+                # Hub node at center
+                node["x"] = cx
+                node["y"] = cy
+            else:
+                # Spiral outward - angle increases, radius increases
+                angle = i * 2.4  # Golden angle approximation
+                # Radius based on position in spiral + some randomness
+                base_radius = 15 + math.sqrt(i) * 12
+                radius = base_radius + (random.random() - 0.5) * 10
+
+                node["x"] = cx + math.cos(angle) * radius
+                node["y"] = cy + math.sin(angle) * radius
 
 # SVG favicon matching the graph theme
 FAVICON_SVG = """<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>
@@ -37,13 +175,13 @@ def get_db(request: Request) -> Neo4jClient:
 async def get_graph_data(request: Request) -> dict:
     """Get graph data for visualization.
 
-    Returns top N most connected nodes for performance.
-    Hardcoded limit: 600 nodes max for smooth Canvas 2D rendering.
+    Returns top N most connected nodes with pre-computed positions.
+    Static layout - no force simulation needed on client.
     """
     db = get_db(request)
 
-    # Hardcoded limit for smooth performance
-    MAX_NODES = 600
+    # Higher limit now that we use static layout (no force simulation)
+    MAX_NODES = 3000
 
     # Get all nodes with their connection counts in one query
     # This lets us pick the most connected nodes across all types
@@ -167,6 +305,9 @@ async def get_graph_data(request: Request) -> dict:
                 "relType": "activated",
                 "weight": 0.2,
             })
+
+    # Compute static layout (adds x, y, cluster to each node)
+    compute_static_layout(nodes, links)
 
     return {"nodes": nodes, "links": links}
 
@@ -852,157 +993,8 @@ GRAPH_HTML = """
             refresh();
         }
 
-        // Cluster detection using Label Propagation algorithm
-        function detectClusters(nodes, links) {
-            // Build adjacency list
-            const adj = {};
-            nodes.forEach(n => adj[n.id] = []);
-            links.forEach(l => {
-                const s = l.source.id || l.source;
-                const t = l.target.id || l.target;
-                if (adj[s]) adj[s].push(t);
-                if (adj[t]) adj[t].push(s);
-            });
-
-            // Initialize each node with its own label
-            const labels = {};
-            nodes.forEach((n, i) => labels[n.id] = i);
-
-            // Iterate until convergence (max 20 iterations)
-            for (let iter = 0; iter < 20; iter++) {
-                let changed = false;
-                // Shuffle nodes for randomness
-                const shuffled = [...nodes].sort(() => Math.random() - 0.5);
-
-                for (const node of shuffled) {
-                    const neighbors = adj[node.id];
-                    if (neighbors.length === 0) continue;
-
-                    // Count neighbor labels
-                    const labelCount = {};
-                    neighbors.forEach(nId => {
-                        const lbl = labels[nId];
-                        labelCount[lbl] = (labelCount[lbl] || 0) + 1;
-                    });
-
-                    // Find most common label
-                    let maxCount = 0;
-                    let maxLabel = labels[node.id];
-                    for (const [lbl, count] of Object.entries(labelCount)) {
-                        if (count > maxCount) {
-                            maxCount = count;
-                            maxLabel = parseInt(lbl);
-                        }
-                    }
-
-                    if (labels[node.id] !== maxLabel) {
-                        labels[node.id] = maxLabel;
-                        changed = true;
-                    }
-                }
-
-                if (!changed) break;
-            }
-
-            // Count nodes per label
-            const labelSizes = {};
-            nodes.forEach(n => {
-                const lbl = labels[n.id];
-                labelSizes[lbl] = (labelSizes[lbl] || 0) + 1;
-            });
-
-            // Merge small clusters (size < 3) into their largest neighbor's cluster
-            nodes.forEach(n => {
-                if (labelSizes[labels[n.id]] < 3) {
-                    const neighbors = adj[n.id];
-                    if (neighbors.length > 0) {
-                        // Find neighbor with largest cluster
-                        let bestNeighbor = neighbors[0];
-                        let bestSize = labelSizes[labels[bestNeighbor]] || 0;
-                        for (const nId of neighbors) {
-                            const size = labelSizes[labels[nId]] || 0;
-                            if (size > bestSize) {
-                                bestSize = size;
-                                bestNeighbor = nId;
-                            }
-                        }
-                        labels[n.id] = labels[bestNeighbor];
-                    }
-                }
-            });
-
-            // Map labels to cluster indices
-            const uniqueLabels = [...new Set(Object.values(labels))];
-            const labelToCluster = {};
-            uniqueLabels.forEach((lbl, i) => labelToCluster[lbl] = i);
-
-            // Count nodes per cluster to determine sizes
-            const clusterSizes = {};
-            nodes.forEach(n => {
-                const cluster = labelToCluster[labels[n.id]];
-                clusterSizes[cluster] = (clusterSizes[cluster] || 0) + 1;
-            });
-
-            // Calculate cluster centers - use grid layout for many clusters
-            const numClusters = uniqueLabels.length;
-            const sortedClusters = Object.entries(clusterSizes)
-                .sort((a, b) => b[1] - a[1])  // Largest first
-                .map(([idx]) => parseInt(idx));
-
-            // Calculate grid dimensions based on number of clusters
-            const cols = Math.ceil(Math.sqrt(numClusters));
-            const rows = Math.ceil(numClusters / cols);
-            const baseSize = Math.sqrt(nodes.length) * 20;  // Moderate spacing
-
-            clusterCenters = {};
-
-            sortedClusters.forEach((clusterIdx, i) => {
-                const size = clusterSizes[clusterIdx];
-                const col = i % cols;
-                const row = Math.floor(i / cols);
-
-                // Larger clusters get slightly more space
-                const sizeBonus = Math.sqrt(size) * 5;
-                const x = (col - cols/2 + 0.5) * baseSize + sizeBonus * (col - cols/2) + (Math.random() - 0.5) * baseSize * 0.15;
-                const y = (row - rows/2 + 0.5) * baseSize + sizeBonus * (row - rows/2) + (Math.random() - 0.5) * baseSize * 0.15;
-
-                clusterCenters[clusterIdx] = {
-                    x: x,
-                    y: y,
-                    size: size
-                };
-            });
-
-            // Assign colors and cluster index to nodes, find cluster representative names
-            clusterColors = {};
-            nodeCluster = {};
-            const clusterBestNode = {};  // cluster -> {node, score}
-
-            nodes.forEach(n => {
-                const cluster = labelToCluster[labels[n.id]];
-                clusterColors[n.id] = clusterPalette[cluster % clusterPalette.length];
-                nodeCluster[n.id] = cluster;
-                n.cluster = cluster;  // Store on node for force access
-
-                // Track best node for cluster name (prefer concepts with high weight)
-                const score = (n.weight || 0) + (n.conn || 0) * 0.5 + (n.type === 'concept' ? 10 : 0);
-                if (!clusterBestNode[cluster] || score > clusterBestNode[cluster].score) {
-                    clusterBestNode[cluster] = { node: n, score };
-                }
-            });
-
-            // Set cluster names from best representative node
-            clusterNames = {};
-            Object.entries(clusterBestNode).forEach(([cluster, {node}]) => {
-                let name = node.name || '';
-                // Truncate long names
-                if (name.length > 25) name = name.slice(0, 22) + '...';
-                clusterNames[cluster] = name;
-                clusterCenters[cluster].name = name;
-            });
-
-            return uniqueLabels.length;
-        }
+        // NOTE: Cluster detection is now done server-side for performance
+        // The server computes clusters and positions, client just renders
 
         function toggleClusterMode() {
             useClusterColors = !useClusterColors;
@@ -1542,8 +1534,6 @@ GRAPH_HTML = """
                 currentZoom = k;
                 refresh();
             })
-            .d3VelocityDecay(0.4)
-            .cooldownTime(2500)
             .nodeLabel(null)  // Disable hover tooltip
             .onRenderFramePost((ctx, globalScale) => {
                 // Draw cluster labels when zoomed out
@@ -1614,118 +1604,12 @@ GRAPH_HTML = """
             Graph.linkWidth(Graph.linkWidth());
         }
 
-        // Galaxy layout forces - Solar system style
-        // High-connection nodes act as "suns" that pull their neighbors
-        Graph.d3Force('charge').strength(n => {
-            // Hubs repel more strongly to create space around them
-            const conn = n.conn || 0;
-            return conn > 20 ? -400 : conn > 10 ? -200 : conn > 5 ? -100 : -60;
-        });
-        Graph.d3Force('link').distance(l => {
-            // Orbital distance based on satellite's connections
-            // More connections = further orbit (they need more space)
-            // Fewer connections = closer orbit
-            const sourceConn = allNodes[l.source.id || l.source]?.conn || 0;
-            const targetConn = allNodes[l.target.id || l.target]?.conn || 0;
-            const hubConn = Math.max(sourceConn, targetConn);
-            const satelliteConn = Math.min(sourceConn, targetConn);
-
-            // Base distance from hub size, modified by satellite size
-            const baseDistance = hubConn > 15 ? 80 : hubConn > 8 ? 60 : 40;
-            const orbitBonus = Math.sqrt(satelliteConn) * 15;  // More connections = wider orbit
-            return baseDistance + orbitBonus;
-        }).strength(l => {
-            // Weaker links for satellites with more connections (more freedom to spread)
-            const sourceConn = allNodes[l.source.id || l.source]?.conn || 0;
-            const targetConn = allNodes[l.target.id || l.target]?.conn || 0;
-            const satelliteConn = Math.min(sourceConn, targetConn);
-            return satelliteConn > 5 ? 0.15 : satelliteConn > 2 ? 0.25 : 0.4;
-        });
-        // Disable centering force so clusters can spread
+        // STATIC LAYOUT: Disable all forces - positions come from server
+        // This dramatically improves performance for large graphs
+        Graph.cooldownTicks(0);  // No simulation iterations
+        Graph.d3Force('charge', null);
+        Graph.d3Force('link', null);
         Graph.d3Force('center', null);
-
-        // Custom gravity force - pulls nodes toward their hub but with orbital spread
-        function createGravityForce() {
-            let nodes;
-            let nodeMap = {};
-
-            function force(alpha) {
-                for (const d of nodes) {
-                    if (!d.hub) continue;
-                    const hub = nodeMap[d.hub];
-                    if (!hub) continue;
-
-                    // Calculate ideal orbital distance based on node's connections
-                    const myConn = d.conn || 1;
-                    const hubConn = hub.conn || 1;
-                    const idealDist = 50 + Math.sqrt(myConn) * 20;  // More connections = further out
-
-                    // Current distance to hub
-                    const dx = d.x - hub.x;
-                    const dy = d.y - hub.y;
-                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-
-                    // Pull toward ideal orbital distance
-                    const strength = 0.1 * alpha;
-                    if (dist < idealDist * 0.7) {
-                        // Too close - push outward
-                        d.vx += (dx / dist) * strength * 2;
-                        d.vy += (dy / dist) * strength * 2;
-                    } else if (dist > idealDist * 1.5) {
-                        // Too far - pull inward
-                        d.vx -= (dx / dist) * strength;
-                        d.vy -= (dy / dist) * strength;
-                    }
-                }
-            }
-
-            force.initialize = function(_nodes) {
-                nodes = _nodes;
-                nodeMap = {};
-                nodes.forEach(n => nodeMap[n.id] = n);
-            };
-
-            return force;
-        }
-
-        // Assign hubs to nodes (each node's highest-connection neighbor)
-        function assignHubs() {
-            const links = Graph.graphData().links;
-            const adjacency = {};
-
-            // Build adjacency
-            Object.values(allNodes).forEach(n => adjacency[n.id] = []);
-            links.forEach(l => {
-                const s = l.source.id || l.source;
-                const t = l.target.id || l.target;
-                if (adjacency[s]) adjacency[s].push(t);
-                if (adjacency[t]) adjacency[t].push(s);
-            });
-
-            // Each node's hub is its neighbor with most connections (if that neighbor has more than self)
-            Object.values(allNodes).forEach(n => {
-                const neighbors = adjacency[n.id] || [];
-                let bestHub = null;
-                let bestConn = n.conn || 0;
-
-                neighbors.forEach(nId => {
-                    const neighbor = allNodes[nId];
-                    if (neighbor && (neighbor.conn || 0) > bestConn) {
-                        bestConn = neighbor.conn;
-                        bestHub = nId;
-                    }
-                });
-
-                n.hub = bestHub;  // null if this node is a local maximum (a sun itself)
-            });
-        }
-
-        // Apply galaxy forces after data loads
-        function applyGalaxyForces() {
-            assignHubs();
-            Graph.d3Force('gravity', createGravityForce());
-            Graph.d3ReheatSimulation();
-        }
 
         document.addEventListener('keydown', e => {
             if (e.key === 'Escape') {
@@ -1748,14 +1632,7 @@ GRAPH_HTML = """
             .then(data => {
                 document.getElementById('loading').style.display = 'none';
 
-                // Count connections
-                const connCount = {};
-                data.links.forEach(l => {
-                    connCount[l.source] = (connCount[l.source] || 0) + 1;
-                    connCount[l.target] = (connCount[l.target] || 0) + 1;
-                });
-                data.nodes.forEach(n => n.conn = connCount[n.id] || 0);
-
+                // Nodes come with x, y, cluster from server (static layout)
                 const c = data.nodes.filter(n => n.type === 'concept').length;
                 const s = data.nodes.filter(n => n.type === 'semantic').length;
                 const e = data.nodes.filter(n => n.type === 'episodic').length;
@@ -1778,27 +1655,65 @@ GRAPH_HTML = """
                 // Store nodes for lookup
                 data.nodes.forEach(n => allNodes[n.id] = n);
 
-                // Detect clusters
-                const numClusters = detectClusters(data.nodes, data.links);
+                // Use cluster info from server to set up client-side cluster colors
+                // Server already computed clusters, just need to assign colors
+                const clusterSet = new Set(data.nodes.map(n => n.cluster));
+                const numClusters = clusterSet.size;
                 document.getElementById('cluster-count').textContent = numClusters;
 
-                // Set initial node positions near their cluster centers
+                // Assign cluster colors and compute cluster centers from actual positions
                 data.nodes.forEach(n => {
-                    const center = clusterCenters[n.cluster];
-                    if (center) {
-                        // Start near cluster center with some random spread
-                        const spread = Math.sqrt(center.size) * 8;
-                        n.x = center.x + (Math.random() - 0.5) * spread;
-                        n.y = center.y + (Math.random() - 0.5) * spread;
-                    }
+                    clusterColors[n.id] = clusterPalette[n.cluster % clusterPalette.length];
+                    nodeCluster[n.id] = n.cluster;
+                });
+
+                // Compute cluster centers from actual node positions
+                const clusterNodes = {};
+                data.nodes.forEach(n => {
+                    if (!clusterNodes[n.cluster]) clusterNodes[n.cluster] = [];
+                    clusterNodes[n.cluster].push(n);
+                });
+
+                // Find best representative name for each cluster
+                Object.entries(clusterNodes).forEach(([clusterId, nodes]) => {
+                    // Calculate center
+                    let cx = 0, cy = 0;
+                    nodes.forEach(n => { cx += n.x; cy += n.y; });
+                    cx /= nodes.length;
+                    cy /= nodes.length;
+
+                    // Find best node for cluster name (prefer high-connection concepts)
+                    let bestNode = nodes[0];
+                    let bestScore = 0;
+                    nodes.forEach(n => {
+                        const score = (n.weight || 0) + (n.conn || 0) * 0.5 + (n.type === 'concept' ? 10 : 0);
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestNode = n;
+                        }
+                    });
+
+                    let name = bestNode.name || '';
+                    if (name.length > 25) name = name.slice(0, 22) + '...';
+
+                    clusterCenters[clusterId] = {
+                        x: cx,
+                        y: cy,
+                        size: nodes.length,
+                        name: name
+                    };
+                    clusterNames[clusterId] = name;
+                });
+
+                // Fix node positions (prevent any movement)
+                data.nodes.forEach(n => {
+                    n.fx = n.x;
+                    n.fy = n.y;
                 });
 
                 Graph.graphData(data);
 
-                // Apply galaxy forces after a short delay
-                setTimeout(applyGalaxyForces, 200);
-
-                // Find densest area and zoom there after simulation settles
+                // Zoom to dense area immediately (no simulation to wait for)
                 setTimeout(() => {
                     // Find top connected nodes (the "suns")
                     const sortedByConn = [...data.nodes].sort((a, b) => (b.conn || 0) - (a.conn || 0));
@@ -1816,11 +1731,11 @@ GRAPH_HTML = """
                         cx /= totalWeight;
                         cy /= totalWeight;
 
-                        // Zoom to the dense area (slightly zoomed out)
-                        Graph.centerAt(cx, cy, 1000);
-                        Graph.zoom(0.55, 1000);
+                        // Zoom to the dense area
+                        Graph.centerAt(cx, cy, 800);
+                        Graph.zoom(0.55, 800);
                     }
-                }, 3000);  // Wait for simulation to settle
+                }, 100);  // Short delay for render
             });
     </script>
 </body>
