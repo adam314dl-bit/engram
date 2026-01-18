@@ -34,20 +34,20 @@ def get_db(request: Request) -> Neo4jClient:
 
 @router.get("/admin/graph/data")
 async def get_graph_data(request: Request) -> dict:
-    """Get 10% most important data (by connection count)."""
+    """Get 20% most important data (by connection count)."""
     db = get_db(request)
 
     nodes = []
     links = []
 
-    # Get top 10% concepts by connection count
+    # Get top 20% concepts by connection count
     concepts = await db.execute_query(
         """
         MATCH (c:Concept)
         OPTIONAL MATCH (c)-[r]-()
         WITH c, count(r) as conn
         ORDER BY conn DESC
-        LIMIT 200
+        LIMIT 400
         RETURN c.id as id, c.name as name, c.type as type, conn
         """
     )
@@ -60,14 +60,14 @@ async def get_graph_data(request: Request) -> dict:
             "conn": c["conn"] or 0,
         })
 
-    # Get top 10% semantic memories by connection count
+    # Get top 20% semantic memories by connection count
     memories = await db.execute_query(
         """
         MATCH (s:SemanticMemory)
         OPTIONAL MATCH (s)-[r]-()
         WITH s, count(r) as conn
         ORDER BY conn DESC
-        LIMIT 80
+        LIMIT 160
         RETURN s.id as id, s.content as content, s.memory_type as type, conn
         """
     )
@@ -83,14 +83,14 @@ async def get_graph_data(request: Request) -> dict:
             "conn": m["conn"] or 0,
         })
 
-    # Get top 10% episodic memories by connection count
+    # Get top 20% episodic memories by connection count
     episodes = await db.execute_query(
         """
         MATCH (e:EpisodicMemory)
         OPTIONAL MATCH (e)-[r]-()
         WITH e, count(r) as conn
         ORDER BY conn DESC
-        LIMIT 50
+        LIMIT 100
         RETURN e.id as id, e.query as query, e.behavior_name as behavior, conn
         """
     )
@@ -115,7 +115,7 @@ async def get_graph_data(request: Request) -> dict:
         MATCH (c1:Concept)-[r:RELATED_TO]->(c2:Concept)
         RETURN c1.id as source, c2.id as target, r.type as relType, coalesce(r.weight, 0.5) as weight
         ORDER BY r.weight DESC
-        LIMIT 500
+        LIMIT 1000
         """
     )
     for r in concept_rels:
@@ -130,7 +130,7 @@ async def get_graph_data(request: Request) -> dict:
         """
         MATCH (s:SemanticMemory)-[:ABOUT]->(c:Concept)
         RETURN s.id as source, c.id as target
-        LIMIT 300
+        LIMIT 600
         """
     )
     for r in memory_rels:
@@ -145,7 +145,7 @@ async def get_graph_data(request: Request) -> dict:
         """
         MATCH (e:EpisodicMemory)-[:ACTIVATED]->(c:Concept)
         RETURN e.id as source, c.id as target
-        LIMIT 200
+        LIMIT 400
         """
     )
     for r in episode_rels:

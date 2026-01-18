@@ -195,11 +195,8 @@ async def chat_completions(
     Takes conversation messages and generates a response using
     the Engram reasoning pipeline.
     """
-    if body.stream:
-        raise HTTPException(
-            status_code=501,
-            detail="Streaming not yet implemented",
-        )
+    # Note: streaming not implemented, will return non-streaming response
+    # Open WebUI handles this gracefully
 
     db = get_db(request)
 
