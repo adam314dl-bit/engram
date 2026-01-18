@@ -25,13 +25,14 @@ async def get_graph_data(request: Request) -> dict:
     nodes = []
     links = []
 
-    # Get concepts
+    # Get concepts (ordered by activation for importance-based LOD)
     concepts = await db.execute_query(
         """
         MATCH (c:Concept)
         RETURN c.id as id, c.name as name, c.type as type,
                coalesce(c.activation_count, 0) as weight
-        LIMIT 500
+        ORDER BY coalesce(c.activation_count, 0) DESC
+        LIMIT 2000
         """
     )
     for c in concepts:
@@ -43,13 +44,14 @@ async def get_graph_data(request: Request) -> dict:
             "weight": c["weight"] + 1,
         })
 
-    # Get semantic memories
+    # Get semantic memories (ordered by importance for LOD)
     memories = await db.execute_query(
         """
         MATCH (s:SemanticMemory)
         RETURN s.id as id, s.content as content, s.memory_type as type,
                s.importance as importance
-        LIMIT 300
+        ORDER BY coalesce(s.importance, 0) DESC
+        LIMIT 800
         """
     )
     for m in memories:
@@ -64,13 +66,14 @@ async def get_graph_data(request: Request) -> dict:
             "weight": (m["importance"] or 5) / 2,
         })
 
-    # Get episodic memories
+    # Get episodic memories (ordered by importance for LOD)
     episodes = await db.execute_query(
         """
         MATCH (e:EpisodicMemory)
         RETURN e.id as id, e.query as query, e.behavior_name as behavior,
                e.importance as importance
-        LIMIT 200
+        ORDER BY coalesce(e.importance, 0) DESC
+        LIMIT 500
         """
     )
     for e in episodes:
@@ -91,7 +94,8 @@ async def get_graph_data(request: Request) -> dict:
         MATCH (c1:Concept)-[r:RELATED_TO]->(c2:Concept)
         RETURN c1.id as source, c2.id as target,
                r.type as relType, coalesce(r.weight, 0.5) as weight
-        LIMIT 1000
+        ORDER BY coalesce(r.weight, 0.5) DESC
+        LIMIT 3000
         """
     )
     for r in concept_rels:
@@ -108,7 +112,7 @@ async def get_graph_data(request: Request) -> dict:
         """
         MATCH (s:SemanticMemory)-[:ABOUT]->(c:Concept)
         RETURN s.id as source, c.id as target
-        LIMIT 1000
+        LIMIT 2000
         """
     )
     for r in memory_rels:
@@ -125,7 +129,7 @@ async def get_graph_data(request: Request) -> dict:
         """
         MATCH (e:EpisodicMemory)-[:ACTIVATED]->(c:Concept)
         RETURN e.id as source, c.id as target
-        LIMIT 500
+        LIMIT 1500
         """
     )
     for r in episode_rels:
@@ -579,6 +583,35 @@ GRAPH_HTML = """
         let pathLinks = new Set();
         let settingPathNode = null;  // 'start' or 'end'
 
+        // LOD (Level of Detail) state
+        let currentZoom = 1;
+        let lodThresholds = {
+            0.3: 100,   // Very zoomed out: top 100 nodes
+            0.5: 300,   // Zoomed out: top 300 nodes
+            0.8: 600,   // Medium: top 600 nodes
+            1.2: 1200,  // Slightly zoomed: top 1200 nodes
+            2.0: 2500,  // Zoomed in: top 2500 nodes
+            999: 99999  // Very zoomed in: show all
+        };
+        let nodeRanks = {};  // nodeId -> rank (lower = more important)
+
+        // Get LOD limit based on zoom level
+        function getLodLimit() {
+            for (const [threshold, limit] of Object.entries(lodThresholds).sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]))) {
+                if (currentZoom < parseFloat(threshold)) {
+                    return limit;
+                }
+            }
+            return 99999;
+        }
+
+        // Check if node is visible at current LOD
+        function isNodeVisibleAtLod(node) {
+            const rank = nodeRanks[node.id];
+            if (rank === undefined) return true;
+            return rank < getLodLimit();
+        }
+
         // Importance slider
         const importanceSlider = document.getElementById('importance-slider');
         const importanceValue = document.getElementById('importance-value');
@@ -958,6 +991,13 @@ GRAPH_HTML = """
                 const size = Math.sqrt(node.conn || 1) * 4 + 4;
                 const color = getNodeColor(node);
 
+                // LOD filter - hide nodes below current zoom level threshold
+                const visibleAtLod = isNodeVisibleAtLod(node);
+                if (!visibleAtLod) {
+                    // Don't render nodes outside LOD
+                    return;
+                }
+
                 // Importance filter
                 const meetsImportance = (node.weight || 0) >= importanceThreshold;
                 if (!meetsImportance) {
@@ -1052,14 +1092,19 @@ GRAPH_HTML = """
             .linkColor(l => {
                 const sourceId = l.source.id || l.source;
                 const targetId = l.target.id || l.target;
+                const sourceNode = allNodes[sourceId];
+                const targetNode = allNodes[targetId];
+
+                // LOD filter - hide links if either node is not visible
+                if (sourceNode && !isNodeVisibleAtLod(sourceNode)) return 'transparent';
+                if (targetNode && !isNodeVisibleAtLod(targetNode)) return 'transparent';
+
                 // Path mode
                 if (pathLinks.has(l)) {
                     return '#5eead4';
                 }
                 // Type filter mode
                 if (selectedTypes.size > 0) {
-                    const sourceNode = allNodes[sourceId];
-                    const targetNode = allNodes[targetId];
                     if (sourceNode && targetNode && selectedTypes.has(sourceNode.type) && selectedTypes.has(targetNode.type)) {
                         return '#5eead4';
                     }
@@ -1072,15 +1117,20 @@ GRAPH_HTML = """
             .linkWidth(l => {
                 const sourceId = l.source.id || l.source;
                 const targetId = l.target.id || l.target;
+                const sourceNode = allNodes[sourceId];
+                const targetNode = allNodes[targetId];
                 const baseWidth = 1 + (l.weight || 0.5) * 2.5;  // Thicker base
+
+                // LOD filter - hide links if either node is not visible
+                if (sourceNode && !isNodeVisibleAtLod(sourceNode)) return 0;
+                if (targetNode && !isNodeVisibleAtLod(targetNode)) return 0;
+
                 // Path mode
                 if (pathLinks.has(l)) {
                     return 5;
                 }
                 // Type filter mode
                 if (selectedTypes.size > 0) {
-                    const sourceNode = allNodes[sourceId];
-                    const targetNode = allNodes[targetId];
                     if (sourceNode && targetNode && selectedTypes.has(sourceNode.type) && selectedTypes.has(targetNode.type)) {
                         return baseWidth * 1.5;
                     }
@@ -1163,7 +1213,10 @@ GRAPH_HTML = """
                 closeNodeInfo();
                 refresh();
             })
-            .onZoom(() => refresh())
+            .onZoom(({k}) => {
+                currentZoom = k;
+                refresh();
+            })
             .d3VelocityDecay(0.4)
             .cooldownTime(2500)
             .nodeLabel(null);  // Disable hover tooltip
@@ -1224,18 +1277,14 @@ GRAPH_HTML = """
                     '<div>Nodes: <strong style="color:#5eead4;text-shadow:0 0 5px #5eead4">' + data.nodes.length + '</strong></div>' +
                     '<div>Links: <strong style="color:#5eead4;text-shadow:0 0 5px #5eead4">' + data.links.length + '</strong></div>';
 
-                // Limit for performance
-                if (data.nodes.length > 400) {
-                    const concepts = data.nodes.filter(n => n.type === 'concept').slice(0, 250);
-                    const semantic = data.nodes.filter(n => n.type === 'semantic').slice(0, 120);
-                    const episodic = data.nodes.filter(n => n.type === 'episodic').slice(0, 30);
-                    data.nodes = [...concepts, ...semantic, ...episodic];
-                    const ids = new Set(data.nodes.map(n => n.id));
-                    data.links = data.links.filter(l => ids.has(l.source) && ids.has(l.target));
-                    data.nodes.forEach(n => {
-                        n.conn = data.links.filter(l => l.source === n.id || l.target === n.id).length;
-                    });
-                }
+                // Compute node ranks by importance (weight + connections)
+                // Lower rank = more important = shown earlier when zoomed out
+                const sortedNodes = [...data.nodes].sort((a, b) => {
+                    const scoreA = (a.weight || 0) + (a.conn || 0) * 0.5;
+                    const scoreB = (b.weight || 0) + (b.conn || 0) * 0.5;
+                    return scoreB - scoreA;  // Higher score = lower rank
+                });
+                sortedNodes.forEach((n, i) => nodeRanks[n.id] = i);
 
                 // Store nodes for lookup
                 data.nodes.forEach(n => allNodes[n.id] = n);

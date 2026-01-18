@@ -89,3 +89,15 @@ uv run pytest --cov=engram       # With coverage
 uv run mypy src/engram           # Type checking
 uv run ruff check src/engram     # Linting
 ```
+
+## Roadmap
+
+### Scalable Graph Visualization
+
+Current: Client-side LOD rendering (~3000 nodes, zoom-based progressive detail).
+
+Future (for 100k+ nodes):
+1. **Pre-computed layout** — Server-side graph layout after ingestion, store x/y in Neo4j
+2. **Spatial indexing** — Neo4j point indexes for viewport queries
+3. **Hierarchical clustering** — Level 0 (cluster reps), Level 1 (sub-clusters), Level 2 (nodes)
+4. **Tile-based loading** — Client requests by viewport bounds, no force simulation

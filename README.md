@@ -283,6 +283,25 @@ uv run mypy src/engram
 uv run ruff check src/engram
 ```
 
+## Roadmap
+
+### Scalable Graph Visualization
+
+Current implementation uses client-side level-of-detail (LOD) rendering, showing ~3000 nodes with zoom-based progressive detail. For graphs with 100k+ nodes, a server-side spatial approach is planned:
+
+1. **Pre-computed layout** — Run graph layout algorithm server-side after ingestion, store x/y coordinates on each node in Neo4j
+
+2. **Spatial indexing** — Use Neo4j point indexes to query "nodes within bounding box"
+
+3. **Hierarchical clustering** — Pre-compute clusters with levels:
+   - Level 0: Cluster representatives (~100-500 nodes)
+   - Level 1: Sub-cluster representatives (~2000 nodes)
+   - Level 2: Individual nodes
+
+4. **Tile-based loading** — Client requests nodes by viewport bounds and zoom level, positions come from server (no force simulation needed)
+
+This approach scales to millions of nodes, similar to how map applications work.
+
 ## License
 
 MIT
