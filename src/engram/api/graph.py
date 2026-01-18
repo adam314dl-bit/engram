@@ -1,8 +1,8 @@
-"""Graph visualization with WebGL (3D force-graph) for better performance."""
+"""Graph visualization with pre-computed layout and viewport culling."""
 
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Query
 from fastapi.responses import HTMLResponse, Response
 
 from engram.storage.neo4j_client import Neo4jClient
@@ -32,23 +32,70 @@ def get_db(request: Request) -> Neo4jClient:
     return request.app.state.db
 
 
+@router.get("/admin/graph/bounds")
+async def get_graph_bounds(request: Request) -> dict:
+    """Get bounding box of all nodes with layout positions."""
+    db = get_db(request)
+
+    result = await db.execute_query(
+        """
+        MATCH (n)
+        WHERE n.layout_x IS NOT NULL AND n.layout_y IS NOT NULL
+        RETURN min(n.layout_x) as min_x, max(n.layout_x) as max_x,
+               min(n.layout_y) as min_y, max(n.layout_y) as max_y,
+               count(n) as total
+        """
+    )
+
+    if result and result[0]["total"] > 0:
+        r = result[0]
+        return {
+            "min_x": r["min_x"],
+            "max_x": r["max_x"],
+            "min_y": r["min_y"],
+            "max_y": r["max_y"],
+            "total": r["total"],
+            "has_layout": True
+        }
+    else:
+        return {"has_layout": False, "total": 0}
+
+
 @router.get("/admin/graph/data")
-async def get_graph_data(request: Request) -> dict:
-    """Get all graph data (100%)."""
+async def get_graph_data(
+    request: Request,
+    min_x: float = Query(None),
+    max_x: float = Query(None),
+    min_y: float = Query(None),
+    max_y: float = Query(None),
+) -> dict:
+    """Get graph data, optionally filtered by viewport bounds."""
     db = get_db(request)
 
     nodes = []
     links = []
 
-    # Get all concepts
+    # Build viewport filter if bounds provided
+    viewport_filter = ""
+    params = {}
+    if all(v is not None for v in [min_x, max_x, min_y, max_y]):
+        viewport_filter = """
+            AND n.layout_x >= $min_x AND n.layout_x <= $max_x
+            AND n.layout_y >= $min_y AND n.layout_y <= $max_y
+        """
+        params = {"min_x": min_x, "max_x": max_x, "min_y": min_y, "max_y": max_y}
+
+    # Get concepts
     concepts = await db.execute_query(
-        """
-        MATCH (c:Concept)
-        OPTIONAL MATCH (c)-[r]-()
-        WITH c, count(r) as conn
-        ORDER BY conn DESC
-        RETURN c.id as id, c.name as name, c.type as type, conn
-        """
+        f"""
+        MATCH (n:Concept)
+        WHERE n.layout_x IS NOT NULL {viewport_filter}
+        OPTIONAL MATCH (n)-[r]-()
+        WITH n, count(r) as conn
+        RETURN n.id as id, n.name as name, n.type as type,
+               n.layout_x as x, n.layout_y as y, conn
+        """,
+        **params
     )
     for c in concepts:
         nodes.append({
@@ -56,18 +103,22 @@ async def get_graph_data(request: Request) -> dict:
             "name": c["name"],
             "type": "concept",
             "subtype": c["type"] or "unknown",
+            "x": c["x"],
+            "y": c["y"],
             "conn": c["conn"] or 0,
         })
 
-    # Get all semantic memories
+    # Get semantic memories
     memories = await db.execute_query(
-        """
-        MATCH (s:SemanticMemory)
-        OPTIONAL MATCH (s)-[r]-()
-        WITH s, count(r) as conn
-        ORDER BY conn DESC
-        RETURN s.id as id, s.content as content, s.memory_type as type, conn
-        """
+        f"""
+        MATCH (n:SemanticMemory)
+        WHERE n.layout_x IS NOT NULL {viewport_filter}
+        OPTIONAL MATCH (n)-[r]-()
+        WITH n, count(r) as conn
+        RETURN n.id as id, n.content as content, n.memory_type as type,
+               n.layout_x as x, n.layout_y as y, conn
+        """,
+        **params
     )
     for m in memories:
         content = m["content"] or ""
@@ -78,18 +129,22 @@ async def get_graph_data(request: Request) -> dict:
             "fullContent": content,
             "type": "semantic",
             "subtype": m["type"] or "fact",
+            "x": m["x"],
+            "y": m["y"],
             "conn": m["conn"] or 0,
         })
 
-    # Get all episodic memories
+    # Get episodic memories
     episodes = await db.execute_query(
-        """
-        MATCH (e:EpisodicMemory)
-        OPTIONAL MATCH (e)-[r]-()
-        WITH e, count(r) as conn
-        ORDER BY conn DESC
-        RETURN e.id as id, e.query as query, e.behavior_name as behavior, conn
-        """
+        f"""
+        MATCH (n:EpisodicMemory)
+        WHERE n.layout_x IS NOT NULL {viewport_filter}
+        OPTIONAL MATCH (n)-[r]-()
+        WITH n, count(r) as conn
+        RETURN n.id as id, n.query as query, n.behavior_name as behavior,
+               n.layout_x as x, n.layout_y as y, conn
+        """,
+        **params
     )
     for e in episodes:
         query = e["query"] or ""
@@ -100,17 +155,19 @@ async def get_graph_data(request: Request) -> dict:
             "fullContent": query,
             "type": "episodic",
             "subtype": e["behavior"] or "unknown",
+            "x": e["x"],
+            "y": e["y"],
             "conn": e["conn"] or 0,
         })
 
     # Get node IDs for filtering links
     node_ids = {n["id"] for n in nodes}
 
-    # Get all concept relationships
+    # Get relationships (only between visible nodes)
     concept_rels = await db.execute_query(
         """
         MATCH (c1:Concept)-[r:RELATED_TO]->(c2:Concept)
-        RETURN c1.id as source, c2.id as target, r.type as relType, coalesce(r.weight, 0.5) as weight
+        RETURN c1.id as source, c2.id as target, r.type as relType
         """
     )
     for r in concept_rels:
@@ -152,6 +209,28 @@ async def get_graph_data(request: Request) -> dict:
     return {"nodes": nodes, "links": links}
 
 
+@router.get("/admin/graph/stats")
+async def get_graph_stats(request: Request) -> dict:
+    """Get total node counts for display."""
+    db = get_db(request)
+
+    # Use separate counts to avoid issues with empty labels
+    concepts_result = await db.execute_query("MATCH (c:Concept) RETURN count(c) as count")
+    semantic_result = await db.execute_query("MATCH (s:SemanticMemory) RETURN count(s) as count")
+    episodic_result = await db.execute_query("MATCH (e:EpisodicMemory) RETURN count(e) as count")
+
+    concepts = concepts_result[0]["count"] if concepts_result else 0
+    semantic = semantic_result[0]["count"] if semantic_result else 0
+    episodic = episodic_result[0]["count"] if episodic_result else 0
+
+    return {
+        "concepts": concepts,
+        "semantic": semantic,
+        "episodic": episodic,
+        "total": concepts + semantic + episodic
+    }
+
+
 GRAPH_HTML = """
 <!DOCTYPE html>
 <html>
@@ -161,9 +240,9 @@ GRAPH_HTML = """
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%230a0a12' stroke='%235eead4' stroke-width='6'/><circle cx='50' cy='50' r='15' fill='%235eead4'/></svg>">
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap" rel="stylesheet">
     <style>
-        * { margin: 0; padding: 0; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body { background: #0a0a12; font-family: -apple-system, sans-serif; overflow: hidden; }
-        #graph { width: 100vw; height: 100vh; }
+        #canvas { width: 100vw; height: 100vh; display: block; }
         #info { position: absolute; top: 16px; left: 16px; color: #8b949e; z-index: 10; pointer-events: none; }
         #info h1 { font-size: 11px; color: #5eead480; font-weight: 400; text-transform: uppercase; letter-spacing: 3px; margin-top: 6px; }
         #info .brand {
@@ -186,23 +265,11 @@ GRAPH_HTML = """
             color: #8b949e;
             z-index: 100;
         }
-        .legend-btn {
+        .legend-item {
             display: flex;
             align-items: center;
-            width: 100%;
-            padding: 8px 12px;
-            margin: 4px 0;
-            background: #0f0f1a;
-            border: 1px solid #1a1a2e;
-            border-radius: 6px;
-            color: #e0e0ff;
-            cursor: pointer;
-            font-size: 12px;
-            font-family: inherit;
-            transition: all 0.2s;
+            padding: 6px 0;
         }
-        .legend-btn:hover { background: #1a1a2e; border-color: #5eead440; }
-        .legend-btn.active { background: #5eead415; border-color: #5eead4; }
         .legend-dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 10px; }
         .legend-count { margin-left: auto; padding-left: 16px; color: #5eead4; font-weight: 500; }
         #search-box {
@@ -224,30 +291,6 @@ GRAPH_HTML = """
         }
         #search-input:focus { outline: none; border-color: #5eead4; }
         #search-input::placeholder { color: #4a4a6a; }
-        #search-results {
-            position: absolute;
-            top: 100%;
-            left: 0;
-            right: 0;
-            max-height: 300px;
-            overflow-y: auto;
-            background: rgba(10,10,18,0.98);
-            border: 1px solid #1a1a2e;
-            border-top: none;
-            border-radius: 0 0 6px 6px;
-            display: none;
-        }
-        #search-results.visible { display: block; }
-        .search-result {
-            padding: 10px 16px;
-            cursor: pointer;
-            border-bottom: 1px solid #1a1a2e;
-            display: flex;
-            align-items: center;
-        }
-        .search-result:hover { background: #1a1a2e; }
-        .search-result-name { flex: 1; color: #e0e0ff; }
-        .search-result-type { font-size: 10px; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; }
         #stats {
             position: absolute;
             top: 16px;
@@ -321,264 +364,217 @@ GRAPH_HTML = """
             color: #5eead4;
             z-index: 10;
         }
+        #viewport-info {
+            position: absolute;
+            bottom: 50px;
+            right: 16px;
+            background: rgba(10,10,18,0.9);
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 10px;
+            color: #6b6b8a;
+            z-index: 10;
+        }
     </style>
 </head>
 <body>
-    <div id="graph"></div>
+    <canvas id="canvas"></canvas>
     <div id="info"><div class="brand">Engram</div><h1>Memory Graph</h1></div>
     <div id="search-box">
         <input type="text" id="search-input" placeholder="Search nodes...">
-        <div id="search-results"></div>
     </div>
     <div id="node-info">
         <button class="close-btn" onclick="closeNodeInfo()">&times;</button>
         <div id="node-info-content"></div>
     </div>
     <div id="legend">
-        <button class="legend-btn" data-type="concept" onclick="toggleType('concept')"><span class="legend-dot" style="background:#5eead4"></span>Concept<span class="legend-count" id="c-count">0</span></button>
-        <button class="legend-btn" data-type="semantic" onclick="toggleType('semantic')"><span class="legend-dot" style="background:#a78bfa"></span>Semantic<span class="legend-count" id="s-count">0</span></button>
-        <button class="legend-btn" data-type="episodic" onclick="toggleType('episodic')"><span class="legend-dot" style="background:#f472b6"></span>Episodic<span class="legend-count" id="e-count">0</span></button>
-        <div style="border-top:1px solid #1a1a2e;margin:8px 0;"></div>
-        <button class="legend-btn" id="cluster-btn" onclick="toggleClusterMode()"><span class="legend-dot" style="background:linear-gradient(135deg,#5eead4,#a78bfa,#f472b6)"></span>Clusters<span class="legend-count" id="cluster-count">-</span></button>
+        <div class="legend-item"><span class="legend-dot" style="background:#5eead4"></span>Concept<span class="legend-count" id="c-count">0</span></div>
+        <div class="legend-item"><span class="legend-dot" style="background:#a78bfa"></span>Semantic<span class="legend-count" id="s-count">0</span></div>
+        <div class="legend-item"><span class="legend-dot" style="background:#f472b6"></span>Episodic<span class="legend-count" id="e-count">0</span></div>
     </div>
     <div id="stats">Loading...</div>
-    <div id="loading">Loading graph (WebGL)...</div>
-    <div id="mode-indicator">WebGL Mode</div>
+    <div id="loading">Loading graph...</div>
+    <div id="viewport-info">Visible: <span id="visible-count">0</span></div>
+    <div id="mode-indicator">Pre-computed Layout</div>
 
-    <script src="https://unpkg.com/3d-force-graph"></script>
     <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
         const typeColors = { concept: '#5eead4', semantic: '#a78bfa', episodic: '#f472b6' };
         const typeLabels = { concept: 'Concept', semantic: 'Semantic Memory', episodic: 'Episodic Memory' };
 
-        const clusterPalette = [
-            '#5eead4', '#a78bfa', '#f472b6', '#fbbf24', '#34d399',
-            '#60a5fa', '#fb7185', '#a3e635', '#22d3ee', '#c084fc',
-            '#f97316', '#2dd4bf'
-        ];
+        let nodes = [];
+        let links = [];
+        let nodeMap = {};
+        let bounds = { min_x: -1000, max_x: 1000, min_y: -1000, max_y: 1000 };
 
-        let clusterColors = {};
-        let nodeCluster = {};
-        let useClusterColors = false;
+        // View state
+        let viewX = 0, viewY = 0;
+        let scale = 1;
+        let selectedNode = null;
 
-        let selected = null;
-        let neighbors = new Set();
-        let allNodes = {};
-        let selectedTypes = new Set();
-        let typeNeighbors = new Set();
+        // Interaction state
+        let isDragging = false;
+        let lastMouseX = 0, lastMouseY = 0;
 
-        function getNodeColor(node) {
-            if (useClusterColors && clusterColors[node.id]) {
-                return clusterColors[node.id];
-            }
-            return typeColors[node.type] || '#5eead4';
+        // Viewport culling state
+        let loadingViewport = false;
+        let lastViewport = null;
+        let viewportDebounceTimer = null;
+
+        function resize() {
+            canvas.width = window.innerWidth * window.devicePixelRatio;
+            canvas.height = window.innerHeight * window.devicePixelRatio;
+            canvas.style.width = window.innerWidth + 'px';
+            canvas.style.height = window.innerHeight + 'px';
+            ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+            render();
         }
 
-        function toggleClusterMode() {
-            useClusterColors = !useClusterColors;
-            document.getElementById('cluster-btn').classList.toggle('active', useClusterColors);
-            Graph.nodeColor(n => getNodeColor(n));
+        function screenToWorld(sx, sy) {
+            return {
+                x: (sx - window.innerWidth / 2) / scale + viewX,
+                y: (sy - window.innerHeight / 2) / scale + viewY
+            };
         }
 
-        function detectClusters(nodes, links) {
-            const adj = {};
-            nodes.forEach(n => adj[n.id] = []);
-            links.forEach(l => {
-                const s = l.source.id || l.source;
-                const t = l.target.id || l.target;
-                if (adj[s]) adj[s].push(t);
-                if (adj[t]) adj[t].push(s);
-            });
-
-            const labels = {};
-            nodes.forEach((n, i) => labels[n.id] = i);
-
-            for (let iter = 0; iter < 20; iter++) {
-                let changed = false;
-                const shuffled = [...nodes].sort(() => Math.random() - 0.5);
-
-                for (const node of shuffled) {
-                    const neighbors = adj[node.id];
-                    if (neighbors.length === 0) continue;
-
-                    const labelCount = {};
-                    neighbors.forEach(nId => {
-                        const lbl = labels[nId];
-                        labelCount[lbl] = (labelCount[lbl] || 0) + 1;
-                    });
-
-                    let maxCount = 0;
-                    let maxLabel = labels[node.id];
-                    for (const [lbl, count] of Object.entries(labelCount)) {
-                        if (count > maxCount) {
-                            maxCount = count;
-                            maxLabel = parseInt(lbl);
-                        }
-                    }
-
-                    if (labels[node.id] !== maxLabel) {
-                        labels[node.id] = maxLabel;
-                        changed = true;
-                    }
-                }
-                if (!changed) break;
-            }
-
-            const labelSizes = {};
-            nodes.forEach(n => {
-                const lbl = labels[n.id];
-                labelSizes[lbl] = (labelSizes[lbl] || 0) + 1;
-            });
-
-            nodes.forEach(n => {
-                if (labelSizes[labels[n.id]] < 3) {
-                    const neighbors = adj[n.id];
-                    if (neighbors.length > 0) {
-                        let bestNeighbor = neighbors[0];
-                        let bestSize = labelSizes[labels[bestNeighbor]] || 0;
-                        for (const nId of neighbors) {
-                            const size = labelSizes[labels[nId]] || 0;
-                            if (size > bestSize) {
-                                bestSize = size;
-                                bestNeighbor = nId;
-                            }
-                        }
-                        labels[n.id] = labels[bestNeighbor];
-                    }
-                }
-            });
-
-            const uniqueLabels = [...new Set(Object.values(labels))];
-            const labelToCluster = {};
-            uniqueLabels.forEach((lbl, i) => labelToCluster[lbl] = i);
-
-            clusterColors = {};
-            nodeCluster = {};
-            nodes.forEach(n => {
-                const cluster = labelToCluster[labels[n.id]];
-                clusterColors[n.id] = clusterPalette[cluster % clusterPalette.length];
-                nodeCluster[n.id] = cluster;
-            });
-
-            return uniqueLabels.length;
+        function worldToScreen(wx, wy) {
+            return {
+                x: (wx - viewX) * scale + window.innerWidth / 2,
+                y: (wy - viewY) * scale + window.innerHeight / 2
+            };
         }
 
-        function toggleType(type) {
-            if (selectedTypes.has(type)) {
-                selectedTypes.delete(type);
-            } else {
-                selectedTypes.add(type);
-            }
-            document.querySelectorAll('.legend-btn[data-type]').forEach(el => {
-                el.classList.toggle('active', selectedTypes.has(el.dataset.type));
-            });
-            updateTypeNeighbors();
-            if (selectedTypes.size > 0) {
-                selected = null;
-                neighbors.clear();
-                closeNodeInfo();
-            }
-            updateVisibility();
+        function getViewportBounds() {
+            const margin = 100 / scale; // Extra margin for smoother loading
+            const tl = screenToWorld(0, 0);
+            const br = screenToWorld(window.innerWidth, window.innerHeight);
+            return {
+                min_x: tl.x - margin,
+                max_x: br.x + margin,
+                min_y: tl.y - margin,
+                max_y: br.y + margin
+            };
         }
 
-        function updateTypeNeighbors() {
-            typeNeighbors.clear();
-            if (selectedTypes.size === 0) return;
-            Object.values(allNodes).forEach(n => {
-                if (selectedTypes.has(n.type)) typeNeighbors.add(n.id);
-            });
+        function viewportChanged(v1, v2) {
+            if (!v1 || !v2) return true;
+            const threshold = 50 / scale;
+            return Math.abs(v1.min_x - v2.min_x) > threshold ||
+                   Math.abs(v1.max_x - v2.max_x) > threshold ||
+                   Math.abs(v1.min_y - v2.min_y) > threshold ||
+                   Math.abs(v1.max_y - v2.max_y) > threshold;
         }
 
-        function updateVisibility() {
-            Graph
-                .nodeColor(n => {
-                    if (selectedTypes.size > 0 && !selectedTypes.has(n.type)) return '#1a1a2e';
-                    if (selected && !neighbors.has(n.id)) return '#1a1a2e';
-                    return getNodeColor(n);
-                })
-                .linkColor(l => {
-                    const sourceId = l.source.id || l.source;
-                    const targetId = l.target.id || l.target;
-                    if (selectedTypes.size > 0) {
-                        const sn = allNodes[sourceId];
-                        const tn = allNodes[targetId];
-                        if (sn && tn && selectedTypes.has(sn.type) && selectedTypes.has(tn.type)) {
-                            return 'rgba(94,234,212,0.6)';
-                        }
-                        return 'rgba(0,0,0,0)';
-                    }
-                    if (selected) {
-                        if (sourceId === selected.id || targetId === selected.id) {
-                            return 'rgba(94,234,212,0.8)';
-                        }
-                        return 'rgba(0,0,0,0)';
-                    }
-                    return 'rgba(94,234,212,0.15)';
-                });
+        async function loadViewportData() {
+            if (loadingViewport) return;
+
+            const vp = getViewportBounds();
+            if (!viewportChanged(vp, lastViewport)) return;
+
+            loadingViewport = true;
+            lastViewport = vp;
+
+            try {
+                const url = `/admin/graph/data?min_x=${vp.min_x}&max_x=${vp.max_x}&min_y=${vp.min_y}&max_y=${vp.max_y}`;
+                const response = await fetch(url);
+                const data = await response.json();
+
+                nodes = data.nodes;
+                links = data.links;
+                nodeMap = {};
+                nodes.forEach(n => nodeMap[n.id] = n);
+
+                document.getElementById('visible-count').textContent = nodes.length;
+                render();
+            } catch (e) {
+                console.error('Failed to load viewport data:', e);
+            } finally {
+                loadingViewport = false;
+            }
         }
 
-        // Search
-        const searchInput = document.getElementById('search-input');
-        const searchResults = document.getElementById('search-results');
+        function scheduleViewportLoad() {
+            if (viewportDebounceTimer) clearTimeout(viewportDebounceTimer);
+            viewportDebounceTimer = setTimeout(loadViewportData, 150);
+        }
 
-        searchInput.addEventListener('input', (e) => {
-            const query = e.target.value.toLowerCase().trim();
-            if (query.length < 2) {
-                searchResults.classList.remove('visible');
-                return;
-            }
-            const matches = Object.values(allNodes)
-                .filter(n => n.name.toLowerCase().includes(query) || (n.fullContent && n.fullContent.toLowerCase().includes(query)))
-                .slice(0, 10);
-            if (matches.length === 0) {
-                searchResults.innerHTML = '<div style="padding:12px;color:#6b6b8a;">No results found</div>';
-            } else {
-                searchResults.innerHTML = matches.map(n => `
-                    <div class="search-result" data-id="${n.id}">
-                        <span class="search-result-name">${n.name.length > 40 ? n.name.slice(0,40) + '...' : n.name}</span>
-                        <span class="search-result-type" style="background:${getNodeColor(n)}20;color:${getNodeColor(n)}">${n.type}</span>
-                    </div>
-                `).join('');
-            }
-            searchResults.classList.add('visible');
-        });
+        function render() {
+            ctx.save();
+            ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
 
-        searchResults.addEventListener('click', (e) => {
-            const result = e.target.closest('.search-result');
-            if (result) {
-                const node = allNodes[result.dataset.id];
-                if (node) {
-                    selectNode(node);
-                    searchInput.value = '';
-                    searchResults.classList.remove('visible');
+            // Clear
+            ctx.fillStyle = '#0a0a12';
+            ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+
+            // Draw links
+            ctx.strokeStyle = 'rgba(94,234,212,0.12)';
+            ctx.lineWidth = 0.5;
+            ctx.beginPath();
+            for (const link of links) {
+                const source = nodeMap[link.source] || nodeMap[link.source?.id];
+                const target = nodeMap[link.target] || nodeMap[link.target?.id];
+                if (source && target) {
+                    const s = worldToScreen(source.x, source.y);
+                    const t = worldToScreen(target.x, target.y);
+                    ctx.moveTo(s.x, s.y);
+                    ctx.lineTo(t.x, t.y);
                 }
             }
-        });
+            ctx.stroke();
 
-        searchInput.addEventListener('blur', () => {
-            setTimeout(() => searchResults.classList.remove('visible'), 200);
-        });
+            // Draw nodes
+            for (const node of nodes) {
+                const pos = worldToScreen(node.x, node.y);
+                const radius = Math.max(2, Math.min(15, Math.sqrt(node.conn || 1) * 1.5)) * Math.min(1, scale * 0.8 + 0.2);
 
-        function selectNode(node) {
-            selectedTypes.clear();
-            typeNeighbors.clear();
-            document.querySelectorAll('.legend-btn[data-type]').forEach(el => el.classList.remove('active'));
-            selected = node;
-            neighbors = new Set([node.id]);
-            Graph.graphData().links.forEach(l => {
-                const sid = l.source.id || l.source;
-                const tid = l.target.id || l.target;
-                if (sid === node.id) neighbors.add(tid);
-                if (tid === node.id) neighbors.add(sid);
-            });
-            showNodeInfo(node);
-            Graph.cameraPosition({ x: node.x, y: node.y, z: 300 }, node, 1000);
-            updateVisibility();
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+
+                if (selectedNode === node) {
+                    ctx.fillStyle = '#ffffff';
+                    ctx.shadowColor = typeColors[node.type];
+                    ctx.shadowBlur = 20;
+                } else {
+                    ctx.fillStyle = typeColors[node.type] || '#5eead4';
+                    ctx.shadowBlur = 0;
+                }
+                ctx.fill();
+                ctx.shadowBlur = 0;
+
+                // Draw label at higher zoom
+                if (scale > 1.5 || (scale > 0.8 && node.conn > 5)) {
+                    const fontSize = Math.max(8, Math.min(12, 10 * scale));
+                    ctx.font = `${fontSize}px -apple-system, sans-serif`;
+                    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+                    ctx.textAlign = 'center';
+                    const label = node.name.length > 20 ? node.name.slice(0, 20) + '...' : node.name;
+                    ctx.fillText(label, pos.x, pos.y + radius + fontSize + 2);
+                }
+            }
+
+            ctx.restore();
+        }
+
+        function findNodeAt(sx, sy) {
+            const world = screenToWorld(sx, sy);
+            const threshold = 15 / scale;
+
+            for (const node of nodes) {
+                const dx = node.x - world.x;
+                const dy = node.y - world.y;
+                if (Math.sqrt(dx * dx + dy * dy) < threshold) {
+                    return node;
+                }
+            }
+            return null;
         }
 
         function showNodeInfo(node) {
             const panel = document.getElementById('node-info');
             const content = document.getElementById('node-info-content');
-            const color = getNodeColor(node);
+            const color = typeColors[node.type];
 
             let html = `
                 <span class="type-badge" style="background:${color}20;color:${color}">${typeLabels[node.type] || node.type}</span>
@@ -607,122 +603,152 @@ GRAPH_HTML = """
                 `;
             }
 
-            const connected = [];
-            Graph.graphData().links.forEach(l => {
-                const sid = l.source.id || l.source;
-                const tid = l.target.id || l.target;
-                if (sid === node.id && allNodes[tid]) connected.push(allNodes[tid]);
-                else if (tid === node.id && allNodes[sid]) connected.push(allNodes[sid]);
-            });
-
-            if (connected.length > 0) {
-                html += `
-                    <div class="info-row">
-                        <div class="info-label">Connected To</div>
-                        <div class="info-value">
-                            ${connected.slice(0, 8).map(n =>
-                                `<div style="margin:4px 0;padding:4px 8px;background:#0f0f1a;border-radius:4px;font-size:11px;">
-                                    <span style="color:${getNodeColor(n)}">●</span> ${n.name.slice(0,30)}${n.name.length > 30 ? '..' : ''}
-                                </div>`
-                            ).join('')}
-                            ${connected.length > 8 ? `<div style="color:#6b6b8a;font-size:11px;margin-top:4px;">...and ${connected.length - 8} more</div>` : ''}
-                        </div>
-                    </div>
-                `;
-            }
-
             content.innerHTML = html;
             panel.classList.add('visible');
         }
 
         function closeNodeInfo() {
             document.getElementById('node-info').classList.remove('visible');
+            selectedNode = null;
+            render();
         }
 
-        // Initialize 3D Force Graph with WebGL
-        const Graph = ForceGraph3D()
-            (document.getElementById('graph'))
-            .backgroundColor('#0a0a12')
-            .nodeColor(n => getNodeColor(n))
-            .nodeVal(n => Math.max(1, Math.sqrt(n.conn || 1) * 2))
-            .nodeOpacity(0.9)
-            .linkColor(() => 'rgba(94,234,212,0.15)')
-            .linkOpacity(0.6)
-            .linkWidth(0.3)
-            .onNodeClick(node => {
-                selectedTypes.clear();
-                typeNeighbors.clear();
-                document.querySelectorAll('.legend-btn[data-type]').forEach(el => el.classList.remove('active'));
+        // Mouse events
+        canvas.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            lastMouseX = e.clientX;
+            lastMouseY = e.clientY;
+        });
 
-                if (selected === node) {
-                    selected = null;
-                    neighbors.clear();
-                    closeNodeInfo();
-                    updateVisibility();
-                } else {
-                    selectNode(node);
-                }
-            })
-            .onBackgroundClick(() => {
-                selected = null;
-                neighbors.clear();
-                selectedTypes.clear();
-                typeNeighbors.clear();
-                document.querySelectorAll('.legend-btn[data-type]').forEach(el => el.classList.remove('active'));
-                closeNodeInfo();
-                updateVisibility();
-            })
-            .cooldownTime(3000)
-            .d3VelocityDecay(0.3)
-            .nodeLabel(n => n.name);
-
-        // Configure forces
-        Graph.d3Force('charge').strength(-50);
-        Graph.d3Force('link').distance(40);
-
-        // Set top-down view (like 2D)
-        Graph.cameraPosition({ x: 0, y: 0, z: 1000 });
-
-        document.addEventListener('keydown', e => {
-            if (e.key === 'Escape') {
-                selected = null;
-                neighbors.clear();
-                selectedTypes.clear();
-                typeNeighbors.clear();
-                document.querySelectorAll('.legend-btn[data-type]').forEach(el => el.classList.remove('active'));
-                closeNodeInfo();
-                searchInput.value = '';
-                searchResults.classList.remove('visible');
-                updateVisibility();
+        canvas.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                const dx = e.clientX - lastMouseX;
+                const dy = e.clientY - lastMouseY;
+                viewX -= dx / scale;
+                viewY -= dy / scale;
+                lastMouseX = e.clientX;
+                lastMouseY = e.clientY;
+                render();
+                scheduleViewportLoad();
             }
         });
 
-        fetch('/admin/graph/data')
-            .then(r => r.json())
-            .then(data => {
-                document.getElementById('loading').style.display = 'none';
+        canvas.addEventListener('mouseup', (e) => {
+            if (!isDragging) return;
 
-                data.nodes.forEach(n => {
-                    allNodes[n.id] = n;
-                    // Flatten to 2D (z = 0)
-                    n.fz = 0;
-                });
+            const dx = Math.abs(e.clientX - lastMouseX);
+            const dy = Math.abs(e.clientY - lastMouseY);
 
-                const c = data.nodes.filter(n => n.type === 'concept').length;
-                const s = data.nodes.filter(n => n.type === 'semantic').length;
-                const e = data.nodes.filter(n => n.type === 'episodic').length;
-                document.getElementById('c-count').textContent = c;
-                document.getElementById('s-count').textContent = s;
-                document.getElementById('e-count').textContent = e;
-                document.getElementById('stats').innerHTML =
-                    '<div>Nodes: <strong style="color:#5eead4">' + data.nodes.length + '</strong></div>' +
-                    '<div>Links: <strong style="color:#5eead4">' + data.links.length + '</strong></div>';
+            // If minimal movement, treat as click
+            if (dx < 5 && dy < 5) {
+                const node = findNodeAt(e.clientX, e.clientY);
+                if (node) {
+                    selectedNode = node;
+                    showNodeInfo(node);
+                } else {
+                    closeNodeInfo();
+                }
+                render();
+            }
 
-                const numClusters = detectClusters(data.nodes, data.links);
-                document.getElementById('cluster-count').textContent = numClusters;
+            isDragging = false;
+        });
 
-                Graph.graphData(data);
-            });
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+
+            // Zoom toward mouse position
+            const mouseWorld = screenToWorld(e.clientX, e.clientY);
+            scale *= zoomFactor;
+            scale = Math.max(0.1, Math.min(10, scale));
+
+            const newMouseWorld = screenToWorld(e.clientX, e.clientY);
+            viewX += mouseWorld.x - newMouseWorld.x;
+            viewY += mouseWorld.y - newMouseWorld.y;
+
+            render();
+            scheduleViewportLoad();
+        });
+
+        // Search
+        const searchInput = document.getElementById('search-input');
+        searchInput.addEventListener('keydown', async (e) => {
+            if (e.key === 'Enter') {
+                const query = searchInput.value.trim().toLowerCase();
+                if (query.length < 2) return;
+
+                // Search in current nodes first
+                let found = nodes.find(n =>
+                    n.name.toLowerCase().includes(query) ||
+                    (n.fullContent && n.fullContent.toLowerCase().includes(query))
+                );
+
+                if (found) {
+                    viewX = found.x;
+                    viewY = found.y;
+                    scale = 2;
+                    selectedNode = found;
+                    showNodeInfo(found);
+                    render();
+                    scheduleViewportLoad();
+                }
+            }
+        });
+
+        // Keyboard
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeNodeInfo();
+                searchInput.value = '';
+            }
+        });
+
+        // Initialize
+        async function init() {
+            resize();
+            window.addEventListener('resize', resize);
+
+            // Load bounds
+            const boundsRes = await fetch('/admin/graph/bounds');
+            const boundsData = await boundsRes.json();
+
+            if (!boundsData.has_layout) {
+                document.getElementById('loading').innerHTML =
+                    'No layout computed. Run:<br><code>uv run python scripts/compute_layout.py</code>';
+                return;
+            }
+
+            bounds = boundsData;
+
+            // Center view on graph
+            viewX = (bounds.min_x + bounds.max_x) / 2;
+            viewY = (bounds.min_y + bounds.max_y) / 2;
+
+            // Set initial scale to fit graph
+            const graphWidth = bounds.max_x - bounds.min_x;
+            const graphHeight = bounds.max_y - bounds.min_y;
+            scale = Math.min(
+                window.innerWidth / graphWidth * 0.8,
+                window.innerHeight / graphHeight * 0.8
+            );
+            scale = Math.max(0.1, Math.min(2, scale));
+
+            // Load stats
+            const statsRes = await fetch('/admin/graph/stats');
+            const stats = await statsRes.json();
+            document.getElementById('c-count').textContent = stats.concepts;
+            document.getElementById('s-count').textContent = stats.semantic;
+            document.getElementById('e-count').textContent = stats.episodic;
+            document.getElementById('stats').innerHTML =
+                '<div>Total: <strong style="color:#5eead4">' + stats.total + '</strong></div>';
+
+            // Load initial viewport data
+            document.getElementById('loading').style.display = 'none';
+            await loadViewportData();
+        }
+
+        init();
     </script>
 </body>
 </html>
