@@ -78,8 +78,9 @@ class ChatCompletionResponse(BaseModel):
     # Engram-specific metadata
     episode_id: str | None = None
     confidence: float | None = None
-    concepts_activated: list[str] = []
-    memories_used: int = 0
+    concepts_activated: list[str] = []  # Concept IDs
+    memories_used: list[str] = []  # Memory IDs
+    memories_count: int = 0
 
 
 # ============================================================================
@@ -243,8 +244,9 @@ async def chat_completions(
             usage=ChatCompletionUsage(),
             episode_id=result.episode_id,
             confidence=result.confidence,
-            concepts_activated=result.synthesis.concepts_activated[:10],
-            memories_used=memories_count,
+            concepts_activated=result.synthesis.concepts_activated[:50],  # Concept IDs
+            memories_used=result.synthesis.memories_used[:50],  # Memory IDs
+            memories_count=memories_count,
         )
 
     except Exception as e:

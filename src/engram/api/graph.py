@@ -344,6 +344,91 @@ GRAPH_HTML = """
         .neighbor-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
         #mode-indicator { position: absolute; bottom: 16px; right: 16px; background: rgba(94,234,212,0.1); border: 1px solid #5eead4; padding: 8px 12px; border-radius: 6px; font-size: 10px; color: #5eead4; z-index: 10; }
+
+        /* Chat Panel */
+        #chat-toggle {
+            position: absolute; top: 50%; right: 0; transform: translateY(-50%);
+            background: rgba(10,10,18,0.95); border: 1px solid #5eead4; border-right: none;
+            padding: 12px 8px; border-radius: 8px 0 0 8px; cursor: pointer;
+            color: #5eead4; font-size: 18px; z-index: 200;
+            transition: right 0.3s ease;
+        }
+        #chat-toggle:hover { background: rgba(94,234,212,0.2); }
+        #chat-toggle.open { right: 380px; }
+
+        #chat-panel {
+            position: absolute; top: 0; right: -400px; width: 380px; height: 100vh;
+            background: rgba(10,10,18,0.98); border-left: 1px solid #1a1a2e;
+            display: flex; flex-direction: column; z-index: 150;
+            transition: right 0.3s ease;
+        }
+        #chat-panel.open { right: 0; }
+
+        #chat-header {
+            padding: 16px; border-bottom: 1px solid #1a1a2e;
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        #chat-header h2 { font-size: 14px; color: #5eead4; font-weight: 500; margin: 0; }
+        #chat-header .chat-actions { display: flex; gap: 8px; }
+        .chat-action-btn {
+            padding: 4px 10px; background: #0f0f1a; border: 1px solid #1a1a2e;
+            border-radius: 4px; color: #8b949e; cursor: pointer; font-size: 10px;
+        }
+        .chat-action-btn:hover { border-color: #5eead4; color: #5eead4; }
+        .chat-action-btn.active { background: #5eead420; border-color: #5eead4; color: #5eead4; }
+
+        #chat-messages {
+            flex: 1; overflow-y: auto; padding: 16px;
+            display: flex; flex-direction: column; gap: 12px;
+        }
+        .chat-message {
+            max-width: 90%; padding: 10px 14px; border-radius: 12px;
+            font-size: 13px; line-height: 1.5; word-wrap: break-word;
+        }
+        .chat-message.user {
+            align-self: flex-end; background: #5eead420; color: #e0e0ff;
+            border-bottom-right-radius: 4px;
+        }
+        .chat-message.assistant {
+            align-self: flex-start; background: #1a1a2e; color: #e0e0ff;
+            border-bottom-left-radius: 4px;
+        }
+        .chat-message.system {
+            align-self: center; background: transparent; color: #6b6b8a;
+            font-size: 11px; text-align: center;
+        }
+        .chat-message .activated-info {
+            margin-top: 8px; padding-top: 8px; border-top: 1px solid #2a2a4e;
+            font-size: 11px; color: #5eead4; cursor: pointer;
+        }
+        .chat-message .activated-info:hover { text-decoration: underline; }
+
+        #chat-input-area {
+            padding: 12px 16px; border-top: 1px solid #1a1a2e;
+            display: flex; gap: 8px;
+        }
+        #chat-input {
+            flex: 1; padding: 10px 14px; background: #0f0f1a;
+            border: 1px solid #1a1a2e; border-radius: 8px;
+            color: #e0e0ff; font-size: 13px; resize: none;
+        }
+        #chat-input:focus { outline: none; border-color: #5eead4; }
+        #chat-input::placeholder { color: #4a4a6a; }
+        #chat-send {
+            padding: 10px 16px; background: #5eead4; border: none;
+            border-radius: 8px; color: #0a0a12; font-weight: 600;
+            cursor: pointer; font-size: 13px;
+        }
+        #chat-send:hover { background: #4dd4c0; }
+        #chat-send:disabled { background: #2a2a4e; color: #6b6b8a; cursor: not-allowed; }
+
+        /* Activation glow animation */
+        @keyframes activationPulse {
+            0% { opacity: 0.3; }
+            50% { opacity: 1; }
+            100% { opacity: 0.3; }
+        }
+        .activation-glow { animation: activationPulse 1.5s ease-in-out infinite; }
     </style>
 </head>
 <body>
@@ -383,6 +468,24 @@ GRAPH_HTML = """
     <div id="loading">Loading graph...</div>
     <div id="mode-indicator">WebGL</div>
 
+    <button id="chat-toggle" onclick="toggleChat()">💬</button>
+    <div id="chat-panel">
+        <div id="chat-header">
+            <h2>Chat with Memory</h2>
+            <div class="chat-actions">
+                <button class="chat-action-btn" id="show-activation-btn" onclick="showLastActivation()">Show Activation</button>
+                <button class="chat-action-btn" onclick="clearChat()">Clear</button>
+            </div>
+        </div>
+        <div id="chat-messages">
+            <div class="chat-message system">Ask questions about your knowledge graph. Activated memories will be highlighted.</div>
+        </div>
+        <div id="chat-input-area">
+            <textarea id="chat-input" placeholder="Ask a question..." rows="1"></textarea>
+            <button id="chat-send" onclick="sendChat()">Send</button>
+        </div>
+    </div>
+
     <script>
         const canvas = document.getElementById('canvas');
         const labelCanvas = document.getElementById('label-canvas');
@@ -409,10 +512,12 @@ GRAPH_HTML = """
         let selectedNode = null, hoveredNode = null;
         let highlightedNodes = new Set();
         let neighborNodes = new Set();
+        let activatedNodes = new Set(); // Nodes activated by chat
         let showClusters = false, showBundling = false;
         let typeFilters = new Set(); // empty = show all
 
         let isDragging = false, lastMouseX = 0, lastMouseY = 0, dragStartX = 0, dragStartY = 0;
+        let animationFrameId = null;
         let loadingViewport = false, lastViewport = null, viewportDebounceTimer = null;
 
         // WebGL shaders
@@ -583,6 +688,14 @@ GRAPH_HTML = """
             const isHighlighted = highlightedNodes.size === 0 || highlightedNodes.has(node.id);
             const isNeighbor = neighborNodes.has(node.id);
             const isSelected = node === selectedNode;
+            const isActivated = activatedNodes.has(node.id);
+
+            // Activated nodes from chat get bright glow
+            if (isActivated) {
+                // Pulsing glow effect using time
+                const pulse = 0.7 + 0.3 * Math.sin(Date.now() / 300);
+                return [1.0, 0.95, 0.3, pulse]; // Golden glow for activated
+            }
 
             if (!isHighlighted && !isNeighbor && !isSelected && highlightedNodes.size > 0) {
                 return [0.15, 0.15, 0.2, 0.3];
@@ -1029,12 +1142,196 @@ GRAPH_HTML = """
             if (e.key === 'Escape') {
                 closeNodeInfo();
                 highlightedNodes.clear();
+                stopActivationAnimation();
                 typeFilters.clear();
                 document.querySelectorAll('.legend-item').forEach(el => el.classList.remove('active', 'dimmed'));
                 searchInput.value = '';
                 searchResults.classList.remove('visible');
                 render();
             }
+        });
+
+        // ============ CHAT FUNCTIONALITY ============
+        let lastActivation = { concepts: [], memories: [] };
+        let chatOpen = false;
+
+        function toggleChat() {
+            chatOpen = !chatOpen;
+            document.getElementById('chat-panel').classList.toggle('open', chatOpen);
+            document.getElementById('chat-toggle').classList.toggle('open', chatOpen);
+        }
+
+        function clearChat() {
+            document.getElementById('chat-messages').innerHTML =
+                '<div class="chat-message system">Ask questions about your knowledge graph. Activated memories will be highlighted.</div>';
+            lastActivation = { concepts: [], memories: [] };
+            stopActivationAnimation();
+            highlightedNodes.clear();
+            render();
+        }
+
+        function showLastActivation() {
+            if (lastActivation.concepts.length === 0 && lastActivation.memories.length === 0) {
+                return;
+            }
+            activatedNodes.clear();
+            lastActivation.concepts.forEach(id => activatedNodes.add(id));
+            lastActivation.memories.forEach(id => activatedNodes.add(id));
+            highlightedNodes.clear();
+            activatedNodes.forEach(id => highlightedNodes.add(id));
+
+            // Find center of activated nodes and pan to them
+            let sumX = 0, sumY = 0, count = 0;
+            for (const node of nodes) {
+                if (activatedNodes.has(node.id)) {
+                    sumX += node.x;
+                    sumY += node.y;
+                    count++;
+                }
+            }
+            if (count > 0) {
+                viewX = sumX / count;
+                viewY = sumY / count;
+                scale = Math.min(2, scale * 1.5);
+            }
+            render();
+            scheduleViewportLoad();
+        }
+
+        function highlightActivation(concepts, memories) {
+            lastActivation = { concepts, memories };
+            activatedNodes.clear();
+            concepts.forEach(id => activatedNodes.add(id));
+            memories.forEach(id => activatedNodes.add(id));
+            highlightedNodes.clear();
+            activatedNodes.forEach(id => highlightedNodes.add(id));
+            startActivationAnimation();
+        }
+
+        function startActivationAnimation() {
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+
+            function animate() {
+                if (activatedNodes.size === 0) {
+                    animationFrameId = null;
+                    return;
+                }
+                render();
+                animationFrameId = requestAnimationFrame(animate);
+            }
+            animate();
+        }
+
+        function stopActivationAnimation() {
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+                animationFrameId = null;
+            }
+            activatedNodes.clear();
+            render();
+        }
+
+        async function sendChat() {
+            const input = document.getElementById('chat-input');
+            const sendBtn = document.getElementById('chat-send');
+            const messages = document.getElementById('chat-messages');
+            const query = input.value.trim();
+
+            if (!query) return;
+
+            // Add user message
+            const userMsg = document.createElement('div');
+            userMsg.className = 'chat-message user';
+            userMsg.textContent = query;
+            messages.appendChild(userMsg);
+
+            // Clear input and disable
+            input.value = '';
+            sendBtn.disabled = true;
+            input.disabled = true;
+
+            // Add loading message
+            const loadingMsg = document.createElement('div');
+            loadingMsg.className = 'chat-message assistant';
+            loadingMsg.innerHTML = '<span class="activation-glow">Thinking...</span>';
+            messages.appendChild(loadingMsg);
+            messages.scrollTop = messages.scrollHeight;
+
+            try {
+                const response = await fetch('/v1/chat/completions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: 'engram',
+                        messages: [{ role: 'user', content: query }],
+                        top_k_memories: 20,
+                        top_k_episodes: 5
+                    })
+                });
+
+                const data = await response.json();
+
+                // Remove loading message
+                messages.removeChild(loadingMsg);
+
+                // Extract response
+                const answer = data.choices[0].message.content;
+                const concepts = data.concepts_activated || [];
+                const memories = data.memories_used || [];
+                const memoriesCount = data.memories_count || 0;
+
+                // Add assistant message
+                const assistantMsg = document.createElement('div');
+                assistantMsg.className = 'chat-message assistant';
+
+                // Format answer (basic markdown-like formatting)
+                let formattedAnswer = answer
+                    .replace(/\\n/g, '<br>')
+                    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                    .replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+                assistantMsg.innerHTML = formattedAnswer;
+
+                // Add activation info if there are activated nodes
+                if (concepts.length > 0 || memories.length > 0) {
+                    const activationInfo = document.createElement('div');
+                    activationInfo.className = 'activated-info';
+                    activationInfo.textContent = `Activated: ${concepts.length} concepts, ${memoriesCount} memories`;
+                    activationInfo.onclick = () => highlightActivation(concepts, memories);
+                    assistantMsg.appendChild(activationInfo);
+
+                    // Auto-highlight
+                    highlightActivation(concepts, memories);
+                }
+
+                messages.appendChild(assistantMsg);
+                messages.scrollTop = messages.scrollHeight;
+
+            } catch (error) {
+                messages.removeChild(loadingMsg);
+                const errorMsg = document.createElement('div');
+                errorMsg.className = 'chat-message system';
+                errorMsg.textContent = 'Error: ' + error.message;
+                messages.appendChild(errorMsg);
+            } finally {
+                sendBtn.disabled = false;
+                input.disabled = false;
+                input.focus();
+            }
+        }
+
+        // Chat input handlers
+        document.getElementById('chat-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendChat();
+            }
+        });
+
+        // Auto-resize chat input
+        document.getElementById('chat-input').addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 100) + 'px';
         });
 
         async function init() {
