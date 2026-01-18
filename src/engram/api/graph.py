@@ -703,10 +703,10 @@ GRAPH_HTML = """
 
         // How many steps (hops) from main hubs
         function getMaxDepth() {
-            if (currentZoom < 0.3) return 2;
-            if (currentZoom < 0.6) return 3;
-            if (currentZoom < 1.0) return 4;
-            return 5;
+            if (currentZoom < 0.5) return 1;
+            if (currentZoom < 1.0) return 2;
+            if (currentZoom < 1.5) return 3;
+            return 4;
         }
 
         // How many top neighbors to explore at each step
