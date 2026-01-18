@@ -193,13 +193,13 @@ uv run python scripts/run_ingestion.py
 
 ## Memory Graph Visualization
 
-Engram includes an interactive 2D graph visualization of the memory network, accessible at `/admin/graph`. Features a cyberpunk-inspired dark theme with animated effects.
+Engram includes an interactive WebGL graph visualization of the memory network, accessible at `/admin/graph`. Optimized for large graphs (30k+ nodes) with pre-computed layouts.
 
-**Galaxy Layout:**
-- **Solar System Effect**: High-connection nodes act as "suns" that pull their connected nodes into orbit
-- **Animated Particles**: Data particles flow along connections toward hub nodes
-- **Pulsing Coronas**: Hub nodes have breathing glow effects synced with particle flow
-- **Auto-Focus**: On load, automatically zooms to the densest area of the graph
+**Architecture:**
+- **WebGL Rendering**: Hardware-accelerated graphics for smooth performance
+- **Pre-computed Layout**: Server-side layout using igraph/cuGraph, stored in Neo4j
+- **Viewport Culling**: Only loads nodes visible in current view
+- **Louvain Clustering**: Community detection for visual grouping
 
 **Node Types:**
 - **Concepts** (teal `#5eead4`): Atomic ideas from ingested documents
@@ -207,26 +207,41 @@ Engram includes an interactive 2D graph visualization of the memory network, acc
 - **Episodic Memories** (pink `#f472b6`): Past reasoning traces with outcomes
 
 **Features:**
-- **Cluster Detection**: Auto-detect communities using Label Propagation algorithm
-- **Cluster Coloring**: Toggle to color nodes by cluster — particles match cluster colors
-- **Path Finder**: Find shortest path between any two nodes with animated visualization
-- **Importance Filter**: Hide nodes AND their connections below threshold
-- **Cluster Label Filter**: Control minimum cluster size to show labels (reduce clutter)
+- **Integrated Chat**: Chat panel with memory activation visualization
+- **Live Activation**: See which nodes are used when answering questions (golden glow)
+- **Cluster Coloring**: Toggle to color nodes by community
+- **Edge Bundling**: Curved edges for cleaner visualization
 - **Search**: Find and focus on specific nodes by name or content
-- **Type Filtering**: Click legend buttons to highlight all nodes of a specific type
-- **Progressive Labels**: Labels appear as you zoom in, larger nodes show labels first
+- **Type Filtering**: Click legend items to filter by node type
+- **Neighbor Highlighting**: Click node to see its connections highlighted
+- **Connected Nodes Panel**: View and navigate to connected nodes
 
 **Controls:**
-- **Click node**: Select and show info panel with full content
-- **Click legend button**: Filter by type (multi-select supported)
-- **Click "Clusters"**: Toggle cluster-based coloring with matching particle colors
-- **Path Finder**: Click start/end buttons, then click nodes, then "Trace"
-- **Importance Slider**: Hide low-importance nodes and their connections
-- **Cluster Labels Slider**: Set minimum cluster size to display labels
+- **💬 Button**: Toggle chat panel
+- **Click node**: Select and show info panel with connections
+- **Click legend item**: Filter by type (click again to clear)
+- **"Clusters" button**: Toggle cluster-based coloring
+- **"Bundle" button**: Toggle edge bundling
+- **"Show Activation" button**: Re-highlight last chat response nodes
 - **Search box**: Type 2+ characters to search, click result to focus
-- **Escape**: Clear all selections and filters
+- **Escape**: Clear all selections, filters, and highlights
 - **Mouse wheel**: Zoom in/out
 - **Drag**: Pan the view
+
+**Chat Integration:**
+- Ask questions directly in the graph interface
+- Activated concepts and memories glow golden with pulsing animation
+- Click "Activated: X concepts, Y memories" to re-highlight
+- View pans to center of activated nodes
+
+**Setup for Large Graphs:**
+```bash
+# Compute layout (required after ingestion)
+uv run python scripts/compute_layout.py
+
+# For GPU acceleration (100-1000x faster):
+uv sync --extra gpu
+```
 
 ## Interactive Chat CLI
 
@@ -296,22 +311,21 @@ uv run ruff check src/engram
 
 ## Roadmap
 
-### Scalable Graph Visualization
+### Completed
 
-Current implementation uses client-side level-of-detail (LOD) rendering, showing ~3000 nodes with zoom-based progressive detail. For graphs with 100k+ nodes, a server-side spatial approach is planned:
+- [x] **Pre-computed layout** — Server-side layout using igraph (CPU) or cuGraph (GPU)
+- [x] **Viewport culling** — Client requests nodes by viewport bounds
+- [x] **WebGL rendering** — Hardware-accelerated for 30k+ nodes
+- [x] **Louvain clustering** — Community detection stored in Neo4j
+- [x] **Integrated chat** — Chat with memory activation visualization
 
-1. **Pre-computed layout** — Run graph layout algorithm server-side after ingestion, store x/y coordinates on each node in Neo4j
+### Planned
 
-2. **Spatial indexing** — Use Neo4j point indexes to query "nodes within bounding box"
-
-3. **Hierarchical clustering** — Pre-compute clusters with levels:
-   - Level 0: Cluster representatives (~100-500 nodes)
-   - Level 1: Sub-cluster representatives (~2000 nodes)
-   - Level 2: Individual nodes
-
-4. **Tile-based loading** — Client requests nodes by viewport bounds and zoom level, positions come from server (no force simulation needed)
-
-This approach scales to millions of nodes, similar to how map applications work.
+- [ ] **Hierarchical clustering** — Level 0 (cluster reps), Level 1 (sub-clusters), Level 2 (nodes)
+- [ ] **Spatial indexing** — Neo4j point indexes for faster viewport queries
+- [ ] **Feedback in chat** — 👍/👎 buttons to strengthen/weaken memories
+- [ ] **Path finder** — Find shortest path between two nodes
+- [ ] **Export subgraph** — Export selected nodes to markdown
 
 ## License
 
