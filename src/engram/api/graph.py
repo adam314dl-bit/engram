@@ -1,4 +1,4 @@
-"""Graph visualization endpoint with v0.1 UI and simplified rendering."""
+"""Graph visualization with clustering and 10% most important data."""
 
 import logging
 
@@ -34,21 +34,21 @@ def get_db(request: Request) -> Neo4jClient:
 
 @router.get("/admin/graph/data")
 async def get_graph_data(request: Request) -> dict:
-    """Get graph data - 10% of total for performance."""
+    """Get 10% most important data (by connection count)."""
     db = get_db(request)
 
     nodes = []
     links = []
 
-    # Get concepts (10% - ~200)
+    # Get top 10% concepts by connection count
     concepts = await db.execute_query(
         """
         MATCH (c:Concept)
         OPTIONAL MATCH (c)-[r]-()
         WITH c, count(r) as conn
-        RETURN c.id as id, c.name as name, c.type as type, conn
         ORDER BY conn DESC
         LIMIT 200
+        RETURN c.id as id, c.name as name, c.type as type, conn
         """
     )
     for c in concepts:
@@ -60,15 +60,15 @@ async def get_graph_data(request: Request) -> dict:
             "conn": c["conn"] or 0,
         })
 
-    # Get semantic memories (10% - ~80)
+    # Get top 10% semantic memories by connection count
     memories = await db.execute_query(
         """
         MATCH (s:SemanticMemory)
         OPTIONAL MATCH (s)-[r]-()
         WITH s, count(r) as conn
-        RETURN s.id as id, s.content as content, s.memory_type as type, conn
         ORDER BY conn DESC
         LIMIT 80
+        RETURN s.id as id, s.content as content, s.memory_type as type, conn
         """
     )
     for m in memories:
@@ -83,15 +83,15 @@ async def get_graph_data(request: Request) -> dict:
             "conn": m["conn"] or 0,
         })
 
-    # Get episodic memories (10% - ~50)
+    # Get top 10% episodic memories by connection count
     episodes = await db.execute_query(
         """
         MATCH (e:EpisodicMemory)
         OPTIONAL MATCH (e)-[r]-()
         WITH e, count(r) as conn
-        RETURN e.id as id, e.query as query, e.behavior_name as behavior, conn
         ORDER BY conn DESC
         LIMIT 50
+        RETURN e.id as id, e.query as query, e.behavior_name as behavior, conn
         """
     )
     for e in episodes:
@@ -106,15 +106,16 @@ async def get_graph_data(request: Request) -> dict:
             "conn": e["conn"] or 0,
         })
 
-    # Get node IDs for filtering
+    # Get node IDs for filtering links
     node_ids = {n["id"] for n in nodes}
 
-    # Get concept relationships (10% - ~300)
+    # Get relationships between the selected nodes (most important links)
     concept_rels = await db.execute_query(
         """
         MATCH (c1:Concept)-[r:RELATED_TO]->(c2:Concept)
-        RETURN c1.id as source, c2.id as target, r.type as relType
-        LIMIT 300
+        RETURN c1.id as source, c2.id as target, r.type as relType, coalesce(r.weight, 0.5) as weight
+        ORDER BY r.weight DESC
+        LIMIT 500
         """
     )
     for r in concept_rels:
@@ -125,12 +126,11 @@ async def get_graph_data(request: Request) -> dict:
                 "relType": r["relType"] or "related_to",
             })
 
-    # Get memory relationships (10% - ~200)
     memory_rels = await db.execute_query(
         """
         MATCH (s:SemanticMemory)-[:ABOUT]->(c:Concept)
         RETURN s.id as source, c.id as target
-        LIMIT 200
+        LIMIT 300
         """
     )
     for r in memory_rels:
@@ -141,12 +141,11 @@ async def get_graph_data(request: Request) -> dict:
                 "relType": "about",
             })
 
-    # Get episode relationships (10% - ~150)
     episode_rels = await db.execute_query(
         """
         MATCH (e:EpisodicMemory)-[:ACTIVATED]->(c:Concept)
         RETURN e.id as source, c.id as target
-        LIMIT 150
+        LIMIT 200
         """
     )
     for r in episode_rels:
@@ -193,7 +192,6 @@ GRAPH_HTML = """
             font-size: 11px;
             color: #8b949e;
             z-index: 100;
-            box-shadow: 0 0 15px rgba(94,234,212,0.08);
         }
         .legend-btn {
             display: flex;
@@ -335,6 +333,8 @@ GRAPH_HTML = """
         <button class="legend-btn" data-type="concept" onclick="toggleType('concept')"><span class="legend-dot" style="background:#5eead4"></span>Concept<span class="legend-count" id="c-count">0</span></button>
         <button class="legend-btn" data-type="semantic" onclick="toggleType('semantic')"><span class="legend-dot" style="background:#a78bfa"></span>Semantic<span class="legend-count" id="s-count">0</span></button>
         <button class="legend-btn" data-type="episodic" onclick="toggleType('episodic')"><span class="legend-dot" style="background:#f472b6"></span>Episodic<span class="legend-count" id="e-count">0</span></button>
+        <div style="border-top:1px solid #1a1a2e;margin:8px 0;"></div>
+        <button class="legend-btn" id="cluster-btn" onclick="toggleClusterMode()"><span class="legend-dot" style="background:linear-gradient(135deg,#5eead4,#a78bfa,#f472b6)"></span>Clusters<span class="legend-count" id="cluster-count">-</span></button>
     </div>
     <div id="stats">Loading...</div>
     <div id="loading">Loading graph...</div>
@@ -344,6 +344,17 @@ GRAPH_HTML = """
         const typeColors = { concept: '#5eead4', semantic: '#a78bfa', episodic: '#f472b6' };
         const typeLabels = { concept: 'Concept', semantic: 'Semantic Memory', episodic: 'Episodic Memory' };
 
+        // Cluster colors
+        const clusterPalette = [
+            '#5eead4', '#a78bfa', '#f472b6', '#fbbf24', '#34d399',
+            '#60a5fa', '#fb7185', '#a3e635', '#22d3ee', '#c084fc',
+            '#f97316', '#2dd4bf'
+        ];
+
+        let clusterColors = {};
+        let nodeCluster = {};
+        let useClusterColors = false;
+
         let selected = null;
         let neighbors = new Set();
         let allNodes = {};
@@ -352,7 +363,101 @@ GRAPH_HTML = """
         let hoveredNode = null;
 
         function getNodeColor(node) {
+            if (useClusterColors && clusterColors[node.id]) {
+                return clusterColors[node.id];
+            }
             return typeColors[node.type] || '#5eead4';
+        }
+
+        function toggleClusterMode() {
+            useClusterColors = !useClusterColors;
+            document.getElementById('cluster-btn').classList.toggle('active', useClusterColors);
+            refresh();
+        }
+
+        // Cluster detection using Label Propagation
+        function detectClusters(nodes, links) {
+            const adj = {};
+            nodes.forEach(n => adj[n.id] = []);
+            links.forEach(l => {
+                const s = l.source.id || l.source;
+                const t = l.target.id || l.target;
+                if (adj[s]) adj[s].push(t);
+                if (adj[t]) adj[t].push(s);
+            });
+
+            const labels = {};
+            nodes.forEach((n, i) => labels[n.id] = i);
+
+            for (let iter = 0; iter < 20; iter++) {
+                let changed = false;
+                const shuffled = [...nodes].sort(() => Math.random() - 0.5);
+
+                for (const node of shuffled) {
+                    const neighbors = adj[node.id];
+                    if (neighbors.length === 0) continue;
+
+                    const labelCount = {};
+                    neighbors.forEach(nId => {
+                        const lbl = labels[nId];
+                        labelCount[lbl] = (labelCount[lbl] || 0) + 1;
+                    });
+
+                    let maxCount = 0;
+                    let maxLabel = labels[node.id];
+                    for (const [lbl, count] of Object.entries(labelCount)) {
+                        if (count > maxCount) {
+                            maxCount = count;
+                            maxLabel = parseInt(lbl);
+                        }
+                    }
+
+                    if (labels[node.id] !== maxLabel) {
+                        labels[node.id] = maxLabel;
+                        changed = true;
+                    }
+                }
+                if (!changed) break;
+            }
+
+            // Merge small clusters
+            const labelSizes = {};
+            nodes.forEach(n => {
+                const lbl = labels[n.id];
+                labelSizes[lbl] = (labelSizes[lbl] || 0) + 1;
+            });
+
+            nodes.forEach(n => {
+                if (labelSizes[labels[n.id]] < 3) {
+                    const neighbors = adj[n.id];
+                    if (neighbors.length > 0) {
+                        let bestNeighbor = neighbors[0];
+                        let bestSize = labelSizes[labels[bestNeighbor]] || 0;
+                        for (const nId of neighbors) {
+                            const size = labelSizes[labels[nId]] || 0;
+                            if (size > bestSize) {
+                                bestSize = size;
+                                bestNeighbor = nId;
+                            }
+                        }
+                        labels[n.id] = labels[bestNeighbor];
+                    }
+                }
+            });
+
+            const uniqueLabels = [...new Set(Object.values(labels))];
+            const labelToCluster = {};
+            uniqueLabels.forEach((lbl, i) => labelToCluster[lbl] = i);
+
+            clusterColors = {};
+            nodeCluster = {};
+            nodes.forEach(n => {
+                const cluster = labelToCluster[labels[n.id]];
+                clusterColors[n.id] = clusterPalette[cluster % clusterPalette.length];
+                nodeCluster[n.id] = cluster;
+            });
+
+            return uniqueLabels.length;
         }
 
         function toggleType(type) {
@@ -361,7 +466,7 @@ GRAPH_HTML = """
             } else {
                 selectedTypes.add(type);
             }
-            document.querySelectorAll('.legend-btn').forEach(el => {
+            document.querySelectorAll('.legend-btn[data-type]').forEach(el => {
                 el.classList.toggle('active', selectedTypes.has(el.dataset.type));
             });
             updateTypeNeighbors();
@@ -438,7 +543,7 @@ GRAPH_HTML = """
         function selectNode(node) {
             selectedTypes.clear();
             typeNeighbors.clear();
-            document.querySelectorAll('.legend-btn').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.legend-btn[data-type]').forEach(el => el.classList.remove('active'));
             selected = node;
             neighbors = new Set([node.id]);
             Graph.graphData().links.forEach(l => {
@@ -483,7 +588,6 @@ GRAPH_HTML = """
                 `;
             }
 
-            // Connected nodes
             const connected = [];
             Graph.graphData().links.forEach(l => {
                 if (l.source.id === node.id && allNodes[l.target.id]) connected.push(allNodes[l.target.id]);
@@ -518,7 +622,6 @@ GRAPH_HTML = """
             (document.getElementById('graph'))
             .backgroundColor('#0a0a12')
             .nodeCanvasObject((node, ctx, globalScale) => {
-                // Size based on connections (4-20)
                 const size = Math.min(20, Math.max(4, Math.sqrt(node.conn || 1) * 3));
                 const color = getNodeColor(node);
 
@@ -528,20 +631,17 @@ GRAPH_HTML = """
                 const isHovered = hoveredNode === node;
                 const isSelected = selected === node;
 
-                // Glow for hover/selection
                 if (isHovered || isSelected) {
                     ctx.shadowColor = color;
                     ctx.shadowBlur = isSelected ? 20 : 12;
                 }
 
-                // Draw node
                 ctx.beginPath();
                 ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
                 ctx.fillStyle = isActive ? color : '#1a1a2e';
                 ctx.fill();
                 ctx.shadowBlur = 0;
 
-                // White ring on hover/selection
                 if (isHovered || isSelected) {
                     ctx.beginPath();
                     ctx.arc(node.x, node.y, size + 2, 0, 2 * Math.PI);
@@ -550,7 +650,6 @@ GRAPH_HTML = """
                     ctx.stroke();
                 }
 
-                // Labels for larger nodes when zoomed
                 const showLabel = (selected && neighbors.has(node.id)) ||
                                   (selectedTypes.size > 0 && typeNeighbors.has(node.id)) ||
                                   (globalScale > 1.0 && size > 10) ||
@@ -607,7 +706,7 @@ GRAPH_HTML = """
             .onNodeClick(node => {
                 selectedTypes.clear();
                 typeNeighbors.clear();
-                document.querySelectorAll('.legend-btn').forEach(el => el.classList.remove('active'));
+                document.querySelectorAll('.legend-btn[data-type]').forEach(el => el.classList.remove('active'));
 
                 if (selected === node) {
                     selected = null;
@@ -629,7 +728,7 @@ GRAPH_HTML = """
                 neighbors.clear();
                 selectedTypes.clear();
                 typeNeighbors.clear();
-                document.querySelectorAll('.legend-btn').forEach(el => el.classList.remove('active'));
+                document.querySelectorAll('.legend-btn[data-type]').forEach(el => el.classList.remove('active'));
                 closeNodeInfo();
                 refresh();
             })
@@ -637,7 +736,6 @@ GRAPH_HTML = """
             .d3VelocityDecay(0.3)
             .nodeLabel(null);
 
-        // Simple forces
         Graph.d3Force('charge').strength(-80);
         Graph.d3Force('link').distance(60);
 
@@ -652,7 +750,7 @@ GRAPH_HTML = """
                 neighbors.clear();
                 selectedTypes.clear();
                 typeNeighbors.clear();
-                document.querySelectorAll('.legend-btn').forEach(el => el.classList.remove('active'));
+                document.querySelectorAll('.legend-btn[data-type]').forEach(el => el.classList.remove('active'));
                 closeNodeInfo();
                 searchInput.value = '';
                 searchResults.classList.remove('visible');
@@ -677,9 +775,12 @@ GRAPH_HTML = """
                     '<div>Nodes: <strong style="color:#5eead4">' + data.nodes.length + '</strong></div>' +
                     '<div>Links: <strong style="color:#5eead4">' + data.links.length + '</strong></div>';
 
+                // Detect clusters
+                const numClusters = detectClusters(data.nodes, data.links);
+                document.getElementById('cluster-count').textContent = numClusters;
+
                 Graph.graphData(data);
 
-                // Zoom out after load
                 setTimeout(() => Graph.zoom(0.5, 1000), 2000);
             });
     </script>
