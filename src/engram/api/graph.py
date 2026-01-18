@@ -710,11 +710,10 @@ GRAPH_HTML = """
 
         // How many top neighbors to explore at each step
         function getNeighborsPerStep() {
-            if (currentZoom < 0.5) return 1;
-            if (currentZoom < 0.8) return 2;
-            if (currentZoom < 1.2) return 3;
-            if (currentZoom < 1.8) return 4;
-            return 5;
+            if (currentZoom < 1.0) return 1;
+            if (currentZoom < 1.5) return 2;
+            if (currentZoom < 2.0) return 3;
+            return 4;
         }
 
         // Minimum connections for a neighbor to be included
