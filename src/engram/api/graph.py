@@ -694,25 +694,26 @@ GRAPH_HTML = """
 
         // Dynamic minimum connection threshold based on zoom
         // Returns minimum connections a node needs to be visible
+        // Higher threshold = fewer nodes shown
         function getMinConnThreshold() {
-            // Zoomed out = high threshold, zoomed in = low threshold
-            // Lower thresholds to show more nodes
-            if (currentZoom < 0.2) return Math.max(15, maxConn * 0.15);   // Top hubs only
-            if (currentZoom < 0.35) return Math.max(10, maxConn * 0.08);
-            if (currentZoom < 0.5) return Math.max(6, maxConn * 0.05);
-            if (currentZoom < 0.7) return Math.max(4, maxConn * 0.03);
-            if (currentZoom < 1.0) return Math.max(3, maxConn * 0.02);
-            if (currentZoom < 1.5) return 2;
-            return 1;  // Show all when zoomed in
+            if (currentZoom < 0.2) return Math.max(50, maxConn * 0.5);    // Only mega-hubs
+            if (currentZoom < 0.35) return Math.max(35, maxConn * 0.35);
+            if (currentZoom < 0.5) return Math.max(25, maxConn * 0.25);
+            if (currentZoom < 0.7) return Math.max(15, maxConn * 0.15);
+            if (currentZoom < 1.0) return Math.max(10, maxConn * 0.08);
+            if (currentZoom < 1.5) return Math.max(5, maxConn * 0.04);
+            if (currentZoom < 2.5) return 3;
+            return 1;
         }
 
-        // Maximum neighbors to show per hub (prevents explosion)
+        // Maximum neighbors to show per hub (fewer = cleaner graph)
         function getMaxNeighborsPerHub() {
-            if (currentZoom < 0.3) return 20;
-            if (currentZoom < 0.5) return 35;
-            if (currentZoom < 0.7) return 50;
-            if (currentZoom < 1.0) return 80;
-            return 150;
+            if (currentZoom < 0.3) return 5;
+            if (currentZoom < 0.5) return 8;
+            if (currentZoom < 0.7) return 12;
+            if (currentZoom < 1.0) return 20;
+            if (currentZoom < 1.5) return 35;
+            return 60;
         }
 
         // Compute which nodes are visible using hierarchical filtering
