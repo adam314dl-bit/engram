@@ -622,8 +622,7 @@ GRAPH_HTML = """
             (document.getElementById('graph'))
             .backgroundColor('#0a0a12')
             .nodeCanvasObject((node, ctx, globalScale) => {
-                // Size range 3-40px based on connections (more noticeable difference)
-                const size = Math.min(40, Math.max(3, Math.sqrt(node.conn || 1) * 5));
+                const size = Math.min(20, Math.max(4, Math.sqrt(node.conn || 1) * 3));
                 const color = getNodeColor(node);
 
                 const isNodeActive = !selected || neighbors.has(node.id);
@@ -634,7 +633,7 @@ GRAPH_HTML = """
 
                 if (isHovered || isSelected) {
                     ctx.shadowColor = color;
-                    ctx.shadowBlur = isSelected ? 25 : 15;
+                    ctx.shadowBlur = isSelected ? 20 : 12;
                 }
 
                 ctx.beginPath();
@@ -645,26 +644,26 @@ GRAPH_HTML = """
 
                 if (isHovered || isSelected) {
                     ctx.beginPath();
-                    ctx.arc(node.x, node.y, size + 3, 0, 2 * Math.PI);
+                    ctx.arc(node.x, node.y, size + 2, 0, 2 * Math.PI);
                     ctx.strokeStyle = '#fff';
-                    ctx.lineWidth = isSelected ? 3 : 2;
+                    ctx.lineWidth = isSelected ? 2 : 1;
                     ctx.stroke();
                 }
 
                 const showLabel = (selected && neighbors.has(node.id)) ||
                                   (selectedTypes.size > 0 && typeNeighbors.has(node.id)) ||
-                                  (globalScale > 0.8 && size > 15) ||
-                                  (globalScale > 1.5);
+                                  (globalScale > 1.0 && size > 10) ||
+                                  (globalScale > 2.0);
                 if (showLabel && isActive) {
                     const label = node.name.length > 20 ? node.name.slice(0,20) + '..' : node.name;
-                    ctx.font = `${12/globalScale}px -apple-system, sans-serif`;
+                    ctx.font = `${10/globalScale}px -apple-system, sans-serif`;
                     ctx.textAlign = 'center';
                     ctx.fillStyle = '#e0e0ff';
-                    ctx.fillText(label, node.x, node.y + size + 12/globalScale);
+                    ctx.fillText(label, node.x, node.y + size + 10/globalScale);
                 }
             })
             .nodePointerAreaPaint((node, color, ctx) => {
-                const size = Math.min(40, Math.max(3, Math.sqrt(node.conn || 1) * 5)) + 5;
+                const size = Math.min(20, Math.max(4, Math.sqrt(node.conn || 1) * 3)) + 4;
                 ctx.beginPath();
                 ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
                 ctx.fillStyle = color;
