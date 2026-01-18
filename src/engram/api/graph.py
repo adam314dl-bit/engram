@@ -694,36 +694,35 @@ GRAPH_HTML = """
 
         // How many top hubs to start from (based on zoom)
         function getNumStartHubs() {
-            if (currentZoom < 0.3) return 3;
-            if (currentZoom < 0.5) return 5;
-            if (currentZoom < 0.8) return 8;
-            if (currentZoom < 1.2) return 12;
-            return 20;
+            if (currentZoom < 0.5) return 1;
+            if (currentZoom < 0.8) return 2;
+            if (currentZoom < 1.2) return 3;
+            if (currentZoom < 1.8) return 5;
+            return 8;
         }
 
         // How many steps (hops) from main hubs
         function getMaxDepth() {
-            if (currentZoom < 0.5) return 1;
-            if (currentZoom < 1.0) return 2;
-            if (currentZoom < 1.5) return 3;
-            return 4;
+            if (currentZoom < 0.8) return 1;
+            if (currentZoom < 1.5) return 2;
+            return 3;
         }
 
         // How many top neighbors to explore at each step
         function getNeighborsPerStep() {
-            if (currentZoom < 0.3) return 2;
-            if (currentZoom < 0.5) return 3;
-            if (currentZoom < 0.8) return 4;
-            if (currentZoom < 1.2) return 5;
-            return 7;
+            if (currentZoom < 0.5) return 1;
+            if (currentZoom < 0.8) return 2;
+            if (currentZoom < 1.2) return 3;
+            if (currentZoom < 1.8) return 4;
+            return 5;
         }
 
         // Minimum connections for a neighbor to be included
         function getMinConnFilter() {
-            if (currentZoom < 0.3) return Math.max(10, maxConn * 0.15);
-            if (currentZoom < 0.5) return Math.max(6, maxConn * 0.08);
-            if (currentZoom < 0.8) return Math.max(4, maxConn * 0.04);
-            if (currentZoom < 1.2) return Math.max(2, maxConn * 0.02);
+            if (currentZoom < 0.5) return Math.max(20, maxConn * 0.3);
+            if (currentZoom < 0.8) return Math.max(12, maxConn * 0.15);
+            if (currentZoom < 1.2) return Math.max(6, maxConn * 0.08);
+            if (currentZoom < 1.8) return Math.max(3, maxConn * 0.03);
             return 1;
         }
 
