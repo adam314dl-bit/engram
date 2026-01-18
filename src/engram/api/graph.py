@@ -3,13 +3,29 @@
 import logging
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 
 from engram.storage.neo4j_client import Neo4jClient
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# SVG favicon matching the graph theme
+FAVICON_SVG = """<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>
+<circle cx='50' cy='50' r='40' fill='#0a0a12' stroke='#5eead4' stroke-width='6'/>
+<circle cx='50' cy='50' r='15' fill='#5eead4'/>
+<circle cx='30' cy='35' r='8' fill='#a78bfa'/>
+<circle cx='70' cy='35' r='8' fill='#f472b6'/>
+<line x1='50' y1='50' x2='30' y2='35' stroke='#5eead4' stroke-width='2'/>
+<line x1='50' y1='50' x2='70' y2='35' stroke='#5eead4' stroke-width='2'/>
+</svg>"""
+
+
+@router.get("/favicon.ico")
+async def favicon() -> Response:
+    """Return SVG favicon."""
+    return Response(content=FAVICON_SVG, media_type="image/svg+xml")
 
 
 def get_db(request: Request) -> Neo4jClient:
@@ -150,6 +166,7 @@ GRAPH_HTML = """
 <head>
     <meta charset="utf-8">
     <title>Engram - Knowledge Graph</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%230a0a12' stroke='%235eead4' stroke-width='6'/><circle cx='50' cy='50' r='15' fill='%235eead4'/><circle cx='30' cy='35' r='8' fill='%23a78bfa'/><circle cx='70' cy='35' r='8' fill='%23f472b6'/><line x1='50' y1='50' x2='30' y2='35' stroke='%235eead4' stroke-width='2'/><line x1='50' y1='50' x2='70' y2='35' stroke='%235eead4' stroke-width='2'/></svg>">
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; }
@@ -354,88 +371,141 @@ GRAPH_HTML = """
             color: #8b8ba0;
             margin-left: 8px;
         }
-        /* Controls panel */
+        /* Controls panel - Cyberpunk style */
         #controls {
             position: absolute;
             bottom: 16px;
             right: 16px;
-            width: 180px;
-            background: rgba(10,10,18,0.95);
-            border: 1px solid #1a1a2e;
-            border-radius: 6px;
-            padding: 12px;
+            width: 200px;
+            background: linear-gradient(135deg, rgba(10,10,18,0.95) 0%, rgba(20,15,35,0.95) 100%);
+            border: 1px solid #5eead430;
+            border-radius: 8px;
+            padding: 16px;
             z-index: 100;
-            box-shadow: 0 0 15px rgba(94,234,212,0.08);
+            box-shadow: 0 0 20px rgba(94,234,212,0.15), inset 0 0 30px rgba(94,234,212,0.03);
+            backdrop-filter: blur(10px);
+        }
+        #controls::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, #5eead4, transparent);
         }
         .control-label {
-            font-size: 9px;
-            color: #6b6b8a;
+            font-size: 10px;
+            color: #5eead4;
             text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-bottom: 6px;
+            letter-spacing: 2px;
+            margin-bottom: 8px;
+            text-shadow: 0 0 10px rgba(94,234,212,0.5);
+            font-weight: 600;
         }
         .control-group {
-            margin-bottom: 12px;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid rgba(94,234,212,0.1);
         }
         .control-group:last-child {
             margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
         }
-        #importance-slider {
+        .cyber-slider {
             width: 100%;
             height: 4px;
             -webkit-appearance: none;
-            background: #1a1a2e;
+            appearance: none;
+            background: linear-gradient(90deg, #1a1a2e 0%, #2a2a4e 100%);
             border-radius: 2px;
             outline: none;
+            margin: 8px 0;
         }
-        #importance-slider::-webkit-slider-thumb {
+        .cyber-slider::-webkit-slider-thumb {
             -webkit-appearance: none;
-            width: 14px;
-            height: 14px;
+            appearance: none;
+            width: 12px;
+            height: 12px;
             background: #5eead4;
             border-radius: 50%;
             cursor: pointer;
-            box-shadow: 0 0 10px #5eead4;
+            box-shadow: 0 0 12px #5eead4;
+            border: none;
+            margin-top: -4px;
         }
-        #importance-slider::-moz-range-thumb {
-            width: 14px;
-            height: 14px;
+        .cyber-slider::-moz-range-thumb {
+            width: 12px;
+            height: 12px;
             background: #5eead4;
             border-radius: 50%;
             cursor: pointer;
             border: none;
-            box-shadow: 0 0 10px #5eead4;
+            box-shadow: 0 0 12px #5eead4;
         }
-        #importance-value {
-            font-size: 11px;
+        .cyber-slider::-webkit-slider-runnable-track {
+            height: 4px;
+            border-radius: 2px;
+            background: linear-gradient(90deg, #5eead430 0%, #1a1a2e 100%);
+        }
+        .control-value {
+            font-size: 12px;
             color: #5eead4;
             text-align: right;
-            margin-top: 4px;
+            font-family: 'Orbitron', monospace;
+            text-shadow: 0 0 10px rgba(94,234,212,0.6);
+            letter-spacing: 1px;
         }
-        /* Path finder */
+        .slider-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .slider-row .cyber-slider {
+            flex: 1;
+        }
+        /* Path finder - Cyberpunk style */
         #pathfinder {
             display: flex;
             flex-direction: column;
-            gap: 6px;
+            gap: 8px;
         }
         .path-node {
             display: flex;
             align-items: center;
-            padding: 6px 8px;
-            background: #0f0f1a;
-            border: 1px solid #1a1a2e;
-            border-radius: 4px;
-            font-size: 10px;
+            padding: 8px 10px;
+            background: linear-gradient(135deg, #0a0a15 0%, #12121f 100%);
+            border: 1px solid #5eead420;
+            border-radius: 6px;
+            font-size: 11px;
             color: #e0e0ff;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        .path-node::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(94,234,212,0.1), transparent);
+            transition: left 0.5s;
+        }
+        .path-node:hover::before {
+            left: 100%;
         }
         .path-node:hover {
-            border-color: #5eead440;
+            border-color: #5eead460;
+            box-shadow: 0 0 15px rgba(94,234,212,0.1);
         }
         .path-node.selected {
             border-color: #5eead4;
-            box-shadow: 0 0 8px rgba(94,234,212,0.15);
+            box-shadow: 0 0 15px rgba(94,234,212,0.3), inset 0 0 20px rgba(94,234,212,0.05);
+            background: linear-gradient(135deg, #0f1520 0%, #151a2a 100%);
         }
         .path-node .label {
             flex: 1;
@@ -444,32 +514,51 @@ GRAPH_HTML = """
             white-space: nowrap;
         }
         .path-node .dot {
-            width: 6px;
-            height: 6px;
+            width: 8px;
+            height: 8px;
             border-radius: 50%;
-            margin-right: 6px;
+            margin-right: 8px;
+            box-shadow: 0 0 8px currentColor;
         }
-        #find-path-btn {
-            padding: 6px 12px;
-            background: #0f0f1a;
-            border: 1px solid #1a1a2e;
-            border-radius: 4px;
-            color: #e0e0ff;
+        .cyber-btn {
+            padding: 8px 14px;
+            background: linear-gradient(135deg, #0a0a15 0%, #15152a 100%);
+            border: 1px solid #5eead430;
+            border-radius: 6px;
+            color: #5eead4;
             font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.3s ease;
+            text-shadow: 0 0 8px rgba(94,234,212,0.5);
         }
-        #find-path-btn:hover {
-            background: #1a1a2e;
+        .cyber-btn:hover {
+            background: linear-gradient(135deg, #10152a 0%, #1a2040 100%);
             border-color: #5eead4;
-            box-shadow: 0 0 10px rgba(0,240,255,0.3);
+            box-shadow: 0 0 20px rgba(94,234,212,0.3);
         }
-        #find-path-btn:disabled {
-            opacity: 0.5;
+        .cyber-btn:disabled {
+            opacity: 0.4;
             cursor: not-allowed;
+            text-shadow: none;
+        }
+        .cyber-btn-ghost {
+            background: transparent;
+            border-color: transparent;
+            color: #6b6b8a;
+            text-shadow: none;
+        }
+        .cyber-btn-ghost:hover {
+            color: #f472b6;
+            background: transparent;
+            border-color: transparent;
+            box-shadow: none;
+            text-shadow: 0 0 8px rgba(244,114,182,0.5);
         }
         #clear-path-btn {
-            padding: 6px 8px;
+            padding: 8px 10px;
             background: transparent;
             border: none;
             color: #6b6b8a;
@@ -518,24 +607,33 @@ GRAPH_HTML = """
     <!-- Controls Panel -->
     <div id="controls">
         <div class="control-group">
-            <div class="control-label">Importance Filter</div>
-            <input type="range" id="importance-slider" min="0" max="10" step="0.5" value="0">
-            <div id="importance-value">Show all</div>
+            <div class="control-label">Importance</div>
+            <div class="slider-row">
+                <input type="range" class="cyber-slider" id="importance-slider" min="0" max="10" step="0.5" value="0">
+                <div class="control-value" id="importance-value">ALL</div>
+            </div>
+        </div>
+        <div class="control-group">
+            <div class="control-label">Cluster Labels</div>
+            <div class="slider-row">
+                <input type="range" class="cyber-slider" id="cluster-size-slider" min="2" max="50" step="1" value="10">
+                <div class="control-value" id="cluster-size-value">≥10</div>
+            </div>
         </div>
         <div class="control-group">
             <div class="control-label">Path Finder</div>
             <div id="pathfinder">
                 <div class="path-node" id="path-start" onclick="setPathNode('start')">
                     <span class="dot" style="background:#5eead4"></span>
-                    <span class="label">Click to set start</span>
+                    <span class="label">Set origin</span>
                 </div>
                 <div class="path-node" id="path-end" onclick="setPathNode('end')">
-                    <span class="dot" style="background:#5eead4"></span>
-                    <span class="label">Click to set end</span>
+                    <span class="dot" style="background:#f472b6"></span>
+                    <span class="label">Set target</span>
                 </div>
-                <div style="display:flex;gap:4px;">
-                    <button id="find-path-btn" onclick="findPath()" disabled>Find Path</button>
-                    <button id="clear-path-btn" onclick="clearPath()">Clear</button>
+                <div style="display:flex;gap:6px;margin-top:4px;">
+                    <button class="cyber-btn" id="find-path-btn" onclick="findPath()" disabled>Trace</button>
+                    <button class="cyber-btn cyber-btn-ghost" id="clear-path-btn" onclick="clearPath()">Reset</button>
                 </div>
                 <div id="path-result"></div>
             </div>
@@ -580,6 +678,7 @@ GRAPH_HTML = """
 
         // New feature state
         let importanceThreshold = 0;
+        let minClusterLabelSize = 10;  // Only show labels for top ~3 clusters initially
         let pathStartNode = null;
         let pathEndNode = null;
         let pathNodes = new Set();
@@ -589,11 +688,11 @@ GRAPH_HTML = """
         // LOD (Level of Detail) state
         let currentZoom = 1;
         let lodThresholds = {
-            0.3: 100,   // Very zoomed out: top 100 nodes
-            0.5: 300,   // Zoomed out: top 300 nodes
-            0.8: 600,   // Medium: top 600 nodes
-            1.2: 1200,  // Slightly zoomed: top 1200 nodes
-            2.0: 2500,  // Zoomed in: top 2500 nodes
+            0.2: 200,   // Very zoomed out: top 200 nodes
+            0.4: 500,   // Zoomed out: top 500 nodes
+            0.6: 800,   // Medium: top 800 nodes
+            1.0: 1500,  // Normal: top 1500 nodes
+            1.5: 3000,  // Zoomed in: all nodes
             999: 99999  // Very zoomed in: show all
         };
         let nodeRanks = {};  // nodeId -> rank (lower = more important)
@@ -622,10 +721,20 @@ GRAPH_HTML = """
         importanceSlider.addEventListener('input', (e) => {
             importanceThreshold = parseFloat(e.target.value);
             if (importanceThreshold === 0) {
-                importanceValue.textContent = 'Show all';
+                importanceValue.textContent = 'ALL';
             } else {
-                importanceValue.textContent = `≥ ${importanceThreshold}`;
+                importanceValue.textContent = `≥${importanceThreshold}`;
             }
+            refresh();
+        });
+
+        // Cluster size slider
+        const clusterSizeSlider = document.getElementById('cluster-size-slider');
+        const clusterSizeValue = document.getElementById('cluster-size-value');
+
+        clusterSizeSlider.addEventListener('input', (e) => {
+            minClusterLabelSize = parseInt(e.target.value);
+            clusterSizeValue.textContent = `≥${minClusterLabelSize}`;
             refresh();
         });
 
@@ -832,23 +941,24 @@ GRAPH_HTML = """
             // Calculate grid dimensions based on number of clusters
             const cols = Math.ceil(Math.sqrt(numClusters));
             const rows = Math.ceil(numClusters / cols);
-            const cellSize = Math.sqrt(nodes.length) * 15;  // Space per cluster
-            const totalWidth = cols * cellSize;
-            const totalHeight = rows * cellSize;
+            const baseSize = Math.sqrt(nodes.length) * 20;  // Moderate spacing
 
             clusterCenters = {};
 
             sortedClusters.forEach((clusterIdx, i) => {
-                // Grid position with some randomness
+                const size = clusterSizes[clusterIdx];
                 const col = i % cols;
                 const row = Math.floor(i / cols);
-                const x = (col - cols/2 + 0.5) * cellSize + (Math.random() - 0.5) * cellSize * 0.3;
-                const y = (row - rows/2 + 0.5) * cellSize + (Math.random() - 0.5) * cellSize * 0.3;
+
+                // Larger clusters get slightly more space
+                const sizeBonus = Math.sqrt(size) * 5;
+                const x = (col - cols/2 + 0.5) * baseSize + sizeBonus * (col - cols/2) + (Math.random() - 0.5) * baseSize * 0.15;
+                const y = (row - rows/2 + 0.5) * baseSize + sizeBonus * (row - rows/2) + (Math.random() - 0.5) * baseSize * 0.15;
 
                 clusterCenters[clusterIdx] = {
                     x: x,
                     y: y,
-                    size: clusterSizes[clusterIdx]
+                    size: size
                 };
             });
 
@@ -1104,6 +1214,46 @@ GRAPH_HTML = """
                 const isActive = (isNodeActive && isTypeActive) || isOnPath;
                 const isHovered = hoveredNode === node;
                 const isSelected = selected === node;
+                const conn = node.conn || 0;
+                const isHub = conn > 8;  // High-connection node = sun
+                const isMajorHub = conn > 15;
+                const isSuperHub = conn > 25;
+
+                // Sun corona effect for hubs - pulsing synced with particle flow
+                if (isHub && isActive) {
+                    // Slower pulse synced with particle arrival (~3 seconds per cycle)
+                    const time = Date.now() * 0.001;
+                    const pulseSpeed = isSuperHub ? 0.8 : isMajorHub ? 0.6 : 0.5;
+                    const pulseAmount = isSuperHub ? 0.15 : isMajorHub ? 0.12 : 0.08;
+                    const pulse = 1 + Math.sin(time * pulseSpeed * Math.PI) * pulseAmount;
+
+                    // Secondary faster micro-pulse (like particles arriving)
+                    const microPulse = 1 + Math.sin(time * 3 + conn * 0.5) * 0.03;
+
+                    const coronaSize = size * (isSuperHub ? 3.5 : isMajorHub ? 2.8 : 2) * pulse * microPulse;
+
+                    // Outer glow with breathing effect
+                    const glowIntensity = 0.4 + Math.sin(time * pulseSpeed * Math.PI) * 0.2;
+                    const gradient = ctx.createRadialGradient(node.x, node.y, size * 0.3, node.x, node.y, coronaSize);
+                    gradient.addColorStop(0, color + Math.floor(glowIntensity * 255).toString(16).padStart(2, '0'));
+                    gradient.addColorStop(0.4, color + '25');
+                    gradient.addColorStop(0.7, color + '10');
+                    gradient.addColorStop(1, 'transparent');
+                    ctx.beginPath();
+                    ctx.arc(node.x, node.y, coronaSize, 0, 2 * Math.PI);
+                    ctx.fillStyle = gradient;
+                    ctx.fill();
+
+                    // Extra ring for super hubs - pulses when "receiving" particles
+                    if (isSuperHub) {
+                        const ringPulse = 1 + Math.sin(time * 1.5) * 0.15;
+                        ctx.beginPath();
+                        ctx.arc(node.x, node.y, size * 2.2 * ringPulse, 0, 2 * Math.PI);
+                        ctx.strokeStyle = color + '50';
+                        ctx.lineWidth = 2 + Math.sin(time * 1.5) * 1;
+                        ctx.stroke();
+                    }
+                }
 
                 // Outer glow for hover/selection/path
                 if (isOnPath) {
@@ -1111,29 +1261,38 @@ GRAPH_HTML = """
                     ctx.shadowBlur = 25;
                 } else if (isHovered || isSelected) {
                     ctx.shadowColor = color;
-                    ctx.shadowBlur = isSelected ? 20 : 15;
+                    ctx.shadowBlur = isSelected ? 25 : 18;
+                } else if (isSuperHub && isActive) {
+                    ctx.shadowColor = color;
+                    ctx.shadowBlur = 30;
+                } else if (isMajorHub && isActive) {
+                    ctx.shadowColor = color;
+                    ctx.shadowBlur = 22;
+                } else if (isHub && isActive) {
+                    ctx.shadowColor = color;
+                    ctx.shadowBlur = 14;
                 } else if (isActive) {
                     ctx.shadowColor = color;
-                    ctx.shadowBlur = 6;
+                    ctx.shadowBlur = 5;
                 }
 
-                // Importance border (thicker for higher weight)
-                const borderWidth = Math.min(3, (node.weight || 1) / 2);
-                if (isActive && borderWidth > 1) {
-                    ctx.beginPath();
-                    ctx.arc(node.x, node.y, size + borderWidth, 0, 2 * Math.PI);
-                    ctx.fillStyle = isHovered || isSelected ? '#fff' : color;
-                    ctx.globalAlpha = 0.3;
-                    ctx.fill();
-                    ctx.globalAlpha = 1;
-                }
-
-                // Draw node
+                // Draw node (hubs are larger based on connection count)
+                const nodeSize = isOnPath ? size * 1.2 : isSuperHub ? size * 1.3 : isMajorHub ? size * 1.2 : isHub ? size * 1.1 : size;
                 ctx.beginPath();
-                ctx.arc(node.x, node.y, isOnPath ? size * 1.2 : size, 0, 2 * Math.PI);
+                ctx.arc(node.x, node.y, nodeSize, 0, 2 * Math.PI);
                 ctx.fillStyle = isActive ? color : '#1a1a2e';
                 ctx.fill();
                 ctx.shadowBlur = 0;
+
+                // Inner bright core for hubs
+                if (isHub && isActive) {
+                    const coreSize = isSuperHub ? 0.6 : isMajorHub ? 0.5 : 0.4;
+                    const coreAlpha = isSuperHub ? 'cc' : isMajorHub ? 'aa' : '80';
+                    ctx.beginPath();
+                    ctx.arc(node.x, node.y, nodeSize * coreSize, 0, 2 * Math.PI);
+                    ctx.fillStyle = '#ffffff' + coreAlpha;
+                    ctx.fill();
+                }
 
                 // Path endpoint markers
                 if (isPathEndpoint) {
@@ -1153,14 +1312,15 @@ GRAPH_HTML = """
                     ctx.stroke();
                 }
 
-                // Draw label - bigger nodes show first, then smaller as you zoom (NOT on hover)
+                // Draw label - only for important nodes, scales with zoom
+                // Stricter thresholds to reduce clutter
                 const showLabel = isOnPath ||
                                   (selected && neighbors.has(node.id)) ||
                                   (selectedTypes.size > 0 && typeNeighbors.has(node.id)) ||
-                                  (globalScale > 0.4 && size > 12) ||
-                                  (globalScale > 0.7 && size > 8) ||
-                                  (globalScale > 1.0 && size > 5) ||
-                                  (globalScale > 1.5);
+                                  (globalScale > 0.5 && size > 14) ||
+                                  (globalScale > 1.0 && size > 10) ||
+                                  (globalScale > 1.5 && size > 7) ||
+                                  (globalScale > 2.5);
                 if (showLabel && isActive) {
                     const label = node.name.length > 20 ? node.name.slice(0,20) + '..' : node.name;
                     ctx.font = `${11/globalScale}px -apple-system, sans-serif`;
@@ -1185,6 +1345,15 @@ GRAPH_HTML = """
                 // LOD filter - hide links if either node is not visible
                 if (sourceNode && !isNodeVisibleAtLod(sourceNode)) return 'transparent';
                 if (targetNode && !isNodeVisibleAtLod(targetNode)) return 'transparent';
+
+                // Importance filter - hide links if either node doesn't meet threshold
+                const sourceWeight = sourceNode?.weight || 0;
+                const targetWeight = targetNode?.weight || 0;
+                if (importanceThreshold > 0) {
+                    if (sourceWeight < importanceThreshold && targetWeight < importanceThreshold) {
+                        return 'transparent';
+                    }
+                }
 
                 // Path mode
                 if (pathLinks.has(l)) {
@@ -1227,19 +1396,77 @@ GRAPH_HTML = """
                 if (!selected) return baseWidth;
                 return (sourceId === selected.id || targetId === selected.id) ? baseWidth * 2 : 0.2;
             })
-            .linkCurvature(0.2)  // Curved edges
+            .linkCurvature(0.15)  // Slightly curved edges
             .linkDirectionalParticles(l => {
                 // Show particles on path links
-                if (pathLinks.has(l)) return 3;
+                if (pathLinks.has(l)) return 4;
+
+                const sourceNode = allNodes[l.source.id || l.source];
+                const targetNode = allNodes[l.target.id || l.target];
+
+                // Hide particles if nodes are filtered by importance
+                if (importanceThreshold > 0) {
+                    const sourceWeight = sourceNode?.weight || 0;
+                    const targetWeight = targetNode?.weight || 0;
+                    if (sourceWeight < importanceThreshold && targetWeight < importanceThreshold) {
+                        return 0;
+                    }
+                }
+
+                // Show particles flowing to hub nodes (suns)
+                const sourceConn = sourceNode?.conn || 0;
+                const targetConn = targetNode?.conn || 0;
+                const maxConn = Math.max(sourceConn, targetConn);
+
+                // More particles for connections to bigger hubs
+                if (maxConn > 20) return 3;
+                if (maxConn > 12) return 2;
+                if (maxConn > 6) return 1;
+
                 // Show particles on selected links
-                if (!selected) return 0;
+                if (selected) {
+                    const sourceId = l.source.id || l.source;
+                    const targetId = l.target.id || l.target;
+                    if (sourceId === selected.id || targetId === selected.id) return 2;
+                }
+                return 0;
+            })
+            .linkDirectionalParticleWidth(l => {
+                if (pathLinks.has(l)) return 4;
+                const sourceNode = allNodes[l.source.id || l.source];
+                const targetNode = allNodes[l.target.id || l.target];
+                const maxConn = Math.max(sourceNode?.conn || 0, targetNode?.conn || 0);
+                return maxConn > 15 ? 3 : maxConn > 8 ? 2.5 : 2;
+            })
+            .linkDirectionalParticleSpeed(l => {
+                if (pathLinks.has(l)) return 0.006;
+                const sourceNode = allNodes[l.source.id || l.source];
+                const targetNode = allNodes[l.target.id || l.target];
+                const maxConn = Math.max(sourceNode?.conn || 0, targetNode?.conn || 0);
+                // Slower, more graceful particle movement
+                return maxConn > 15 ? 0.003 : maxConn > 8 ? 0.0025 : 0.002;
+            })
+            .linkDirectionalParticleColor(l => {
                 const sourceId = l.source.id || l.source;
                 const targetId = l.target.id || l.target;
-                return (sourceId === selected.id || targetId === selected.id) ? 2 : 0;
+                const sourceNode = allNodes[sourceId];
+                const targetNode = allNodes[targetId];
+
+                // Use cluster colors when in cluster mode
+                if (useClusterColors) {
+                    // Color based on which end is the hub (use that node's cluster color)
+                    if ((sourceNode?.conn || 0) > (targetNode?.conn || 0)) {
+                        return clusterColors[sourceId] || '#5eead4';
+                    }
+                    return clusterColors[targetId] || '#5eead4';
+                }
+
+                // Default: color based on node type
+                if ((sourceNode?.conn || 0) > (targetNode?.conn || 0)) {
+                    return typeColors[sourceNode?.type] || '#5eead4';
+                }
+                return typeColors[targetNode?.type] || '#5eead4';
             })
-            .linkDirectionalParticleWidth(l => pathLinks.has(l) ? 3 : 2)
-            .linkDirectionalParticleSpeed(l => pathLinks.has(l) ? 0.008 : 0.005)
-            .linkDirectionalParticleColor(() => '#5eead4')
             .onNodeHover(node => {
                 hoveredNode = node;
                 document.body.style.cursor = node ? 'pointer' : 'default';
@@ -1309,7 +1536,7 @@ GRAPH_HTML = """
             .nodeLabel(null)  // Disable hover tooltip
             .onRenderFramePost((ctx, globalScale) => {
                 // Draw cluster labels when zoomed out
-                if (currentZoom > 0.6) return;  // Only show when zoomed out
+                if (currentZoom > 1.2) return;  // Show labels when not too zoomed in
 
                 ctx.save();
                 Object.entries(clusterCenters).forEach(([clusterId, center]) => {
@@ -1317,7 +1544,7 @@ GRAPH_HTML = """
 
                     // Calculate actual center from nodes in this cluster
                     const clusterNodes = Graph.graphData().nodes.filter(n => n.cluster == clusterId);
-                    if (clusterNodes.length === 0) return;
+                    if (clusterNodes.length < minClusterLabelSize) return;  // Skip small clusters (user controlled)
 
                     let cx = 0, cy = 0;
                     clusterNodes.forEach(n => { cx += n.x; cy += n.y; });
@@ -1376,43 +1603,116 @@ GRAPH_HTML = """
             Graph.linkWidth(Graph.linkWidth());
         }
 
-        // Galaxy layout forces
-        // Base repulsion between all nodes
-        Graph.d3Force('charge').strength(-80);
-        Graph.d3Force('link').distance(30).strength(0.2);
+        // Galaxy layout forces - Solar system style
+        // High-connection nodes act as "suns" that pull their neighbors
+        Graph.d3Force('charge').strength(n => {
+            // Hubs repel more strongly to create space around them
+            const conn = n.conn || 0;
+            return conn > 20 ? -400 : conn > 10 ? -200 : conn > 5 ? -100 : -60;
+        });
+        Graph.d3Force('link').distance(l => {
+            // Orbital distance based on satellite's connections
+            // More connections = further orbit (they need more space)
+            // Fewer connections = closer orbit
+            const sourceConn = allNodes[l.source.id || l.source]?.conn || 0;
+            const targetConn = allNodes[l.target.id || l.target]?.conn || 0;
+            const hubConn = Math.max(sourceConn, targetConn);
+            const satelliteConn = Math.min(sourceConn, targetConn);
+
+            // Base distance from hub size, modified by satellite size
+            const baseDistance = hubConn > 15 ? 80 : hubConn > 8 ? 60 : 40;
+            const orbitBonus = Math.sqrt(satelliteConn) * 15;  // More connections = wider orbit
+            return baseDistance + orbitBonus;
+        }).strength(l => {
+            // Weaker links for satellites with more connections (more freedom to spread)
+            const sourceConn = allNodes[l.source.id || l.source]?.conn || 0;
+            const targetConn = allNodes[l.target.id || l.target]?.conn || 0;
+            const satelliteConn = Math.min(sourceConn, targetConn);
+            return satelliteConn > 5 ? 0.15 : satelliteConn > 2 ? 0.25 : 0.4;
+        });
         // Disable centering force so clusters can spread
         Graph.d3Force('center', null);
 
-        // Custom cluster force function for d3
-        function createClusterForce() {
+        // Custom gravity force - pulls nodes toward their hub but with orbital spread
+        function createGravityForce() {
             let nodes;
-            const strength = 0.3;
+            let nodeMap = {};
 
             function force(alpha) {
                 for (const d of nodes) {
-                    if (d.cluster === undefined) continue;
-                    const center = clusterCenters[d.cluster];
-                    if (!center) continue;
+                    if (!d.hub) continue;
+                    const hub = nodeMap[d.hub];
+                    if (!hub) continue;
 
-                    // Pull toward cluster center
-                    d.vx -= (d.x - center.x) * strength * alpha;
-                    d.vy -= (d.y - center.y) * strength * alpha;
+                    // Calculate ideal orbital distance based on node's connections
+                    const myConn = d.conn || 1;
+                    const hubConn = hub.conn || 1;
+                    const idealDist = 50 + Math.sqrt(myConn) * 20;  // More connections = further out
+
+                    // Current distance to hub
+                    const dx = d.x - hub.x;
+                    const dy = d.y - hub.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+                    // Pull toward ideal orbital distance
+                    const strength = 0.1 * alpha;
+                    if (dist < idealDist * 0.7) {
+                        // Too close - push outward
+                        d.vx += (dx / dist) * strength * 2;
+                        d.vy += (dy / dist) * strength * 2;
+                    } else if (dist > idealDist * 1.5) {
+                        // Too far - pull inward
+                        d.vx -= (dx / dist) * strength;
+                        d.vy -= (dy / dist) * strength;
+                    }
                 }
             }
 
             force.initialize = function(_nodes) {
                 nodes = _nodes;
+                nodeMap = {};
+                nodes.forEach(n => nodeMap[n.id] = n);
             };
 
             return force;
         }
 
+        // Assign hubs to nodes (each node's highest-connection neighbor)
+        function assignHubs() {
+            const links = Graph.graphData().links;
+            const adjacency = {};
+
+            // Build adjacency
+            Object.values(allNodes).forEach(n => adjacency[n.id] = []);
+            links.forEach(l => {
+                const s = l.source.id || l.source;
+                const t = l.target.id || l.target;
+                if (adjacency[s]) adjacency[s].push(t);
+                if (adjacency[t]) adjacency[t].push(s);
+            });
+
+            // Each node's hub is its neighbor with most connections (if that neighbor has more than self)
+            Object.values(allNodes).forEach(n => {
+                const neighbors = adjacency[n.id] || [];
+                let bestHub = null;
+                let bestConn = n.conn || 0;
+
+                neighbors.forEach(nId => {
+                    const neighbor = allNodes[nId];
+                    if (neighbor && (neighbor.conn || 0) > bestConn) {
+                        bestConn = neighbor.conn;
+                        bestHub = nId;
+                    }
+                });
+
+                n.hub = bestHub;  // null if this node is a local maximum (a sun itself)
+            });
+        }
+
         // Apply galaxy forces after data loads
         function applyGalaxyForces() {
-            // Add cluster attraction force
-            Graph.d3Force('cluster', createClusterForce());
-
-            // Reheat simulation
+            assignHubs();
+            Graph.d3Force('gravity', createGravityForce());
             Graph.d3ReheatSimulation();
         }
 
@@ -1486,6 +1786,30 @@ GRAPH_HTML = """
 
                 // Apply galaxy forces after a short delay
                 setTimeout(applyGalaxyForces, 200);
+
+                // Find densest area and zoom there after simulation settles
+                setTimeout(() => {
+                    // Find top connected nodes (the "suns")
+                    const sortedByConn = [...data.nodes].sort((a, b) => (b.conn || 0) - (a.conn || 0));
+                    const topNodes = sortedByConn.slice(0, 10);  // Top 10 hubs
+
+                    if (topNodes.length > 0) {
+                        // Calculate centroid of top hubs
+                        let cx = 0, cy = 0, totalWeight = 0;
+                        topNodes.forEach(n => {
+                            const weight = n.conn || 1;
+                            cx += (n.x || 0) * weight;
+                            cy += (n.y || 0) * weight;
+                            totalWeight += weight;
+                        });
+                        cx /= totalWeight;
+                        cy /= totalWeight;
+
+                        // Zoom to the dense area (slightly zoomed out)
+                        Graph.centerAt(cx, cy, 1000);
+                        Graph.zoom(0.55, 1000);
+                    }
+                }, 3000);  // Wait for simulation to settle
             });
     </script>
 </body>
