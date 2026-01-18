@@ -220,12 +220,10 @@ async def chat_completions(
             temperature=body.temperature,
         )
 
-        # Append stats to response content for visibility in Open WebUI
+        # Append confidence to response content for visibility in Open WebUI
         memories_count = len(result.synthesis.memories_used)
-        concepts = result.synthesis.concepts_activated[:5]
         confidence_pct = int(result.confidence * 100)
-
-        stats_footer = f"\n\n---\n*Confidence: {confidence_pct}% | Memories: {memories_count} | Concepts: {', '.join(concepts[:3])}{'...' if len(concepts) > 3 else ''}*"
+        stats_footer = f"\n\n---\n**Confidence: {confidence_pct}%**"
 
         content_with_stats = result.answer + stats_footer
 
