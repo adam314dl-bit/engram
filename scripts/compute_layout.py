@@ -2,11 +2,17 @@
 
 This script:
 1. Fetches all nodes and relationships from Neo4j
-2. Computes 2D layout using NetworkX spring layout
+2. Computes 2D layout using GPU (cuGraph) or CPU (graph-tool/NetworkX)
 3. Detects communities using Louvain algorithm
 4. Stores x/y coordinates and cluster IDs back to each node in Neo4j
 
 Run after ingestion or when graph structure changes significantly.
+
+For GPU acceleration (100-1000x faster), install RAPIDS cuGraph:
+    uv add cugraph-cu12 cudf-cu12 --index-url https://pypi.nvidia.com
+
+For multi-core CPU (5-20x faster), install igraph:
+    uv add igraph
 """
 
 import asyncio
@@ -14,7 +20,6 @@ import os
 import sys
 from pathlib import Path
 
-import networkx as nx
 from dotenv import load_dotenv
 
 # Load .env file from project root
@@ -25,6 +30,165 @@ load_dotenv(project_root / ".env")
 sys.path.insert(0, str(project_root / "src"))
 
 from engram.storage.neo4j_client import Neo4jClient
+
+
+def compute_layout_cugraph(nodes, edges, scale=3000):
+    """GPU-accelerated layout using NVIDIA cuGraph (100-1000x faster)."""
+    import cudf
+    import cugraph
+
+    print("Using cuGraph (GPU accelerated)...")
+
+    # Create edge dataframe
+    if edges:
+        src = [e[0] for e in edges]
+        dst = [e[1] for e in edges]
+        edge_df = cudf.DataFrame({"src": src, "dst": dst})
+    else:
+        edge_df = cudf.DataFrame({"src": [], "dst": []})
+
+    # Create graph
+    G = cugraph.Graph()
+    if len(edge_df) > 0:
+        G.from_cudf_edgelist(edge_df, source="src", destination="dst")
+
+    # ForceAtlas2 layout - GPU accelerated
+    positions_df = cugraph.force_atlas2(
+        G,
+        max_iter=500,
+        pos_list=None,
+        outbound_attraction_distribution=True,
+        lin_log_mode=False,
+        edge_weight_influence=1.0,
+        jitter_tolerance=1.0,
+        barnes_hut_optimize=True,
+        barnes_hut_theta=1.2,
+        scaling_ratio=2.0,
+        strong_gravity_mode=False,
+        gravity=1.0,
+    )
+
+    # Convert to dict and scale
+    positions = {}
+    for row in positions_df.to_pandas().itertuples():
+        positions[row.vertex] = (row.x * scale, row.y * scale)
+
+    # Add isolated nodes at random positions
+    import random
+    random.seed(42)
+    for node in nodes:
+        if node not in positions:
+            positions[node] = (random.uniform(-scale, scale), random.uniform(-scale, scale))
+
+    return positions
+
+
+def compute_layout_igraph(nodes, edges, scale=3000):
+    """Fast CPU layout using igraph (5-20x faster than NetworkX)."""
+    import igraph as ig
+
+    print("Using igraph (optimized C backend)...")
+
+    # Create node index mapping
+    node_to_idx = {node: i for i, node in enumerate(nodes)}
+    idx_to_node = {i: node for i, node in enumerate(nodes)}
+
+    # Create edge list with indices
+    edge_indices = []
+    for src, dst in edges:
+        if src in node_to_idx and dst in node_to_idx:
+            edge_indices.append((node_to_idx[src], node_to_idx[dst]))
+
+    # Create graph
+    G = ig.Graph(n=len(nodes), edges=edge_indices, directed=False)
+
+    print(f"Graph: {G.vcount()} vertices, {G.ecount()} edges")
+
+    # Use DrL layout for large graphs (faster) or Fruchterman-Reingold for smaller
+    if len(nodes) > 5000:
+        print("Using DrL layout (optimized for large graphs)...")
+        layout = G.layout_drl()
+    else:
+        print("Using Fruchterman-Reingold layout...")
+        layout = G.layout_fruchterman_reingold(niter=100)
+
+    # Convert to dict and scale
+    positions = {}
+    coords = layout.coords
+    for i, (x, y) in enumerate(coords):
+        positions[idx_to_node[i]] = (x * scale, y * scale)
+
+    return positions
+
+
+def compute_layout_networkx(nodes, edges, scale=3000):
+    """Single-core CPU layout using NetworkX (baseline)."""
+    import networkx as nx
+
+    print("Using NetworkX (single-core CPU)...")
+
+    G = nx.Graph()
+    G.add_nodes_from(nodes)
+    for src, dst in edges:
+        if src in G.nodes and dst in G.nodes:
+            G.add_edge(src, dst)
+
+    print(f"Graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+
+    positions = nx.spring_layout(
+        G,
+        k=5.0 / (G.number_of_nodes() ** 0.5) if G.number_of_nodes() > 0 else 1.0,
+        iterations=100,
+        seed=42,
+        scale=scale,
+    )
+
+    return {k: (float(v[0]), float(v[1])) for k, v in positions.items()}
+
+
+def compute_layout(nodes, edges, scale=3000):
+    """Compute layout using best available backend."""
+    # Try GPU first (cuGraph)
+    try:
+        return compute_layout_cugraph(nodes, edges, scale)
+    except ImportError:
+        print("cuGraph not available, trying igraph...")
+    except Exception as e:
+        print(f"cuGraph failed: {e}, trying igraph...")
+
+    # Try fast CPU (igraph)
+    try:
+        return compute_layout_igraph(nodes, edges, scale)
+    except ImportError:
+        print("igraph not available, falling back to NetworkX...")
+    except Exception as e:
+        print(f"igraph failed: {e}, falling back to NetworkX...")
+
+    # Fallback to single-core (NetworkX)
+    return compute_layout_networkx(nodes, edges, scale)
+
+
+def compute_communities(nodes, edges):
+    """Detect communities using Louvain algorithm."""
+    import networkx as nx
+
+    G = nx.Graph()
+    G.add_nodes_from(nodes)
+    for src, dst in edges:
+        if src in G.nodes and dst in G.nodes:
+            G.add_edge(src, dst)
+
+    try:
+        communities = nx.community.louvain_communities(G, seed=42)
+        node_clusters = {}
+        for cluster_id, community in enumerate(communities):
+            for node_id in community:
+                node_clusters[node_id] = cluster_id
+        print(f"Found {len(communities)} communities")
+        return node_clusters
+    except Exception as e:
+        print(f"Community detection failed: {e}, using single cluster")
+        return {node_id: 0 for node_id in nodes}
 
 
 async def compute_and_store_layout():
@@ -41,15 +205,9 @@ async def compute_and_store_layout():
     print("Fetching nodes from Neo4j...")
 
     # Fetch all nodes
-    concepts = await db.execute_query(
-        "MATCH (c:Concept) RETURN c.id as id"
-    )
-    semantic = await db.execute_query(
-        "MATCH (s:SemanticMemory) RETURN s.id as id"
-    )
-    episodic = await db.execute_query(
-        "MATCH (e:EpisodicMemory) RETURN e.id as id"
-    )
+    concepts = await db.execute_query("MATCH (c:Concept) RETURN c.id as id")
+    semantic = await db.execute_query("MATCH (s:SemanticMemory) RETURN s.id as id")
+    episodic = await db.execute_query("MATCH (e:EpisodicMemory) RETURN e.id as id")
 
     all_nodes = [n["id"] for n in concepts + semantic + episodic]
     print(f"Found {len(all_nodes)} nodes")
@@ -67,50 +225,17 @@ async def compute_and_store_layout():
         "MATCH (e:EpisodicMemory)-[:ACTIVATED]->(c:Concept) RETURN e.id as source, c.id as target"
     )
 
-    all_rels = concept_rels + memory_rels + episode_rels
-    print(f"Found {len(all_rels)} relationships")
+    all_edges = [(r["source"], r["target"]) for r in concept_rels + memory_rels + episode_rels]
+    print(f"Found {len(all_edges)} relationships")
 
-    # Build NetworkX graph
-    print("Building NetworkX graph...")
-    G = nx.Graph()
-    G.add_nodes_from(all_nodes)
-
-    for rel in all_rels:
-        if rel["source"] in G.nodes and rel["target"] in G.nodes:
-            G.add_edge(rel["source"], rel["target"])
-
-    print(f"Graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
-
-    # Compute layout
-    print("Computing spring layout (this may take a minute for large graphs)...")
-
-    # Use spring layout with parameters tuned for large graphs
-    # k controls optimal distance between nodes (higher = more spread)
-    # iterations controls quality vs speed
-    # scale controls overall coordinate range
-    positions = nx.spring_layout(
-        G,
-        k=5.0 / (G.number_of_nodes() ** 0.5) if G.number_of_nodes() > 0 else 1.0,
-        iterations=100,
-        seed=42,  # Reproducible layout
-        scale=3000,  # Larger scale for more spread
-    )
-
+    # Compute layout (tries GPU -> multi-core -> single-core)
+    print("Computing layout...")
+    positions = compute_layout(all_nodes, all_edges, scale=3000)
     print("Layout computed.")
 
-    # Detect communities using Louvain algorithm
+    # Detect communities
     print("Detecting communities...")
-    try:
-        communities = nx.community.louvain_communities(G, seed=42)
-        # Map node -> cluster_id
-        node_clusters = {}
-        for cluster_id, community in enumerate(communities):
-            for node_id in community:
-                node_clusters[node_id] = cluster_id
-        print(f"Found {len(communities)} communities")
-    except Exception as e:
-        print(f"Community detection failed: {e}, using single cluster")
-        node_clusters = {node_id: 0 for node_id in all_nodes}
+    node_clusters = compute_communities(all_nodes, all_edges)
 
     print("Storing positions and clusters in Neo4j...")
 
@@ -119,9 +244,8 @@ async def compute_and_store_layout():
     node_list = list(positions.items())
 
     for i in range(0, len(node_list), batch_size):
-        batch = node_list[i:i + batch_size]
+        batch = node_list[i : i + batch_size]
 
-        # Build batch update query
         for node_id, (x, y) in batch:
             cluster_id = node_clusters.get(node_id, 0)
             await db.execute_query(
@@ -129,13 +253,16 @@ async def compute_and_store_layout():
                 MATCH (n) WHERE n.id = $id
                 SET n.layout_x = $x, n.layout_y = $y, n.cluster = $cluster
                 """,
-                id=node_id, x=float(x), y=float(y), cluster=cluster_id
+                id=node_id,
+                x=float(x),
+                y=float(y),
+                cluster=cluster_id,
             )
 
         progress = min(i + batch_size, len(node_list))
         print(f"  Stored {progress}/{len(node_list)} positions...")
 
-    # Compute bounding box for viewport queries
+    # Compute bounding box
     if positions:
         xs = [p[0] for p in positions.values()]
         ys = [p[1] for p in positions.values()]

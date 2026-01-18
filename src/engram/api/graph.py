@@ -506,16 +506,20 @@ GRAPH_HTML = """
         }
 
         function screenToWorld(sx, sy) {
+            // Match shader: clipSpace = (pos / u_resolution) * 2.0, with u_resolution = size/2
+            // This means effective multiplier is 2 in the transform
             return {
-                x: (sx - window.innerWidth / 2) / scale + viewX,
-                y: -(sy - window.innerHeight / 2) / scale + viewY
+                x: (sx - window.innerWidth / 2) / (scale * 2) + viewX,
+                y: -(sy - window.innerHeight / 2) / (scale * 2) + viewY
             };
         }
 
         function worldToScreen(wx, wy) {
+            // Match shader transform: pos * 2 / resolution * 2 = pos * 4 / size
+            // Screen = (clip + 1) * size/2, so final = pos * 2 + size/2
             return {
-                x: (wx - viewX) * scale + window.innerWidth / 2,
-                y: -(wy - viewY) * scale + window.innerHeight / 2
+                x: (wx - viewX) * scale * 2 + window.innerWidth / 2,
+                y: -(wy - viewY) * scale * 2 + window.innerHeight / 2
             };
         }
 
@@ -619,21 +623,29 @@ GRAPH_HTML = """
                 gl.uniform2f(gl.getUniformLocation(lineProgram, 'u_view'), viewX, viewY);
                 gl.uniform1f(gl.getUniformLocation(lineProgram, 'u_scale'), scale);
 
-                const lineOpacity = (highlightedNodes.size > 0 || neighborNodes.size > 0) ? 0.03 : 0.1;
-                gl.uniform4f(gl.getUniformLocation(lineProgram, 'u_color'), 0.37, 0.92, 0.83, lineOpacity);
+                const hasSelection = selectedNode || neighborNodes.size > 0;
+                const normalLineData = [];
+                const glowLineData = [];
 
-                const lineData = [];
                 for (const link of links) {
                     const s = nodeMap[link.source];
                     const t = nodeMap[link.target];
                     if (s && t && isNodeVisible(s) && isNodeVisible(t)) {
+                        // Check if this link connects selected node to neighbor
+                        const isGlowLink = selectedNode && (
+                            (s === selectedNode && neighborNodes.has(t.id)) ||
+                            (t === selectedNode && neighborNodes.has(s.id))
+                        );
+
+                        const targetArray = isGlowLink ? glowLineData : normalLineData;
+
                         if (showBundling) {
                             const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2;
                             const dx = t.x - s.x, dy = t.y - s.y;
                             const cx = mx - dy * 0.15, cy = my + dx * 0.15;
                             for (let i = 0; i < 8; i++) {
                                 const t1 = i / 8, t2 = (i + 1) / 8;
-                                lineData.push(
+                                targetArray.push(
                                     (1-t1)*(1-t1)*s.x + 2*(1-t1)*t1*cx + t1*t1*t.x,
                                     (1-t1)*(1-t1)*s.y + 2*(1-t1)*t1*cy + t1*t1*t.y,
                                     (1-t2)*(1-t2)*s.x + 2*(1-t2)*t2*cx + t2*t2*t.x,
@@ -641,17 +653,37 @@ GRAPH_HTML = """
                                 );
                             }
                         } else {
-                            lineData.push(s.x, s.y, t.x, t.y);
+                            targetArray.push(s.x, s.y, t.x, t.y);
                         }
                     }
                 }
 
-                gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
-                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(lineData), gl.DYNAMIC_DRAW);
                 const posLoc = gl.getAttribLocation(lineProgram, 'a_position');
                 gl.enableVertexAttribArray(posLoc);
-                gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
-                gl.drawArrays(gl.LINES, 0, lineData.length / 2);
+
+                // Draw normal lines (dimmed if selection active)
+                if (normalLineData.length > 0) {
+                    const normalOpacity = hasSelection ? 0.1 : 0.4;
+                    gl.uniform4f(gl.getUniformLocation(lineProgram, 'u_color'), 0.37, 0.92, 0.83, normalOpacity);
+                    gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
+                    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normalLineData), gl.DYNAMIC_DRAW);
+                    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+                    gl.drawArrays(gl.LINES, 0, normalLineData.length / 2);
+                }
+
+                // Draw glowing lines for selected node connections
+                if (glowLineData.length > 0) {
+                    // Draw glow (wider, more transparent)
+                    gl.uniform4f(gl.getUniformLocation(lineProgram, 'u_color'), 0.37, 0.92, 0.83, 0.6);
+                    gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
+                    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(glowLineData), gl.DYNAMIC_DRAW);
+                    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+                    gl.drawArrays(gl.LINES, 0, glowLineData.length / 2);
+
+                    // Draw bright core
+                    gl.uniform4f(gl.getUniformLocation(lineProgram, 'u_color'), 0.6, 1.0, 0.95, 0.9);
+                    gl.drawArrays(gl.LINES, 0, glowLineData.length / 2);
+                }
             }
 
             // Draw nodes
@@ -666,9 +698,9 @@ GRAPH_HTML = """
 
                 for (const node of nodes) {
                     const color = getNodeColor(node);
-                    // BIGGER nodes: base 6-24, scaled by connections more aggressively
-                    const baseSize = Math.max(6, Math.min(24, Math.sqrt(node.conn || 1) * 4));
-                    const size = baseSize * Math.max(1, Math.min(3, scale * 0.8));
+                    // 4x BIGGER nodes: base 24-96, scaled by connections
+                    const baseSize = Math.max(24, Math.min(96, Math.sqrt(node.conn || 1) * 16));
+                    const size = baseSize * Math.max(1, Math.min(4, scale));
 
                     let finalColor = color;
                     if (node === selectedNode) {
@@ -733,8 +765,9 @@ GRAPH_HTML = """
                 const dx = node.x - world.x;
                 const dy = node.y - world.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
-                const baseSize = Math.max(6, Math.min(24, Math.sqrt(node.conn || 1) * 4));
-                const threshold = (baseSize * 2) / scale + 15;
+                // Match bigger node sizes
+                const baseSize = Math.max(24, Math.min(96, Math.sqrt(node.conn || 1) * 16));
+                const threshold = (baseSize * 2) / scale + 30;
 
                 if (dist < threshold && dist < closestDist) {
                     closest = node;

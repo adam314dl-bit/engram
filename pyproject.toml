@@ -18,6 +18,9 @@ dependencies = [
     "aiofiles>=23.2.1",
     "einops>=0.7.0",
     "tqdm>=4.66.0",
+    "networkx>=3.0",
+    "igraph>=0.11.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +31,10 @@ dev = [
     "mypy>=1.8.0",
     "ruff>=0.2.0",
     "types-aiofiles>=23.2.0",
+]
+gpu = [
+    "cugraph-cu12>=24.0.0",
+    "cudf-cu12>=24.0.0",
 ]
 
 [build-system]
@@ -59,6 +66,9 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 module = ["sentence_transformers.*", "neo4j.*"]
 ignore_missing_imports = true
+
+[tool.uv]
+extra-index-url = ["https://pypi.nvidia.com"]
 
 [tool.ruff]
 line-length = 100
