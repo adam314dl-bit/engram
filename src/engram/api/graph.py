@@ -784,6 +784,33 @@ GRAPH_HTML = """
                 if (!changed) break;
             }
 
+            // Count nodes per label
+            const labelSizes = {};
+            nodes.forEach(n => {
+                const lbl = labels[n.id];
+                labelSizes[lbl] = (labelSizes[lbl] || 0) + 1;
+            });
+
+            // Merge small clusters (size < 3) into their largest neighbor's cluster
+            nodes.forEach(n => {
+                if (labelSizes[labels[n.id]] < 3) {
+                    const neighbors = adj[n.id];
+                    if (neighbors.length > 0) {
+                        // Find neighbor with largest cluster
+                        let bestNeighbor = neighbors[0];
+                        let bestSize = labelSizes[labels[bestNeighbor]] || 0;
+                        for (const nId of neighbors) {
+                            const size = labelSizes[labels[nId]] || 0;
+                            if (size > bestSize) {
+                                bestSize = size;
+                                bestNeighbor = nId;
+                            }
+                        }
+                        labels[n.id] = labels[bestNeighbor];
+                    }
+                }
+            });
+
             // Map labels to cluster indices
             const uniqueLabels = [...new Set(Object.values(labels))];
             const labelToCluster = {};
@@ -796,24 +823,31 @@ GRAPH_HTML = """
                 clusterSizes[cluster] = (clusterSizes[cluster] || 0) + 1;
             });
 
-            // Calculate cluster centers arranged in a spiral/circle pattern
-            // Larger clusters get more space, positioned based on size
+            // Calculate cluster centers - use grid layout for many clusters
             const numClusters = uniqueLabels.length;
             const sortedClusters = Object.entries(clusterSizes)
                 .sort((a, b) => b[1] - a[1])  // Largest first
                 .map(([idx]) => parseInt(idx));
 
-            const baseRadius = Math.sqrt(nodes.length) * 25;  // Base spread radius
+            // Calculate grid dimensions based on number of clusters
+            const cols = Math.ceil(Math.sqrt(numClusters));
+            const rows = Math.ceil(numClusters / cols);
+            const cellSize = Math.sqrt(nodes.length) * 15;  // Space per cluster
+            const totalWidth = cols * cellSize;
+            const totalHeight = rows * cellSize;
+
             clusterCenters = {};
 
             sortedClusters.forEach((clusterIdx, i) => {
-                // Spiral arrangement - larger clusters near center, smaller ones outside
-                const angle = (i / numClusters) * 2 * Math.PI + Math.random() * 0.3;
-                const ringIndex = Math.floor(i / 6);  // 6 clusters per ring
-                const radius = baseRadius * (0.5 + ringIndex * 0.8);
+                // Grid position with some randomness
+                const col = i % cols;
+                const row = Math.floor(i / cols);
+                const x = (col - cols/2 + 0.5) * cellSize + (Math.random() - 0.5) * cellSize * 0.3;
+                const y = (row - rows/2 + 0.5) * cellSize + (Math.random() - 0.5) * cellSize * 0.3;
+
                 clusterCenters[clusterIdx] = {
-                    x: Math.cos(angle) * radius,
-                    y: Math.sin(angle) * radius,
+                    x: x,
+                    y: y,
                     size: clusterSizes[clusterIdx]
                 };
             });
@@ -1344,74 +1378,42 @@ GRAPH_HTML = """
 
         // Galaxy layout forces
         // Base repulsion between all nodes
-        Graph.d3Force('charge').strength(-150);
-        Graph.d3Force('link').distance(50).strength(0.3);
+        Graph.d3Force('charge').strength(-80);
+        Graph.d3Force('link').distance(30).strength(0.2);
+        // Disable centering force so clusters can spread
+        Graph.d3Force('center', null);
 
-        // Custom cluster force - pulls nodes toward their cluster center
-        function clusterForce(alpha) {
-            return function(d) {
-                if (d.cluster === undefined) return;
-                const center = clusterCenters[d.cluster];
-                if (!center) return;
+        // Custom cluster force function for d3
+        function createClusterForce() {
+            let nodes;
+            const strength = 0.3;
 
-                // Pull toward cluster center
-                const clusterStrength = 0.15;
-                d.vx -= (d.x - center.x) * clusterStrength * alpha;
-                d.vy -= (d.y - center.y) * clusterStrength * alpha;
-            };
-        }
+            function force(alpha) {
+                for (const d of nodes) {
+                    if (d.cluster === undefined) continue;
+                    const center = clusterCenters[d.cluster];
+                    if (!center) continue;
 
-        // Inter-cluster repulsion - push nodes of different clusters apart
-        function interClusterForce(alpha) {
-            const nodes = Graph.graphData().nodes;
-            const repulsionStrength = 800;
-
-            for (let i = 0; i < nodes.length; i++) {
-                for (let j = i + 1; j < nodes.length; j++) {
-                    const a = nodes[i];
-                    const b = nodes[j];
-
-                    // Only apply extra repulsion between different clusters
-                    if (a.cluster === b.cluster) continue;
-
-                    const dx = a.x - b.x;
-                    const dy = a.y - b.y;
-                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-
-                    // Strong repulsion at close range between different clusters
-                    if (dist < 300) {
-                        const force = (repulsionStrength * alpha) / (dist * dist);
-                        const fx = dx / dist * force;
-                        const fy = dy / dist * force;
-
-                        a.vx += fx;
-                        a.vy += fy;
-                        b.vx -= fx;
-                        b.vy -= fy;
-                    }
+                    // Pull toward cluster center
+                    d.vx -= (d.x - center.x) * strength * alpha;
+                    d.vy -= (d.y - center.y) * strength * alpha;
                 }
             }
+
+            force.initialize = function(_nodes) {
+                nodes = _nodes;
+            };
+
+            return force;
         }
 
-        // Apply custom forces after graph data loads
+        // Apply galaxy forces after data loads
         function applyGalaxyForces() {
-            const simulation = Graph.d3Force('link').simulation;
-            if (!simulation) {
-                // Simulation not ready, try again
-                setTimeout(applyGalaxyForces, 100);
-                return;
-            }
-
             // Add cluster attraction force
-            simulation.force('cluster', (alpha) => {
-                Graph.graphData().nodes.forEach(clusterForce(alpha));
-            });
-
-            // Add inter-cluster repulsion
-            simulation.force('interCluster', interClusterForce);
+            Graph.d3Force('cluster', createClusterForce());
 
             // Reheat simulation
-            simulation.alpha(1).restart();
+            Graph.d3ReheatSimulation();
         }
 
         document.addEventListener('keydown', e => {
