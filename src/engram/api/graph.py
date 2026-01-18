@@ -648,11 +648,7 @@ GRAPH_HTML = """
             .nodeOpacity(0.9)
             .linkColor(() => 'rgba(94,234,212,0.15)')
             .linkOpacity(0.6)
-            .linkWidth(0.5)
-            .linkDirectionalParticles(2)
-            .linkDirectionalParticleWidth(1.5)
-            .linkDirectionalParticleSpeed(0.005)
-            .linkDirectionalParticleColor(() => '#5eead4')
+            .linkWidth(0.3)
             .onNodeClick(node => {
                 selectedTypes.clear();
                 typeNeighbors.clear();
