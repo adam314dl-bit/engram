@@ -1640,12 +1640,12 @@ GRAPH_HTML = """
             Graph.linkWidth(Graph.linkWidth());
         }
 
-        // STATIC LAYOUT: Run brief simulation to resolve collisions, then freeze
-        // Server provides initial positions, simulation just fixes overlaps
-        Graph.cooldownTicks(100);  // Run only 100 iterations to resolve collisions
-        Graph.d3AlphaDecay(0.05);  // Faster decay so it stops quickly
-        Graph.d3Force('charge').strength(-30);  // Light repulsion to resolve overlaps
-        Graph.d3Force('link').distance(30).strength(0.1);  // Weak links
+        // STATIC LAYOUT: Run simulation to spread nodes and resolve collisions, then freeze
+        // Server provides initial positions, simulation spreads them out nicely
+        Graph.cooldownTicks(400);  // More iterations for better spread
+        Graph.d3AlphaDecay(0.015);  // Slower decay - let it run longer
+        Graph.d3Force('charge').strength(-80);  // Stronger repulsion for better spread
+        Graph.d3Force('link').distance(50).strength(0.2);  // Moderate link pull
         Graph.d3Force('center', null);  // No centering - keep cluster positions
 
         // After simulation ends, freeze all positions
