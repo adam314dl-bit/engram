@@ -41,14 +41,16 @@ async def get_graph_data(request: Request) -> dict:
     nodes = []
     links = []
 
-    # Get concepts (ordered by activation for importance-based LOD)
+    # Get concepts (top 20% by connections - only most important)
     concepts = await db.execute_query(
         """
         MATCH (c:Concept)
+        OPTIONAL MATCH (c)-[r]-()
+        WITH c, count(r) as conn
         RETURN c.id as id, c.name as name, c.type as type,
-               coalesce(c.activation_count, 0) as weight
-        ORDER BY coalesce(c.activation_count, 0) DESC
-        LIMIT 2000
+               coalesce(c.activation_count, 0) as weight, conn
+        ORDER BY conn DESC
+        LIMIT 400
         """
     )
     for c in concepts:
@@ -60,14 +62,14 @@ async def get_graph_data(request: Request) -> dict:
             "weight": c["weight"] + 1,
         })
 
-    # Get semantic memories (ordered by importance for LOD)
+    # Get semantic memories (top 20% by importance)
     memories = await db.execute_query(
         """
         MATCH (s:SemanticMemory)
         RETURN s.id as id, s.content as content, s.memory_type as type,
                s.importance as importance
         ORDER BY coalesce(s.importance, 0) DESC
-        LIMIT 800
+        LIMIT 150
         """
     )
     for m in memories:
@@ -82,14 +84,14 @@ async def get_graph_data(request: Request) -> dict:
             "weight": (m["importance"] or 5) / 2,
         })
 
-    # Get episodic memories (ordered by importance for LOD)
+    # Get episodic memories (top 20% by importance)
     episodes = await db.execute_query(
         """
         MATCH (e:EpisodicMemory)
         RETURN e.id as id, e.query as query, e.behavior_name as behavior,
                e.importance as importance
         ORDER BY coalesce(e.importance, 0) DESC
-        LIMIT 500
+        LIMIT 100
         """
     )
     for e in episodes:
@@ -104,14 +106,14 @@ async def get_graph_data(request: Request) -> dict:
             "weight": (e["importance"] or 5) / 2,
         })
 
-    # Get concept-to-concept relationships
+    # Get concept-to-concept relationships (top 20% by weight)
     concept_rels = await db.execute_query(
         """
         MATCH (c1:Concept)-[r:RELATED_TO]->(c2:Concept)
         RETURN c1.id as source, c2.id as target,
                r.type as relType, coalesce(r.weight, 0.5) as weight
         ORDER BY coalesce(r.weight, 0.5) DESC
-        LIMIT 3000
+        LIMIT 600
         """
     )
     for r in concept_rels:
@@ -123,12 +125,12 @@ async def get_graph_data(request: Request) -> dict:
             "weight": r["weight"],
         })
 
-    # Get memory-to-concept relationships
+    # Get memory-to-concept relationships (20%)
     memory_rels = await db.execute_query(
         """
         MATCH (s:SemanticMemory)-[:ABOUT]->(c:Concept)
         RETURN s.id as source, c.id as target
-        LIMIT 2000
+        LIMIT 300
         """
     )
     for r in memory_rels:
@@ -140,12 +142,12 @@ async def get_graph_data(request: Request) -> dict:
             "weight": 0.3,
         })
 
-    # Get episode-to-concept relationships
+    # Get episode-to-concept relationships (20%)
     episode_rels = await db.execute_query(
         """
         MATCH (e:EpisodicMemory)-[:ACTIVATED]->(c:Concept)
         RETURN e.id as source, c.id as target
-        LIMIT 1500
+        LIMIT 200
         """
     )
     for r in episode_rels:
