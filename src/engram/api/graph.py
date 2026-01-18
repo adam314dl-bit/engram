@@ -1297,23 +1297,11 @@ GRAPH_HTML = """
                 const isMajorHub = conn > 15;
                 const isSuperHub = conn > 25;
 
-                // Sun corona effect for hubs - pulsing synced with particle flow
+                // Static glow for hubs (animations disabled for performance)
                 if (isHub && isActive) {
-                    // Slower pulse synced with particle arrival (~3 seconds per cycle)
-                    const time = Date.now() * 0.001;
-                    const pulseSpeed = isSuperHub ? 0.8 : isMajorHub ? 0.6 : 0.5;
-                    const pulseAmount = isSuperHub ? 0.15 : isMajorHub ? 0.12 : 0.08;
-                    const pulse = 1 + Math.sin(time * pulseSpeed * Math.PI) * pulseAmount;
-
-                    // Secondary faster micro-pulse (like particles arriving)
-                    const microPulse = 1 + Math.sin(time * 3 + conn * 0.5) * 0.03;
-
-                    const coronaSize = size * (isSuperHub ? 3.5 : isMajorHub ? 2.8 : 2) * pulse * microPulse;
-
-                    // Outer glow with breathing effect
-                    const glowIntensity = 0.4 + Math.sin(time * pulseSpeed * Math.PI) * 0.2;
+                    const coronaSize = size * (isSuperHub ? 3.5 : isMajorHub ? 2.8 : 2);
                     const gradient = ctx.createRadialGradient(node.x, node.y, size * 0.3, node.x, node.y, coronaSize);
-                    gradient.addColorStop(0, color + Math.floor(glowIntensity * 255).toString(16).padStart(2, '0'));
+                    gradient.addColorStop(0, color + '66');
                     gradient.addColorStop(0.4, color + '25');
                     gradient.addColorStop(0.7, color + '10');
                     gradient.addColorStop(1, 'transparent');
@@ -1321,16 +1309,6 @@ GRAPH_HTML = """
                     ctx.arc(node.x, node.y, coronaSize, 0, 2 * Math.PI);
                     ctx.fillStyle = gradient;
                     ctx.fill();
-
-                    // Extra ring for super hubs - pulses when "receiving" particles
-                    if (isSuperHub) {
-                        const ringPulse = 1 + Math.sin(time * 1.5) * 0.15;
-                        ctx.beginPath();
-                        ctx.arc(node.x, node.y, size * 2.2 * ringPulse, 0, 2 * Math.PI);
-                        ctx.strokeStyle = color + '50';
-                        ctx.lineWidth = 2 + Math.sin(time * 1.5) * 1;
-                        ctx.stroke();
-                    }
                 }
 
                 // Outer glow for hover/selection/path
@@ -1475,40 +1453,7 @@ GRAPH_HTML = """
                 return (sourceId === selected.id || targetId === selected.id) ? baseWidth * 2 : 0.2;
             })
             .linkCurvature(0.15)  // Slightly curved edges
-            .linkDirectionalParticles(l => {
-                // Show particles on path links
-                if (pathLinks.has(l)) return 4;
-
-                const sourceNode = allNodes[l.source.id || l.source];
-                const targetNode = allNodes[l.target.id || l.target];
-
-                // Hide particles if nodes are filtered by importance
-                if (importanceThreshold > 0) {
-                    const sourceWeight = sourceNode?.weight || 0;
-                    const targetWeight = targetNode?.weight || 0;
-                    if (sourceWeight < importanceThreshold && targetWeight < importanceThreshold) {
-                        return 0;
-                    }
-                }
-
-                // Show particles flowing to hub nodes (suns)
-                const sourceConn = sourceNode?.conn || 0;
-                const targetConn = targetNode?.conn || 0;
-                const maxConn = Math.max(sourceConn, targetConn);
-
-                // More particles for connections to bigger hubs
-                if (maxConn > 20) return 3;
-                if (maxConn > 12) return 2;
-                if (maxConn > 6) return 1;
-
-                // Show particles on selected links
-                if (selected) {
-                    const sourceId = l.source.id || l.source;
-                    const targetId = l.target.id || l.target;
-                    if (sourceId === selected.id || targetId === selected.id) return 2;
-                }
-                return 0;
-            })
+            .linkDirectionalParticles(0)  // Animations disabled
             .linkDirectionalParticleWidth(l => {
                 if (pathLinks.has(l)) return 4;
                 const sourceNode = allNodes[l.source.id || l.source];
