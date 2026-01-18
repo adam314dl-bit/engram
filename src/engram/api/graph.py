@@ -1,4 +1,4 @@
-"""Simple graph visualization endpoint."""
+"""Graph visualization endpoint with v0.1 UI and simplified rendering."""
 
 import logging
 
@@ -14,6 +14,10 @@ router = APIRouter()
 FAVICON_SVG = """<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>
 <circle cx='50' cy='50' r='40' fill='#0a0a12' stroke='#5eead4' stroke-width='6'/>
 <circle cx='50' cy='50' r='15' fill='#5eead4'/>
+<circle cx='30' cy='35' r='8' fill='#a78bfa'/>
+<circle cx='70' cy='35' r='8' fill='#f472b6'/>
+<line x1='50' y1='50' x2='30' y2='35' stroke='#5eead4' stroke-width='2'/>
+<line x1='50' y1='50' x2='70' y2='35' stroke='#5eead4' stroke-width='2'/>
 </svg>"""
 
 
@@ -30,13 +34,13 @@ def get_db(request: Request) -> Neo4jClient:
 
 @router.get("/admin/graph/data")
 async def get_graph_data(request: Request) -> dict:
-    """Get graph data for visualization - 10% of total."""
+    """Get graph data - 10% of total for performance."""
     db = get_db(request)
 
     nodes = []
     links = []
 
-    # Get concepts (10% - ~200 from typical 2000)
+    # Get concepts (10% - ~200)
     concepts = await db.execute_query(
         """
         MATCH (c:Concept)
@@ -52,37 +56,40 @@ async def get_graph_data(request: Request) -> dict:
             "id": c["id"],
             "name": c["name"],
             "type": "concept",
+            "subtype": c["type"] or "unknown",
             "conn": c["conn"] or 0,
         })
 
-    # Get semantic memories (10% - ~80 from typical 800)
+    # Get semantic memories (10% - ~80)
     memories = await db.execute_query(
         """
         MATCH (s:SemanticMemory)
         OPTIONAL MATCH (s)-[r]-()
         WITH s, count(r) as conn
-        RETURN s.id as id, s.content as content, conn
+        RETURN s.id as id, s.content as content, s.memory_type as type, conn
         ORDER BY conn DESC
         LIMIT 80
         """
     )
     for m in memories:
         content = m["content"] or ""
-        short = content[:40] + "..." if len(content) > 40 else content
+        short = content[:50] + "..." if len(content) > 50 else content
         nodes.append({
             "id": m["id"],
             "name": short,
+            "fullContent": content,
             "type": "semantic",
+            "subtype": m["type"] or "fact",
             "conn": m["conn"] or 0,
         })
 
-    # Get episodic memories (10% - ~50 from typical 500)
+    # Get episodic memories (10% - ~50)
     episodes = await db.execute_query(
         """
         MATCH (e:EpisodicMemory)
         OPTIONAL MATCH (e)-[r]-()
         WITH e, count(r) as conn
-        RETURN e.id as id, e.query as query, conn
+        RETURN e.id as id, e.query as query, e.behavior_name as behavior, conn
         ORDER BY conn DESC
         LIMIT 50
         """
@@ -93,26 +100,32 @@ async def get_graph_data(request: Request) -> dict:
         nodes.append({
             "id": e["id"],
             "name": short,
+            "fullContent": query,
             "type": "episodic",
+            "subtype": e["behavior"] or "unknown",
             "conn": e["conn"] or 0,
         })
 
-    # Get node IDs for filtering links
+    # Get node IDs for filtering
     node_ids = {n["id"] for n in nodes}
 
-    # Get concept-to-concept relationships (10% - ~300)
+    # Get concept relationships (10% - ~300)
     concept_rels = await db.execute_query(
         """
         MATCH (c1:Concept)-[r:RELATED_TO]->(c2:Concept)
-        RETURN c1.id as source, c2.id as target
+        RETURN c1.id as source, c2.id as target, r.type as relType
         LIMIT 300
         """
     )
     for r in concept_rels:
         if r["source"] in node_ids and r["target"] in node_ids:
-            links.append({"source": r["source"], "target": r["target"]})
+            links.append({
+                "source": r["source"],
+                "target": r["target"],
+                "relType": r["relType"] or "related_to",
+            })
 
-    # Get memory-to-concept relationships (10% - ~200)
+    # Get memory relationships (10% - ~200)
     memory_rels = await db.execute_query(
         """
         MATCH (s:SemanticMemory)-[:ABOUT]->(c:Concept)
@@ -122,9 +135,13 @@ async def get_graph_data(request: Request) -> dict:
     )
     for r in memory_rels:
         if r["source"] in node_ids and r["target"] in node_ids:
-            links.append({"source": r["source"], "target": r["target"]})
+            links.append({
+                "source": r["source"],
+                "target": r["target"],
+                "relType": "about",
+            })
 
-    # Get episode-to-concept relationships (10% - ~150)
+    # Get episode relationships (10% - ~150)
     episode_rels = await db.execute_query(
         """
         MATCH (e:EpisodicMemory)-[:ACTIVATED]->(c:Concept)
@@ -134,7 +151,11 @@ async def get_graph_data(request: Request) -> dict:
     )
     for r in episode_rels:
         if r["source"] in node_ids and r["target"] in node_ids:
-            links.append({"source": r["source"], "target": r["target"]})
+            links.append({
+                "source": r["source"],
+                "target": r["target"],
+                "relType": "activated",
+            })
 
     return {"nodes": nodes, "links": links}
 
@@ -144,54 +165,109 @@ GRAPH_HTML = """
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Engram - Memory Graph</title>
+    <title>Engram - Knowledge Graph</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%230a0a12' stroke='%235eead4' stroke-width='6'/><circle cx='50' cy='50' r='15' fill='%235eead4'/></svg>">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; }
         body { background: #0a0a12; font-family: -apple-system, sans-serif; }
         #graph { width: 100vw; height: 100vh; }
-        #info {
-            position: absolute;
-            top: 16px;
-            left: 16px;
+        #info { position: absolute; top: 16px; left: 16px; color: #8b949e; z-index: 10; pointer-events: none; }
+        #info h1 { font-size: 11px; color: #5eead480; font-weight: 400; text-transform: uppercase; letter-spacing: 3px; margin-top: 6px; }
+        #info .brand {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 32px;
+            font-weight: 700;
             color: #5eead4;
-            font-size: 24px;
-            font-weight: bold;
-            z-index: 10;
-        }
-        #stats {
-            position: absolute;
-            top: 16px;
-            right: 16px;
-            background: rgba(10,10,18,0.9);
-            padding: 12px 16px;
-            border-radius: 6px;
-            border: 1px solid #1a1a2e;
-            font-size: 12px;
-            color: #8b949e;
-            z-index: 10;
+            text-shadow: 0 0 20px #5eead440;
+            letter-spacing: 4px;
         }
         #legend {
             position: absolute;
             bottom: 16px;
             left: 16px;
-            background: rgba(10,10,18,0.9);
+            background: rgba(10,10,18,0.95);
             padding: 12px 16px;
             border-radius: 6px;
             border: 1px solid #1a1a2e;
-            font-size: 12px;
-            color: #e0e0ff;
-            z-index: 10;
+            font-size: 11px;
+            color: #8b949e;
+            z-index: 100;
+            box-shadow: 0 0 15px rgba(94,234,212,0.08);
         }
-        .legend-item {
+        .legend-btn {
             display: flex;
             align-items: center;
-            margin: 6px 0;
+            width: 100%;
+            padding: 8px 12px;
+            margin: 4px 0;
+            background: #0f0f1a;
+            border: 1px solid #1a1a2e;
+            border-radius: 6px;
+            color: #e0e0ff;
+            cursor: pointer;
+            font-size: 12px;
+            font-family: inherit;
+            transition: all 0.2s;
         }
-        .legend-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            margin-right: 10px;
+        .legend-btn:hover { background: #1a1a2e; border-color: #5eead440; }
+        .legend-btn.active { background: #5eead415; border-color: #5eead4; }
+        .legend-dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 10px; }
+        .legend-count { margin-left: auto; padding-left: 16px; color: #5eead4; font-weight: 500; }
+        #search-box {
+            position: absolute;
+            top: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+        }
+        #search-input {
+            width: 300px;
+            padding: 10px 16px;
+            background: rgba(10,10,18,0.95);
+            border: 1px solid #1a1a2e;
+            border-radius: 6px;
+            color: #e0e0ff;
+            font-size: 14px;
+            font-family: inherit;
+        }
+        #search-input:focus { outline: none; border-color: #5eead4; }
+        #search-input::placeholder { color: #4a4a6a; }
+        #search-results {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            max-height: 300px;
+            overflow-y: auto;
+            background: rgba(10,10,18,0.98);
+            border: 1px solid #1a1a2e;
+            border-top: none;
+            border-radius: 0 0 6px 6px;
+            display: none;
+        }
+        #search-results.visible { display: block; }
+        .search-result {
+            padding: 10px 16px;
+            cursor: pointer;
+            border-bottom: 1px solid #1a1a2e;
+            display: flex;
+            align-items: center;
+        }
+        .search-result:hover { background: #1a1a2e; }
+        .search-result-name { flex: 1; color: #e0e0ff; }
+        .search-result-type { font-size: 10px; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; }
+        #stats {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            background: rgba(10,10,18,0.95);
+            padding: 12px 16px;
+            border-radius: 6px;
+            border: 1px solid #1a1a2e;
+            font-size: 11px;
+            color: #8b8ba0;
+            z-index: 10;
         }
         #loading {
             position: absolute;
@@ -201,40 +277,291 @@ GRAPH_HTML = """
             color: #5eead4;
             z-index: 10;
         }
+        #node-info {
+            position: absolute;
+            top: 100px;
+            right: 16px;
+            width: 280px;
+            max-height: 400px;
+            overflow-y: auto;
+            background: rgba(10,10,18,0.95);
+            padding: 16px;
+            border-radius: 8px;
+            border: 1px solid #1a1a2e;
+            font-size: 12px;
+            color: #e0e0ff;
+            display: none;
+            z-index: 10;
+        }
+        #node-info.visible { display: block; }
+        #node-info h3 { margin: 0 0 12px 0; font-size: 14px; color: #fff; word-break: break-word; }
+        #node-info .type-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: 500;
+            text-transform: uppercase;
+            margin-bottom: 12px;
+        }
+        #node-info .info-row { margin: 8px 0; padding: 8px 0; border-top: 1px solid #1a1a2e; }
+        #node-info .info-label { color: #6b6b8a; font-size: 10px; text-transform: uppercase; margin-bottom: 4px; }
+        #node-info .info-value { color: #e0e0ff; word-break: break-word; }
+        #node-info .close-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: none;
+            border: none;
+            color: #6b6b8a;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        #node-info .close-btn:hover { color: #5eead4; }
     </style>
 </head>
 <body>
     <div id="graph"></div>
-    <div id="info">Engram</div>
-    <div id="stats">Loading...</div>
-    <div id="legend">
-        <div class="legend-item"><span class="legend-dot" style="background:#5eead4"></span>Concept</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#a78bfa"></span>Semantic</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#f472b6"></span>Episodic</div>
+    <div id="info"><div class="brand">Engram</div><h1>Memory Graph</h1></div>
+    <div id="search-box">
+        <input type="text" id="search-input" placeholder="Search nodes...">
+        <div id="search-results"></div>
     </div>
-    <div id="loading">Loading...</div>
+    <div id="node-info">
+        <button class="close-btn" onclick="closeNodeInfo()">&times;</button>
+        <div id="node-info-content"></div>
+    </div>
+    <div id="legend">
+        <button class="legend-btn" data-type="concept" onclick="toggleType('concept')"><span class="legend-dot" style="background:#5eead4"></span>Concept<span class="legend-count" id="c-count">0</span></button>
+        <button class="legend-btn" data-type="semantic" onclick="toggleType('semantic')"><span class="legend-dot" style="background:#a78bfa"></span>Semantic<span class="legend-count" id="s-count">0</span></button>
+        <button class="legend-btn" data-type="episodic" onclick="toggleType('episodic')"><span class="legend-dot" style="background:#f472b6"></span>Episodic<span class="legend-count" id="e-count">0</span></button>
+    </div>
+    <div id="stats">Loading...</div>
+    <div id="loading">Loading graph...</div>
 
     <script src="https://unpkg.com/force-graph"></script>
     <script>
-        const colors = {
-            concept: '#5eead4',
-            semantic: '#a78bfa',
-            episodic: '#f472b6'
-        };
+        const typeColors = { concept: '#5eead4', semantic: '#a78bfa', episodic: '#f472b6' };
+        const typeLabels = { concept: 'Concept', semantic: 'Semantic Memory', episodic: 'Episodic Memory' };
+
+        let selected = null;
+        let neighbors = new Set();
+        let allNodes = {};
+        let selectedTypes = new Set();
+        let typeNeighbors = new Set();
+        let hoveredNode = null;
+
+        function getNodeColor(node) {
+            return typeColors[node.type] || '#5eead4';
+        }
+
+        function toggleType(type) {
+            if (selectedTypes.has(type)) {
+                selectedTypes.delete(type);
+            } else {
+                selectedTypes.add(type);
+            }
+            document.querySelectorAll('.legend-btn').forEach(el => {
+                el.classList.toggle('active', selectedTypes.has(el.dataset.type));
+            });
+            updateTypeNeighbors();
+            if (selectedTypes.size > 0) {
+                selected = null;
+                neighbors.clear();
+                closeNodeInfo();
+            }
+            refresh();
+        }
+
+        function updateTypeNeighbors() {
+            typeNeighbors.clear();
+            if (selectedTypes.size === 0) return;
+            Object.values(allNodes).forEach(n => {
+                if (selectedTypes.has(n.type)) typeNeighbors.add(n.id);
+            });
+            Graph.graphData().links.forEach(l => {
+                const sourceId = l.source.id || l.source;
+                const targetId = l.target.id || l.target;
+                const sourceNode = allNodes[sourceId];
+                const targetNode = allNodes[targetId];
+                if (sourceNode && targetNode) {
+                    if (selectedTypes.has(sourceNode.type) && selectedTypes.has(targetNode.type)) {
+                        typeNeighbors.add(sourceId);
+                        typeNeighbors.add(targetId);
+                    }
+                }
+            });
+        }
+
+        // Search
+        const searchInput = document.getElementById('search-input');
+        const searchResults = document.getElementById('search-results');
+
+        searchInput.addEventListener('input', (e) => {
+            const query = e.target.value.toLowerCase().trim();
+            if (query.length < 2) {
+                searchResults.classList.remove('visible');
+                return;
+            }
+            const matches = Object.values(allNodes)
+                .filter(n => n.name.toLowerCase().includes(query) || (n.fullContent && n.fullContent.toLowerCase().includes(query)))
+                .slice(0, 10);
+            if (matches.length === 0) {
+                searchResults.innerHTML = '<div style="padding:12px;color:#6b6b8a;">No results found</div>';
+            } else {
+                searchResults.innerHTML = matches.map(n => `
+                    <div class="search-result" data-id="${n.id}">
+                        <span class="search-result-name">${n.name.length > 40 ? n.name.slice(0,40) + '...' : n.name}</span>
+                        <span class="search-result-type" style="background:${getNodeColor(n)}20;color:${getNodeColor(n)}">${n.type}</span>
+                    </div>
+                `).join('');
+            }
+            searchResults.classList.add('visible');
+        });
+
+        searchResults.addEventListener('click', (e) => {
+            const result = e.target.closest('.search-result');
+            if (result) {
+                const node = allNodes[result.dataset.id];
+                if (node) {
+                    selectNode(node);
+                    searchInput.value = '';
+                    searchResults.classList.remove('visible');
+                }
+            }
+        });
+
+        searchInput.addEventListener('blur', () => {
+            setTimeout(() => searchResults.classList.remove('visible'), 200);
+        });
+
+        function selectNode(node) {
+            selectedTypes.clear();
+            typeNeighbors.clear();
+            document.querySelectorAll('.legend-btn').forEach(el => el.classList.remove('active'));
+            selected = node;
+            neighbors = new Set([node.id]);
+            Graph.graphData().links.forEach(l => {
+                if (l.source.id === node.id) neighbors.add(l.target.id);
+                if (l.target.id === node.id) neighbors.add(l.source.id);
+            });
+            showNodeInfo(node);
+            Graph.centerAt(node.x, node.y, 500);
+            Graph.zoom(2, 500);
+            refresh();
+        }
+
+        function showNodeInfo(node) {
+            const panel = document.getElementById('node-info');
+            const content = document.getElementById('node-info-content');
+            const color = getNodeColor(node);
+
+            let html = `
+                <span class="type-badge" style="background:${color}20;color:${color}">${typeLabels[node.type] || node.type}</span>
+                <h3>${node.name}</h3>
+                <div class="info-row">
+                    <div class="info-label">Connections</div>
+                    <div class="info-value">${node.conn || 0} linked nodes</div>
+                </div>
+            `;
+
+            if (node.fullContent && node.fullContent !== node.name) {
+                html += `
+                    <div class="info-row">
+                        <div class="info-label">Content</div>
+                        <div class="info-value" style="white-space:pre-wrap;max-height:150px;overflow-y:auto;">${node.fullContent}</div>
+                    </div>
+                `;
+            }
+
+            if (node.subtype) {
+                html += `
+                    <div class="info-row">
+                        <div class="info-label">Subtype</div>
+                        <div class="info-value">${node.subtype}</div>
+                    </div>
+                `;
+            }
+
+            // Connected nodes
+            const connected = [];
+            Graph.graphData().links.forEach(l => {
+                if (l.source.id === node.id && allNodes[l.target.id]) connected.push(allNodes[l.target.id]);
+                else if (l.target.id === node.id && allNodes[l.source.id]) connected.push(allNodes[l.source.id]);
+            });
+
+            if (connected.length > 0) {
+                html += `
+                    <div class="info-row">
+                        <div class="info-label">Connected To</div>
+                        <div class="info-value">
+                            ${connected.slice(0, 8).map(n =>
+                                `<div style="margin:4px 0;padding:4px 8px;background:#0f0f1a;border-radius:4px;font-size:11px;">
+                                    <span style="color:${getNodeColor(n)}">●</span> ${n.name.slice(0,30)}${n.name.length > 30 ? '..' : ''}
+                                </div>`
+                            ).join('')}
+                            ${connected.length > 8 ? `<div style="color:#6b6b8a;font-size:11px;margin-top:4px;">...and ${connected.length - 8} more</div>` : ''}
+                        </div>
+                    </div>
+                `;
+            }
+
+            content.innerHTML = html;
+            panel.classList.add('visible');
+        }
+
+        function closeNodeInfo() {
+            document.getElementById('node-info').classList.remove('visible');
+        }
 
         const Graph = ForceGraph()
             (document.getElementById('graph'))
             .backgroundColor('#0a0a12')
-            .nodeCanvasObject((node, ctx) => {
-                // Size based on connections (min 4, max 20)
+            .nodeCanvasObject((node, ctx, globalScale) => {
+                // Size based on connections (4-20)
                 const size = Math.min(20, Math.max(4, Math.sqrt(node.conn || 1) * 3));
-                const color = colors[node.type] || '#5eead4';
+                const color = getNodeColor(node);
 
-                // Simple circle
+                const isNodeActive = !selected || neighbors.has(node.id);
+                const isTypeActive = selectedTypes.size === 0 || typeNeighbors.has(node.id);
+                const isActive = isNodeActive && isTypeActive;
+                const isHovered = hoveredNode === node;
+                const isSelected = selected === node;
+
+                // Glow for hover/selection
+                if (isHovered || isSelected) {
+                    ctx.shadowColor = color;
+                    ctx.shadowBlur = isSelected ? 20 : 12;
+                }
+
+                // Draw node
                 ctx.beginPath();
                 ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
-                ctx.fillStyle = color;
+                ctx.fillStyle = isActive ? color : '#1a1a2e';
                 ctx.fill();
+                ctx.shadowBlur = 0;
+
+                // White ring on hover/selection
+                if (isHovered || isSelected) {
+                    ctx.beginPath();
+                    ctx.arc(node.x, node.y, size + 2, 0, 2 * Math.PI);
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = isSelected ? 2 : 1;
+                    ctx.stroke();
+                }
+
+                // Labels for larger nodes when zoomed
+                const showLabel = (selected && neighbors.has(node.id)) ||
+                                  (selectedTypes.size > 0 && typeNeighbors.has(node.id)) ||
+                                  (globalScale > 1.0 && size > 10) ||
+                                  (globalScale > 2.0);
+                if (showLabel && isActive) {
+                    const label = node.name.length > 20 ? node.name.slice(0,20) + '..' : node.name;
+                    ctx.font = `${10/globalScale}px -apple-system, sans-serif`;
+                    ctx.textAlign = 'center';
+                    ctx.fillStyle = '#e0e0ff';
+                    ctx.fillText(label, node.x, node.y + size + 10/globalScale);
+                }
             })
             .nodePointerAreaPaint((node, color, ctx) => {
                 const size = Math.min(20, Math.max(4, Math.sqrt(node.conn || 1) * 3)) + 4;
@@ -243,35 +570,112 @@ GRAPH_HTML = """
                 ctx.fillStyle = color;
                 ctx.fill();
             })
-            .linkColor(() => '#2a2a4e')
-            .linkWidth(1)
-            .nodeLabel(n => n.name)
+            .linkColor(l => {
+                const sourceId = l.source.id || l.source;
+                const targetId = l.target.id || l.target;
+                const sourceNode = allNodes[sourceId];
+                const targetNode = allNodes[targetId];
+
+                if (selectedTypes.size > 0) {
+                    if (sourceNode && targetNode && selectedTypes.has(sourceNode.type) && selectedTypes.has(targetNode.type)) {
+                        return '#5eead4';
+                    }
+                    return '#0a0a12';
+                }
+                if (!selected) return '#2a2a4e';
+                return (sourceId === selected.id || targetId === selected.id) ? '#5eead4' : '#1a1a2e';
+            })
+            .linkWidth(l => {
+                const sourceId = l.source.id || l.source;
+                const targetId = l.target.id || l.target;
+                if (selectedTypes.size > 0) {
+                    const sourceNode = allNodes[sourceId];
+                    const targetNode = allNodes[targetId];
+                    if (sourceNode && targetNode && selectedTypes.has(sourceNode.type) && selectedTypes.has(targetNode.type)) {
+                        return 2;
+                    }
+                    return 0.2;
+                }
+                if (!selected) return 1;
+                return (sourceId === selected.id || targetId === selected.id) ? 2 : 0.2;
+            })
+            .onNodeHover(node => {
+                hoveredNode = node;
+                document.body.style.cursor = node ? 'pointer' : 'default';
+                refresh();
+            })
             .onNodeClick(node => {
-                Graph.centerAt(node.x, node.y, 500);
-                Graph.zoom(2, 500);
+                selectedTypes.clear();
+                typeNeighbors.clear();
+                document.querySelectorAll('.legend-btn').forEach(el => el.classList.remove('active'));
+
+                if (selected === node) {
+                    selected = null;
+                    neighbors.clear();
+                    closeNodeInfo();
+                } else {
+                    selected = node;
+                    neighbors = new Set([node.id]);
+                    Graph.graphData().links.forEach(l => {
+                        if (l.source.id === node.id) neighbors.add(l.target.id);
+                        if (l.target.id === node.id) neighbors.add(l.source.id);
+                    });
+                    showNodeInfo(node);
+                }
+                refresh();
+            })
+            .onBackgroundClick(() => {
+                selected = null;
+                neighbors.clear();
+                selectedTypes.clear();
+                typeNeighbors.clear();
+                document.querySelectorAll('.legend-btn').forEach(el => el.classList.remove('active'));
+                closeNodeInfo();
+                refresh();
             })
             .cooldownTime(3000)
-            .d3VelocityDecay(0.3);
+            .d3VelocityDecay(0.3)
+            .nodeLabel(null);
 
-        // Simple forces - just spread out evenly
+        // Simple forces
         Graph.d3Force('charge').strength(-80);
         Graph.d3Force('link').distance(60);
+
+        function refresh() {
+            Graph.nodeColor(Graph.nodeColor());
+            Graph.linkColor(Graph.linkColor());
+        }
+
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') {
+                selected = null;
+                neighbors.clear();
+                selectedTypes.clear();
+                typeNeighbors.clear();
+                document.querySelectorAll('.legend-btn').forEach(el => el.classList.remove('active'));
+                closeNodeInfo();
+                searchInput.value = '';
+                searchResults.classList.remove('visible');
+                refresh();
+            }
+        });
 
         fetch('/admin/graph/data')
             .then(r => r.json())
             .then(data => {
                 document.getElementById('loading').style.display = 'none';
 
+                data.nodes.forEach(n => allNodes[n.id] = n);
+
                 const c = data.nodes.filter(n => n.type === 'concept').length;
                 const s = data.nodes.filter(n => n.type === 'semantic').length;
                 const e = data.nodes.filter(n => n.type === 'episodic').length;
-
+                document.getElementById('c-count').textContent = c;
+                document.getElementById('s-count').textContent = s;
+                document.getElementById('e-count').textContent = e;
                 document.getElementById('stats').innerHTML =
-                    'Nodes: <b style="color:#5eead4">' + data.nodes.length + '</b><br>' +
-                    'Links: <b style="color:#5eead4">' + data.links.length + '</b><br><br>' +
-                    'Concepts: ' + c + '<br>' +
-                    'Semantic: ' + s + '<br>' +
-                    'Episodic: ' + e;
+                    '<div>Nodes: <strong style="color:#5eead4">' + data.nodes.length + '</strong></div>' +
+                    '<div>Links: <strong style="color:#5eead4">' + data.links.length + '</strong></div>';
 
                 Graph.graphData(data);
 
