@@ -34,20 +34,20 @@ def get_db(request: Request) -> Neo4jClient:
 
 @router.get("/admin/graph/data")
 async def get_graph_data(request: Request) -> dict:
-    """Get 55% most important data (by connection count)."""
+    """Get 75% most important data (by connection count)."""
     db = get_db(request)
 
     nodes = []
     links = []
 
-    # Get top 55% concepts by connection count
+    # Get top 75% concepts by connection count
     concepts = await db.execute_query(
         """
         MATCH (c:Concept)
         OPTIONAL MATCH (c)-[r]-()
         WITH c, count(r) as conn
         ORDER BY conn DESC
-        LIMIT 1100
+        LIMIT 1500
         RETURN c.id as id, c.name as name, c.type as type, conn
         """
     )
@@ -60,14 +60,14 @@ async def get_graph_data(request: Request) -> dict:
             "conn": c["conn"] or 0,
         })
 
-    # Get top 55% semantic memories by connection count
+    # Get top 75% semantic memories by connection count
     memories = await db.execute_query(
         """
         MATCH (s:SemanticMemory)
         OPTIONAL MATCH (s)-[r]-()
         WITH s, count(r) as conn
         ORDER BY conn DESC
-        LIMIT 440
+        LIMIT 600
         RETURN s.id as id, s.content as content, s.memory_type as type, conn
         """
     )
@@ -83,14 +83,14 @@ async def get_graph_data(request: Request) -> dict:
             "conn": m["conn"] or 0,
         })
 
-    # Get top 55% episodic memories by connection count
+    # Get top 75% episodic memories by connection count
     episodes = await db.execute_query(
         """
         MATCH (e:EpisodicMemory)
         OPTIONAL MATCH (e)-[r]-()
         WITH e, count(r) as conn
         ORDER BY conn DESC
-        LIMIT 275
+        LIMIT 375
         RETURN e.id as id, e.query as query, e.behavior_name as behavior, conn
         """
     )
@@ -115,7 +115,7 @@ async def get_graph_data(request: Request) -> dict:
         MATCH (c1:Concept)-[r:RELATED_TO]->(c2:Concept)
         RETURN c1.id as source, c2.id as target, r.type as relType, coalesce(r.weight, 0.5) as weight
         ORDER BY r.weight DESC
-        LIMIT 2750
+        LIMIT 3750
         """
     )
     for r in concept_rels:
@@ -130,7 +130,7 @@ async def get_graph_data(request: Request) -> dict:
         """
         MATCH (s:SemanticMemory)-[:ABOUT]->(c:Concept)
         RETURN s.id as source, c.id as target
-        LIMIT 1650
+        LIMIT 2250
         """
     )
     for r in memory_rels:
@@ -145,7 +145,7 @@ async def get_graph_data(request: Request) -> dict:
         """
         MATCH (e:EpisodicMemory)-[:ACTIVATED]->(c:Concept)
         RETURN e.id as source, c.id as target
-        LIMIT 1100
+        LIMIT 1500
         """
     )
     for r in episode_rels:
@@ -622,7 +622,8 @@ GRAPH_HTML = """
             (document.getElementById('graph'))
             .backgroundColor('#0a0a12')
             .nodeCanvasObject((node, ctx, globalScale) => {
-                const size = Math.min(20, Math.max(4, Math.sqrt(node.conn || 1) * 3));
+                // Size range 3-40px based on connections (more noticeable difference)
+                const size = Math.min(40, Math.max(3, Math.sqrt(node.conn || 1) * 5));
                 const color = getNodeColor(node);
 
                 const isNodeActive = !selected || neighbors.has(node.id);
@@ -633,7 +634,7 @@ GRAPH_HTML = """
 
                 if (isHovered || isSelected) {
                     ctx.shadowColor = color;
-                    ctx.shadowBlur = isSelected ? 20 : 12;
+                    ctx.shadowBlur = isSelected ? 25 : 15;
                 }
 
                 ctx.beginPath();
@@ -644,26 +645,26 @@ GRAPH_HTML = """
 
                 if (isHovered || isSelected) {
                     ctx.beginPath();
-                    ctx.arc(node.x, node.y, size + 2, 0, 2 * Math.PI);
+                    ctx.arc(node.x, node.y, size + 3, 0, 2 * Math.PI);
                     ctx.strokeStyle = '#fff';
-                    ctx.lineWidth = isSelected ? 2 : 1;
+                    ctx.lineWidth = isSelected ? 3 : 2;
                     ctx.stroke();
                 }
 
                 const showLabel = (selected && neighbors.has(node.id)) ||
                                   (selectedTypes.size > 0 && typeNeighbors.has(node.id)) ||
-                                  (globalScale > 1.0 && size > 10) ||
-                                  (globalScale > 2.0);
+                                  (globalScale > 0.8 && size > 15) ||
+                                  (globalScale > 1.5);
                 if (showLabel && isActive) {
                     const label = node.name.length > 20 ? node.name.slice(0,20) + '..' : node.name;
-                    ctx.font = `${10/globalScale}px -apple-system, sans-serif`;
+                    ctx.font = `${12/globalScale}px -apple-system, sans-serif`;
                     ctx.textAlign = 'center';
                     ctx.fillStyle = '#e0e0ff';
-                    ctx.fillText(label, node.x, node.y + size + 10/globalScale);
+                    ctx.fillText(label, node.x, node.y + size + 12/globalScale);
                 }
             })
             .nodePointerAreaPaint((node, color, ctx) => {
-                const size = Math.min(20, Math.max(4, Math.sqrt(node.conn || 1) * 3)) + 4;
+                const size = Math.min(40, Math.max(3, Math.sqrt(node.conn || 1) * 5)) + 5;
                 ctx.beginPath();
                 ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
                 ctx.fillStyle = color;
