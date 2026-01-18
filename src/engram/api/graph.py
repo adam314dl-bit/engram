@@ -524,10 +524,12 @@ GRAPH_HTML = """
             }
             ctx.stroke();
 
-            // Draw nodes
+            // Draw nodes - scale with zoom for better visibility
             for (const node of nodes) {
                 const pos = worldToScreen(node.x, node.y);
-                const radius = Math.max(2, Math.min(15, Math.sqrt(node.conn || 1) * 1.5)) * Math.min(1, scale * 0.8 + 0.2);
+                // Base size from connections, then scale with zoom
+                const baseSize = Math.max(3, Math.min(12, Math.sqrt(node.conn || 1) * 2));
+                const radius = baseSize * Math.max(0.5, Math.min(3, scale));
 
                 ctx.beginPath();
                 ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
@@ -544,12 +546,12 @@ GRAPH_HTML = """
                 ctx.shadowBlur = 0;
 
                 // Draw label at higher zoom
-                if (scale > 1.5 || (scale > 0.8 && node.conn > 5)) {
-                    const fontSize = Math.max(8, Math.min(12, 10 * scale));
+                if (scale > 1.2 || (scale > 0.6 && node.conn > 5)) {
+                    const fontSize = Math.max(10, Math.min(16, 12 * scale));
                     ctx.font = `${fontSize}px -apple-system, sans-serif`;
-                    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+                    ctx.fillStyle = 'rgba(255,255,255,0.8)';
                     ctx.textAlign = 'center';
-                    const label = node.name.length > 20 ? node.name.slice(0, 20) + '...' : node.name;
+                    const label = node.name.length > 25 ? node.name.slice(0, 25) + '...' : node.name;
                     ctx.fillText(label, pos.x, pos.y + radius + fontSize + 2);
                 }
             }
@@ -559,12 +561,17 @@ GRAPH_HTML = """
 
         function findNodeAt(sx, sy) {
             const world = screenToWorld(sx, sy);
-            const threshold = 15 / scale;
 
             for (const node of nodes) {
                 const dx = node.x - world.x;
                 const dy = node.y - world.y;
-                if (Math.sqrt(dx * dx + dy * dy) < threshold) {
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                // Use same radius calculation as rendering
+                const baseSize = Math.max(3, Math.min(12, Math.sqrt(node.conn || 1) * 2));
+                const radius = baseSize * Math.max(0.5, Math.min(3, scale));
+                // Convert screen radius to world radius, add padding for easier clicking
+                const worldRadius = (radius / scale) + 5;
+                if (dist < worldRadius) {
                     return node;
                 }
             }
