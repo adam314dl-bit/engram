@@ -843,16 +843,18 @@ GRAPH_HTML = """
         let nodeRanks = {};  // nodeId -> rank (lower = more important)
 
         // Dynamic LOD: percentages of total nodes shown at each zoom level
-        // These are percentages, actual counts computed from data
+        // More gradual progression to keep animations visible longer
         const lodPercentages = {
-            0.15: 0.02,   // Very zoomed out: top 2%
-            0.25: 0.05,   // Zoomed out: top 5%
-            0.4:  0.10,   // Mid zoom: top 10%
-            0.6:  0.20,   // Closer: top 20%
-            0.8:  0.35,   // Getting close: top 35%
-            1.0:  0.50,   // Normal: top 50%
-            1.5:  0.75,   // Zoomed in: top 75%
-            2.0:  1.0,    // Very zoomed: all nodes
+            0.10: 0.01,   // Extremely zoomed out: top 1% (biggest stars only)
+            0.20: 0.03,   // Very zoomed out: top 3%
+            0.30: 0.06,   // Zoomed out: top 6%
+            0.45: 0.12,   // Mid-far: top 12%
+            0.60: 0.20,   // Mid zoom: top 20%
+            0.80: 0.30,   // Closer: top 30%
+            1.00: 0.45,   // Normal: top 45%
+            1.30: 0.60,   // Zoomed in: top 60%
+            1.70: 0.80,   // More zoomed: top 80%
+            2.50: 1.0,    // Very zoomed: all nodes
             999:  1.0
         };
 
@@ -1206,7 +1208,7 @@ GRAPH_HTML = """
 
                 // Performance mode: disable expensive effects when many nodes visible
                 const visibleCount = getLodLimit();
-                const perfMode = visibleCount > 300;  // Simplified rendering above 300 nodes
+                const perfMode = visibleCount > 800;  // Keep animations until 800+ nodes visible
 
                 // Importance filter
                 const meetsImportance = (node.weight || 0) >= importanceThreshold;
@@ -1429,7 +1431,7 @@ GRAPH_HTML = """
             .linkDirectionalParticles(l => {
                 // Performance mode: no particles when many nodes visible
                 const visibleCount = getLodLimit();
-                if (visibleCount > 300) return 0;
+                if (visibleCount > 800) return 0;
 
                 // Show particles on path links
                 if (pathLinks.has(l)) return 4;
