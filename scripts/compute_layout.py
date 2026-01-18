@@ -14,9 +14,14 @@ import sys
 from pathlib import Path
 
 import networkx as nx
+from dotenv import load_dotenv
+
+# Load .env file from project root
+project_root = Path(__file__).parent.parent
+load_dotenv(project_root / ".env")
 
 # Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(project_root / "src"))
 
 from engram.storage.neo4j_client import Neo4jClient
 
