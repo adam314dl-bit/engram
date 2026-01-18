@@ -694,26 +694,22 @@ GRAPH_HTML = """
 
         // Dynamic minimum connection threshold based on zoom
         // Returns minimum connections a node needs to be visible
-        // Higher threshold = fewer nodes shown
         function getMinConnThreshold() {
-            if (currentZoom < 0.2) return Math.max(50, maxConn * 0.5);    // Only mega-hubs
-            if (currentZoom < 0.35) return Math.max(35, maxConn * 0.35);
-            if (currentZoom < 0.5) return Math.max(25, maxConn * 0.25);
-            if (currentZoom < 0.7) return Math.max(15, maxConn * 0.15);
-            if (currentZoom < 1.0) return Math.max(10, maxConn * 0.08);
-            if (currentZoom < 1.5) return Math.max(5, maxConn * 0.04);
-            if (currentZoom < 2.5) return 3;
-            return 1;
+            if (currentZoom < 0.15) return Math.max(8, maxConn * 0.10);
+            if (currentZoom < 0.3) return Math.max(5, maxConn * 0.06);
+            if (currentZoom < 0.5) return Math.max(4, maxConn * 0.04);
+            if (currentZoom < 0.8) return Math.max(3, maxConn * 0.02);
+            if (currentZoom < 1.2) return 2;
+            return 1;  // Show all when zoomed in
         }
 
-        // Maximum neighbors to show per hub (fewer = cleaner graph)
+        // Maximum neighbors to show per hub
         function getMaxNeighborsPerHub() {
-            if (currentZoom < 0.3) return 5;
-            if (currentZoom < 0.5) return 8;
-            if (currentZoom < 0.7) return 12;
-            if (currentZoom < 1.0) return 20;
-            if (currentZoom < 1.5) return 35;
-            return 60;
+            if (currentZoom < 0.2) return 15;
+            if (currentZoom < 0.4) return 25;
+            if (currentZoom < 0.6) return 40;
+            if (currentZoom < 1.0) return 60;
+            return 100;
         }
 
         // Compute which nodes are visible using hierarchical filtering
@@ -1890,7 +1886,7 @@ GRAPH_HTML = """
 
                         // Zoom to the dense area (slightly zoomed out)
                         Graph.centerAt(cx, cy, 1000);
-                        Graph.zoom(0.55, 1000);
+                        Graph.zoom(0.25, 1000);  // Start zoomed out to see structure
                     }
                 }, 3000);  // Wait for simulation to settle
             });
