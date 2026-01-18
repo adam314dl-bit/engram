@@ -705,11 +705,11 @@ GRAPH_HTML = """
 
         // Maximum neighbors to show per hub
         function getMaxNeighborsPerHub() {
-            if (currentZoom < 0.2) return 5;
-            if (currentZoom < 0.4) return 8;
-            if (currentZoom < 0.6) return 12;
-            if (currentZoom < 1.0) return 18;
-            return 30;
+            if (currentZoom < 0.3) return 2;
+            if (currentZoom < 0.5) return 3;
+            if (currentZoom < 0.8) return 5;
+            if (currentZoom < 1.2) return 8;
+            return 15;
         }
 
         // Compute which nodes are visible using hierarchical filtering
