@@ -50,7 +50,7 @@ async def get_graph_data(request: Request) -> dict:
         RETURN c.id as id, c.name as name, c.type as type,
                coalesce(c.activation_count, 0) as weight, conn
         ORDER BY conn DESC
-        LIMIT 100
+        LIMIT 300
         """
     )
     for c in concepts:
@@ -69,7 +69,7 @@ async def get_graph_data(request: Request) -> dict:
         RETURN s.id as id, s.content as content, s.memory_type as type,
                s.importance as importance
         ORDER BY coalesce(s.importance, 0) DESC
-        LIMIT 40
+        LIMIT 120
         """
     )
     for m in memories:
@@ -91,7 +91,7 @@ async def get_graph_data(request: Request) -> dict:
         RETURN e.id as id, e.query as query, e.behavior_name as behavior,
                e.importance as importance
         ORDER BY coalesce(e.importance, 0) DESC
-        LIMIT 25
+        LIMIT 80
         """
     )
     for e in episodes:
@@ -113,7 +113,7 @@ async def get_graph_data(request: Request) -> dict:
         RETURN c1.id as source, c2.id as target,
                r.type as relType, coalesce(r.weight, 0.5) as weight
         ORDER BY coalesce(r.weight, 0.5) DESC
-        LIMIT 150
+        LIMIT 500
         """
     )
     for r in concept_rels:
@@ -130,7 +130,7 @@ async def get_graph_data(request: Request) -> dict:
         """
         MATCH (s:SemanticMemory)-[:ABOUT]->(c:Concept)
         RETURN s.id as source, c.id as target
-        LIMIT 75
+        LIMIT 250
         """
     )
     for r in memory_rels:
@@ -147,7 +147,7 @@ async def get_graph_data(request: Request) -> dict:
         """
         MATCH (e:EpisodicMemory)-[:ACTIVATED]->(c:Concept)
         RETURN e.id as source, c.id as target
-        LIMIT 50
+        LIMIT 150
         """
     )
     for r in episode_rels:
@@ -696,34 +696,33 @@ GRAPH_HTML = """
 
         // How many top hubs to start from (based on zoom)
         function getNumStartHubs() {
-            if (currentZoom < 0.5) return 1;
-            if (currentZoom < 0.8) return 2;
-            if (currentZoom < 1.2) return 3;
-            if (currentZoom < 1.8) return 5;
-            return 8;
+            if (currentZoom < 0.5) return 3;
+            if (currentZoom < 0.8) return 5;
+            if (currentZoom < 1.2) return 8;
+            if (currentZoom < 1.8) return 12;
+            return 20;
         }
 
         // How many steps (hops) from main hubs
         function getMaxDepth() {
-            if (currentZoom < 0.8) return 1;
-            if (currentZoom < 1.5) return 2;
-            return 3;
+            if (currentZoom < 0.8) return 2;
+            if (currentZoom < 1.5) return 3;
+            return 4;
         }
 
         // How many top neighbors to explore at each step
         function getNeighborsPerStep() {
-            if (currentZoom < 1.0) return 1;
-            if (currentZoom < 1.5) return 2;
-            if (currentZoom < 2.0) return 3;
-            return 4;
+            if (currentZoom < 1.0) return 2;
+            if (currentZoom < 1.5) return 3;
+            if (currentZoom < 2.0) return 4;
+            return 5;
         }
 
-        // Minimum connections for a neighbor to be included
+        // Minimum connections for a neighbor to be included (lowered since server already limits to 5%)
         function getMinConnFilter() {
-            if (currentZoom < 0.5) return Math.max(20, maxConn * 0.3);
-            if (currentZoom < 0.8) return Math.max(12, maxConn * 0.15);
-            if (currentZoom < 1.2) return Math.max(6, maxConn * 0.08);
-            if (currentZoom < 1.8) return Math.max(3, maxConn * 0.03);
+            if (currentZoom < 0.5) return Math.max(3, maxConn * 0.1);
+            if (currentZoom < 0.8) return Math.max(2, maxConn * 0.05);
+            if (currentZoom < 1.2) return Math.max(1, maxConn * 0.02);
             return 1;
         }
 
