@@ -84,14 +84,15 @@ async def compute_and_store_layout():
     print("Computing spring layout (this may take a minute for large graphs)...")
 
     # Use spring layout with parameters tuned for large graphs
-    # k controls optimal distance between nodes
+    # k controls optimal distance between nodes (higher = more spread)
     # iterations controls quality vs speed
+    # scale controls overall coordinate range
     positions = nx.spring_layout(
         G,
-        k=2.0 / (G.number_of_nodes() ** 0.5) if G.number_of_nodes() > 0 else 1.0,
+        k=5.0 / (G.number_of_nodes() ** 0.5) if G.number_of_nodes() > 0 else 1.0,
         iterations=100,
         seed=42,  # Reproducible layout
-        scale=1000,  # Scale to reasonable coordinate range
+        scale=3000,  # Larger scale for more spread
     )
 
     print("Layout computed. Storing positions in Neo4j...")
