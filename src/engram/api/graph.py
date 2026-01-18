@@ -35,127 +35,138 @@ def get_db(request: Request) -> Neo4jClient:
 
 @router.get("/admin/graph/data")
 async def get_graph_data(request: Request) -> dict:
-    """Get graph data for visualization."""
+    """Get graph data for visualization.
+
+    Returns top N most connected nodes for performance.
+    Hardcoded limit: 1200 nodes max for smooth Canvas 2D rendering.
+    """
     db = get_db(request)
 
+    # Hardcoded limit for smooth performance
+    MAX_NODES = 1200
+
+    # Get all nodes with their connection counts in one query
+    # This lets us pick the most connected nodes across all types
+    all_nodes_query = await db.execute_query(
+        """
+        // Get concepts with connection count
+        MATCH (c:Concept)
+        OPTIONAL MATCH (c)-[r]-()
+        WITH c, count(r) as conn
+        RETURN c.id as id, c.name as name, 'concept' as type,
+               c.type as subtype, coalesce(c.activation_count, 0) + 1 as weight,
+               null as fullContent, conn
+        ORDER BY conn DESC
+
+        UNION ALL
+
+        // Get semantic memories with connection count
+        MATCH (s:SemanticMemory)
+        OPTIONAL MATCH (s)-[r]-()
+        WITH s, count(r) as conn
+        RETURN s.id as id,
+               CASE WHEN size(s.content) > 50
+                    THEN substring(s.content, 0, 50) + '...'
+                    ELSE s.content END as name,
+               'semantic' as type,
+               coalesce(s.memory_type, 'fact') as subtype,
+               coalesce(s.importance, 5) / 2.0 as weight,
+               s.content as fullContent, conn
+        ORDER BY conn DESC
+
+        UNION ALL
+
+        // Get episodic memories with connection count
+        MATCH (e:EpisodicMemory)
+        OPTIONAL MATCH (e)-[r]-()
+        WITH e, count(r) as conn
+        RETURN e.id as id,
+               CASE WHEN size(e.query) > 40
+                    THEN substring(e.query, 0, 40) + '...'
+                    ELSE e.query END as name,
+               'episodic' as type,
+               coalesce(e.behavior_name, 'unknown') as subtype,
+               coalesce(e.importance, 5) / 2.0 as weight,
+               e.query as fullContent, conn
+        ORDER BY conn DESC
+        """
+    )
+
+    # Sort all nodes by connection count and take top N
+    all_nodes = sorted(all_nodes_query, key=lambda x: x["conn"] or 0, reverse=True)
+    top_nodes = all_nodes[:MAX_NODES]
+
+    # Build node list and ID set for filtering links
     nodes = []
+    node_ids = set()
+    for n in top_nodes:
+        node_ids.add(n["id"])
+        node_data = {
+            "id": n["id"],
+            "name": n["name"] or "unnamed",
+            "type": n["type"],
+            "subtype": n["subtype"] or "unknown",
+            "weight": n["weight"] or 1,
+            "conn": n["conn"] or 0,
+        }
+        if n["fullContent"]:
+            node_data["fullContent"] = n["fullContent"]
+        nodes.append(node_data)
+
+    # Get links only between nodes we're keeping
     links = []
 
-    # Get concepts (ordered by activation for importance-based LOD)
-    concepts = await db.execute_query(
-        """
-        MATCH (c:Concept)
-        RETURN c.id as id, c.name as name, c.type as type,
-               coalesce(c.activation_count, 0) as weight
-        ORDER BY coalesce(c.activation_count, 0) DESC
-        LIMIT 2000
-        """
-    )
-    for c in concepts:
-        nodes.append({
-            "id": c["id"],
-            "name": c["name"],
-            "type": "concept",
-            "subtype": c["type"] or "unknown",
-            "weight": c["weight"] + 1,
-        })
-
-    # Get semantic memories (ordered by importance for LOD)
-    memories = await db.execute_query(
-        """
-        MATCH (s:SemanticMemory)
-        RETURN s.id as id, s.content as content, s.memory_type as type,
-               s.importance as importance
-        ORDER BY coalesce(s.importance, 0) DESC
-        LIMIT 800
-        """
-    )
-    for m in memories:
-        content = m["content"] or ""
-        short_content = content[:50] + "..." if len(content) > 50 else content
-        nodes.append({
-            "id": m["id"],
-            "name": short_content,
-            "fullContent": content,
-            "type": "semantic",
-            "subtype": m["type"] or "fact",
-            "weight": (m["importance"] or 5) / 2,
-        })
-
-    # Get episodic memories (ordered by importance for LOD)
-    episodes = await db.execute_query(
-        """
-        MATCH (e:EpisodicMemory)
-        RETURN e.id as id, e.query as query, e.behavior_name as behavior,
-               e.importance as importance
-        ORDER BY coalesce(e.importance, 0) DESC
-        LIMIT 500
-        """
-    )
-    for e in episodes:
-        query = e["query"] or ""
-        short_query = query[:40] + "..." if len(query) > 40 else query
-        nodes.append({
-            "id": e["id"],
-            "name": short_query,
-            "fullContent": query,
-            "type": "episodic",
-            "subtype": e["behavior"] or "unknown",
-            "weight": (e["importance"] or 5) / 2,
-        })
-
-    # Get concept-to-concept relationships
+    # Concept-to-concept relationships
     concept_rels = await db.execute_query(
         """
         MATCH (c1:Concept)-[r:RELATED_TO]->(c2:Concept)
         RETURN c1.id as source, c2.id as target,
                r.type as relType, coalesce(r.weight, 0.5) as weight
-        ORDER BY coalesce(r.weight, 0.5) DESC
-        LIMIT 3000
         """
     )
     for r in concept_rels:
-        links.append({
-            "source": r["source"],
-            "target": r["target"],
-            "type": "concept_rel",
-            "relType": r["relType"] or "related_to",
-            "weight": r["weight"],
-        })
+        if r["source"] in node_ids and r["target"] in node_ids:
+            links.append({
+                "source": r["source"],
+                "target": r["target"],
+                "type": "concept_rel",
+                "relType": r["relType"] or "related_to",
+                "weight": r["weight"],
+            })
 
-    # Get memory-to-concept relationships
+    # Memory-to-concept relationships
     memory_rels = await db.execute_query(
         """
         MATCH (s:SemanticMemory)-[:ABOUT]->(c:Concept)
         RETURN s.id as source, c.id as target
-        LIMIT 2000
         """
     )
     for r in memory_rels:
-        links.append({
-            "source": r["source"],
-            "target": r["target"],
-            "type": "memory_concept",
-            "relType": "about",
-            "weight": 0.3,
-        })
+        if r["source"] in node_ids and r["target"] in node_ids:
+            links.append({
+                "source": r["source"],
+                "target": r["target"],
+                "type": "memory_concept",
+                "relType": "about",
+                "weight": 0.3,
+            })
 
-    # Get episode-to-concept relationships
+    # Episode-to-concept relationships
     episode_rels = await db.execute_query(
         """
         MATCH (e:EpisodicMemory)-[:ACTIVATED]->(c:Concept)
         RETURN e.id as source, c.id as target
-        LIMIT 1500
         """
     )
     for r in episode_rels:
-        links.append({
-            "source": r["source"],
-            "target": r["target"],
-            "type": "episode_concept",
-            "relType": "activated",
-            "weight": 0.2,
-        })
+        if r["source"] in node_ids and r["target"] in node_ids:
+            links.append({
+                "source": r["source"],
+                "target": r["target"],
+                "type": "episode_concept",
+                "relType": "activated",
+                "weight": 0.2,
+            })
 
     return {"nodes": nodes, "links": links}
 
