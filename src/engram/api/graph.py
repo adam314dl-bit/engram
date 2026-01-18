@@ -685,33 +685,93 @@ GRAPH_HTML = """
         let pathLinks = new Set();
         let settingPathNode = null;  // 'start' or 'end'
 
-        // LOD (Level of Detail) state
+        // LOD (Level of Detail) state - hierarchical filtering
         let currentZoom = 1;
-        let lodThresholds = {
-            0.2: 200,   // Very zoomed out: top 200 nodes
-            0.4: 500,   // Zoomed out: top 500 nodes
-            0.6: 800,   // Medium: top 800 nodes
-            1.0: 1500,  // Normal: top 1500 nodes
-            1.5: 3000,  // Zoomed in: all nodes
-            999: 99999  // Very zoomed in: show all
-        };
         let nodeRanks = {};  // nodeId -> rank (lower = more important)
+        let visibleNodes = new Set();  // Computed set of visible node IDs
+        let maxConn = 1;  // Maximum connections in the graph (for scaling)
+        let graphAdjacency = {};  // nodeId -> [{id, conn}, ...]
 
-        // Get LOD limit based on zoom level
-        function getLodLimit() {
-            for (const [threshold, limit] of Object.entries(lodThresholds).sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]))) {
-                if (currentZoom < parseFloat(threshold)) {
-                    return limit;
+        // Dynamic minimum connection threshold based on zoom
+        // Returns minimum connections a node needs to be visible
+        function getMinConnThreshold() {
+            // Zoomed out = high threshold, zoomed in = low threshold
+            if (currentZoom < 0.2) return Math.max(30, maxConn * 0.4);   // Top hubs only
+            if (currentZoom < 0.35) return Math.max(20, maxConn * 0.25);
+            if (currentZoom < 0.5) return Math.max(12, maxConn * 0.15);
+            if (currentZoom < 0.7) return Math.max(8, maxConn * 0.08);
+            if (currentZoom < 1.0) return Math.max(5, maxConn * 0.04);
+            if (currentZoom < 1.5) return Math.max(3, maxConn * 0.02);
+            if (currentZoom < 2.0) return 2;
+            return 1;  // Show all when very zoomed in
+        }
+
+        // Maximum neighbors to show per hub (prevents explosion)
+        function getMaxNeighborsPerHub() {
+            if (currentZoom < 0.3) return 10;
+            if (currentZoom < 0.5) return 15;
+            if (currentZoom < 0.7) return 25;
+            if (currentZoom < 1.0) return 40;
+            return 60;
+        }
+
+        // Compute which nodes are visible using hierarchical filtering
+        function computeVisibleNodes() {
+            visibleNodes.clear();
+            const minConn = getMinConnThreshold();
+            const maxNeighbors = getMaxNeighborsPerHub();
+
+            // Step 1: Find all nodes that meet the connection threshold
+            const qualifiedNodes = Object.values(allNodes).filter(n => (n.conn || 0) >= minConn);
+
+            // Step 2: Start with top hubs (sorted by connections)
+            const sortedNodes = [...qualifiedNodes].sort((a, b) => (b.conn || 0) - (a.conn || 0));
+
+            // Step 3: Add nodes hierarchically
+            // First pass: add all qualified nodes
+            sortedNodes.forEach(n => visibleNodes.add(n.id));
+
+            // Step 4: For each visible node, limit to top N neighbors
+            // This prevents super-hubs from showing ALL their connections
+            const finalVisible = new Set();
+            const processedAsNeighbor = new Set();
+
+            sortedNodes.forEach(node => {
+                // Always include the qualified node itself
+                finalVisible.add(node.id);
+
+                // Get this node's neighbors, sorted by their connection count
+                const neighbors = graphAdjacency[node.id] || [];
+                const sortedNeighbors = [...neighbors]
+                    .filter(n => visibleNodes.has(n.id))  // Only qualified neighbors
+                    .sort((a, b) => (b.conn || 0) - (a.conn || 0));
+
+                // Take only top N neighbors
+                let added = 0;
+                for (const neighbor of sortedNeighbors) {
+                    if (added >= maxNeighbors) break;
+                    if (!processedAsNeighbor.has(neighbor.id)) {
+                        finalVisible.add(neighbor.id);
+                        added++;
+                    }
                 }
-            }
-            return 99999;
+                processedAsNeighbor.add(node.id);
+            });
+
+            visibleNodes = finalVisible;
+            console.log(`LOD: zoom=${currentZoom.toFixed(2)}, minConn=${minConn.toFixed(0)}, visible=${visibleNodes.size} nodes`);
         }
 
         // Check if node is visible at current LOD
         function isNodeVisibleAtLod(node) {
-            const rank = nodeRanks[node.id];
-            if (rank === undefined) return true;
-            return rank < getLodLimit();
+            return visibleNodes.has(node.id);
+        }
+
+        // Check if link is visible (both endpoints must be visible)
+        function isLinkVisibleAtLod(link) {
+            const sourceId = link.source.id || link.source;
+            const targetId = link.target.id || link.target;
+            return visibleNodes.has(sourceId) && visibleNodes.has(targetId);
         }
 
         // Importance slider
@@ -1529,6 +1589,7 @@ GRAPH_HTML = """
             })
             .onZoom(({k}) => {
                 currentZoom = k;
+                computeVisibleNodes();  // Recompute which nodes to show
                 refresh();
             })
             .d3VelocityDecay(0.4)
@@ -1766,6 +1827,27 @@ GRAPH_HTML = """
 
                 // Store nodes for lookup
                 data.nodes.forEach(n => allNodes[n.id] = n);
+
+                // Find max connections for scaling thresholds
+                maxConn = Math.max(...data.nodes.map(n => n.conn || 0), 1);
+                console.log(`Graph loaded: ${data.nodes.length} nodes, maxConn=${maxConn}`);
+
+                // Build adjacency list for hierarchical filtering
+                graphAdjacency = {};
+                data.nodes.forEach(n => graphAdjacency[n.id] = []);
+                data.links.forEach(l => {
+                    const sourceId = l.source.id || l.source;
+                    const targetId = l.target.id || l.target;
+                    const sourceNode = allNodes[sourceId];
+                    const targetNode = allNodes[targetId];
+                    if (sourceNode && targetNode) {
+                        graphAdjacency[sourceId].push({ id: targetId, conn: targetNode.conn || 0 });
+                        graphAdjacency[targetId].push({ id: sourceId, conn: sourceNode.conn || 0 });
+                    }
+                });
+
+                // Compute initial visible nodes
+                computeVisibleNodes();
 
                 // Detect clusters
                 const numClusters = detectClusters(data.nodes, data.links);
