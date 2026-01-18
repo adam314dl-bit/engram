@@ -33,7 +33,6 @@ def get_db(request: Request) -> Neo4jClient:
 
 @router.get("/admin/graph/bounds")
 async def get_graph_bounds(request: Request) -> dict:
-    """Get bounding box of all nodes with layout positions."""
     db = get_db(request)
     result = await db.execute_query(
         """
@@ -56,11 +55,9 @@ async def get_graph_bounds(request: Request) -> dict:
 
 @router.get("/admin/graph/search")
 async def search_nodes(request: Request, q: str = Query(..., min_length=2)) -> dict:
-    """Global search across all nodes, returns matches with positions."""
     db = get_db(request)
     query_lower = q.lower()
 
-    # Search concepts
     concepts = await db.execute_query(
         """
         MATCH (n:Concept)
@@ -72,7 +69,6 @@ async def search_nodes(request: Request, q: str = Query(..., min_length=2)) -> d
         q=query_lower
     )
 
-    # Search semantic memories
     semantic = await db.execute_query(
         """
         MATCH (n:SemanticMemory)
@@ -84,7 +80,6 @@ async def search_nodes(request: Request, q: str = Query(..., min_length=2)) -> d
         q=query_lower
     )
 
-    # Search episodic memories
     episodic = await db.execute_query(
         """
         MATCH (n:EpisodicMemory)
@@ -111,6 +106,42 @@ async def search_nodes(request: Request, q: str = Query(..., min_length=2)) -> d
     return {"results": results[:100], "total": len(results)}
 
 
+@router.get("/admin/graph/neighbors")
+async def get_neighbors(request: Request, node_id: str = Query(...)) -> dict:
+    """Get neighbors of a node."""
+    db = get_db(request)
+
+    neighbors = await db.execute_query(
+        """
+        MATCH (n)-[r]-(neighbor)
+        WHERE n.id = $node_id AND neighbor.layout_x IS NOT NULL
+        RETURN neighbor.id as id,
+               COALESCE(neighbor.name, neighbor.content, neighbor.query) as name,
+               CASE
+                   WHEN 'Concept' IN labels(neighbor) THEN 'concept'
+                   WHEN 'SemanticMemory' IN labels(neighbor) THEN 'semantic'
+                   ELSE 'episodic'
+               END as type,
+               neighbor.layout_x as x, neighbor.layout_y as y
+        LIMIT 50
+        """,
+        node_id=node_id
+    )
+
+    results = []
+    for r in neighbors:
+        name = r["name"] or ""
+        results.append({
+            "id": r["id"],
+            "name": name[:40] + "..." if len(name) > 40 else name,
+            "type": r["type"],
+            "x": r["x"],
+            "y": r["y"]
+        })
+
+    return {"neighbors": results}
+
+
 @router.get("/admin/graph/data")
 async def get_graph_data(
     request: Request,
@@ -119,7 +150,6 @@ async def get_graph_data(
     min_y: Optional[float] = Query(None),
     max_y: Optional[float] = Query(None),
 ) -> dict:
-    """Get graph data, optionally filtered by viewport bounds."""
     db = get_db(request)
     nodes = []
     links = []
@@ -133,7 +163,6 @@ async def get_graph_data(
         """
         params = {"min_x": min_x, "max_x": max_x, "min_y": min_y, "max_y": max_y}
 
-    # Get concepts
     concepts = await db.execute_query(
         f"""
         MATCH (n:Concept)
@@ -153,7 +182,6 @@ async def get_graph_data(
             "cluster": c["cluster"] or 0, "conn": c["conn"] or 0,
         })
 
-    # Get semantic memories
     memories = await db.execute_query(
         f"""
         MATCH (n:SemanticMemory)
@@ -175,7 +203,6 @@ async def get_graph_data(
             "cluster": m["cluster"] or 0, "conn": m["conn"] or 0,
         })
 
-    # Get episodic memories
     episodes = await db.execute_query(
         f"""
         MATCH (n:EpisodicMemory)
@@ -199,7 +226,6 @@ async def get_graph_data(
 
     node_ids = {n["id"] for n in nodes}
 
-    # Get relationships
     for query, rel_type in [
         ("MATCH (a:Concept)-[r:RELATED_TO]->(b:Concept) RETURN a.id as source, b.id as target", "related"),
         ("MATCH (a:SemanticMemory)-[:ABOUT]->(b:Concept) RETURN a.id as source, b.id as target", "about"),
@@ -215,7 +241,6 @@ async def get_graph_data(
 
 @router.get("/admin/graph/stats")
 async def get_graph_stats(request: Request) -> dict:
-    """Get total node counts."""
     db = get_db(request)
     concepts = await db.execute_query("MATCH (c:Concept) RETURN count(c) as count")
     semantic = await db.execute_query("MATCH (s:SemanticMemory) RETURN count(s) as count")
@@ -242,6 +267,7 @@ GRAPH_HTML = """
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { background: #0a0a12; font-family: -apple-system, sans-serif; overflow: hidden; }
         #canvas { width: 100vw; height: 100vh; display: block; }
+        #label-canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 5; }
 
         #info { position: absolute; top: 16px; left: 16px; color: #8b949e; z-index: 10; pointer-events: none; }
         #info h1 { font-size: 11px; color: #5eead480; font-weight: 400; text-transform: uppercase; letter-spacing: 3px; margin-top: 6px; }
@@ -253,8 +279,11 @@ GRAPH_HTML = """
             border-radius: 8px; border: 1px solid #1a1a2e;
             font-size: 11px; color: #8b949e; z-index: 100;
         }
-        .legend-item { display: flex; align-items: center; padding: 5px 0; }
-        .legend-dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 10px; }
+        .legend-item { display: flex; align-items: center; padding: 5px 0; cursor: pointer; border-radius: 4px; padding: 6px 8px; margin: 2px -8px; }
+        .legend-item:hover { background: rgba(255,255,255,0.05); }
+        .legend-item.active { background: rgba(94,234,212,0.15); }
+        .legend-item.dimmed { opacity: 0.4; }
+        .legend-dot { width: 12px; height: 12px; border-radius: 50%; margin-right: 10px; }
         .legend-count { margin-left: auto; padding-left: 16px; color: #5eead4; font-weight: 500; }
         .control-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #1a1a2e; }
         .toggle-btn {
@@ -297,7 +326,7 @@ GRAPH_HTML = """
         #tooltip.visible { display: block; }
 
         #node-info {
-            position: absolute; top: 100px; right: 16px; width: 280px; max-height: 400px; overflow-y: auto;
+            position: absolute; top: 100px; right: 16px; width: 300px; max-height: 500px; overflow-y: auto;
             background: rgba(10,10,18,0.95); padding: 16px; border-radius: 8px; border: 1px solid #1a1a2e;
             font-size: 12px; color: #e0e0ff; display: none; z-index: 10;
         }
@@ -309,12 +338,17 @@ GRAPH_HTML = """
         #node-info .info-value { color: #e0e0ff; word-break: break-word; }
         #node-info .close-btn { position: absolute; top: 8px; right: 8px; background: none; border: none; color: #6b6b8a; cursor: pointer; font-size: 16px; }
         #node-info .close-btn:hover { color: #5eead4; }
+        .neighbor-item { padding: 6px 8px; margin: 4px 0; background: rgba(255,255,255,0.03); border-radius: 4px; cursor: pointer; display: flex; align-items: center; }
+        .neighbor-item:hover { background: rgba(94,234,212,0.1); }
+        .neighbor-dot { width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; flex-shrink: 0; }
+        .neighbor-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
         #mode-indicator { position: absolute; bottom: 16px; right: 16px; background: rgba(94,234,212,0.1); border: 1px solid #5eead4; padding: 8px 12px; border-radius: 6px; font-size: 10px; color: #5eead4; z-index: 10; }
     </style>
 </head>
 <body>
     <canvas id="canvas"></canvas>
+    <canvas id="label-canvas"></canvas>
     <div id="info"><div class="brand">Engram</div><h1>Memory Graph</h1></div>
 
     <div id="search-box">
@@ -330,9 +364,15 @@ GRAPH_HTML = """
     </div>
 
     <div id="controls">
-        <div class="legend-item"><span class="legend-dot" style="background:#5eead4"></span>Concept<span class="legend-count" id="c-count">0</span></div>
-        <div class="legend-item"><span class="legend-dot" style="background:#a78bfa"></span>Semantic<span class="legend-count" id="s-count">0</span></div>
-        <div class="legend-item"><span class="legend-dot" style="background:#f472b6"></span>Episodic<span class="legend-count" id="e-count">0</span></div>
+        <div class="legend-item" data-type="concept" onclick="toggleTypeFilter('concept')">
+            <span class="legend-dot" style="background:#5eead4"></span>Concept<span class="legend-count" id="c-count">0</span>
+        </div>
+        <div class="legend-item" data-type="semantic" onclick="toggleTypeFilter('semantic')">
+            <span class="legend-dot" style="background:#a78bfa"></span>Semantic<span class="legend-count" id="s-count">0</span>
+        </div>
+        <div class="legend-item" data-type="episodic" onclick="toggleTypeFilter('episodic')">
+            <span class="legend-dot" style="background:#f472b6"></span>Episodic<span class="legend-count" id="e-count">0</span>
+        </div>
         <div class="control-row">
             <button class="toggle-btn" id="cluster-btn" onclick="toggleClusters()">Clusters</button>
             <button class="toggle-btn" id="bundle-btn" onclick="toggleBundling()">Bundle</button>
@@ -345,8 +385,9 @@ GRAPH_HTML = """
 
     <script>
         const canvas = document.getElementById('canvas');
-        const gl = canvas.getContext('webgl', { antialias: true, alpha: false }) || canvas.getContext('experimental-webgl');
-        const ctx2d = document.createElement('canvas').getContext('2d'); // For text rendering
+        const labelCanvas = document.getElementById('label-canvas');
+        const gl = canvas.getContext('webgl', { antialias: true, alpha: false });
+        const labelCtx = labelCanvas.getContext('2d');
 
         if (!gl) {
             document.getElementById('loading').innerHTML = 'WebGL not supported';
@@ -356,7 +397,6 @@ GRAPH_HTML = """
         const typeColors = { concept: [0.37, 0.92, 0.83], semantic: [0.65, 0.55, 0.98], episodic: [0.96, 0.45, 0.71] };
         const typeColorsHex = { concept: '#5eead4', semantic: '#a78bfa', episodic: '#f472b6' };
 
-        // Cluster color palette (12 distinct colors)
         const clusterPalette = [
             [0.37, 0.92, 0.83], [0.65, 0.55, 0.98], [0.96, 0.45, 0.71], [0.98, 0.75, 0.14],
             [0.20, 0.83, 0.60], [0.38, 0.65, 0.98], [0.98, 0.44, 0.52], [0.64, 0.90, 0.21],
@@ -368,20 +408,22 @@ GRAPH_HTML = """
         let viewX = 0, viewY = 0, scale = 1;
         let selectedNode = null, hoveredNode = null;
         let highlightedNodes = new Set();
+        let neighborNodes = new Set();
         let showClusters = false, showBundling = false;
+        let typeFilters = new Set(); // empty = show all
 
         let isDragging = false, lastMouseX = 0, lastMouseY = 0, dragStartX = 0, dragStartY = 0;
         let loadingViewport = false, lastViewport = null, viewportDebounceTimer = null;
 
-        // WebGL setup
+        // WebGL shaders
         const vertexShaderSrc = `
             attribute vec2 a_position;
-            attribute vec3 a_color;
+            attribute vec4 a_color;
             attribute float a_size;
             uniform vec2 u_resolution;
             uniform vec2 u_view;
             uniform float u_scale;
-            varying vec3 v_color;
+            varying vec4 v_color;
             void main() {
                 vec2 pos = (a_position - u_view) * u_scale;
                 vec2 clipSpace = (pos / u_resolution) * 2.0;
@@ -393,12 +435,15 @@ GRAPH_HTML = """
 
         const fragmentShaderSrc = `
             precision mediump float;
-            varying vec3 v_color;
+            varying vec4 v_color;
             void main() {
                 vec2 coord = gl_PointCoord - vec2(0.5);
-                if (length(coord) > 0.5) discard;
-                float alpha = 1.0 - smoothstep(0.4, 0.5, length(coord));
-                gl_FragColor = vec4(v_color, alpha);
+                float dist = length(coord);
+                if (dist > 0.5) discard;
+                // Glow effect for important nodes
+                float glow = v_color.a > 0.95 ? (1.0 - dist * 1.5) * 0.3 : 0.0;
+                float alpha = 1.0 - smoothstep(0.35, 0.5, dist);
+                gl_FragColor = vec4(v_color.rgb + glow, alpha * v_color.a);
             }
         `;
 
@@ -428,37 +473,34 @@ GRAPH_HTML = """
             gl.compileShader(shader);
             if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
                 console.error(gl.getShaderInfoLog(shader));
-                gl.deleteShader(shader);
                 return null;
             }
             return shader;
         }
 
         function createProgram(vertexSrc, fragmentSrc) {
-            const vertexShader = createShader(gl.VERTEX_SHADER, vertexSrc);
-            const fragmentShader = createShader(gl.FRAGMENT_SHADER, fragmentSrc);
             const program = gl.createProgram();
-            gl.attachShader(program, vertexShader);
-            gl.attachShader(program, fragmentShader);
+            gl.attachShader(program, createShader(gl.VERTEX_SHADER, vertexSrc));
+            gl.attachShader(program, createShader(gl.FRAGMENT_SHADER, fragmentSrc));
             gl.linkProgram(program);
-            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-                console.error(gl.getProgramInfoLog(program));
-                return null;
-            }
             return program;
         }
 
         const nodeProgram = createProgram(vertexShaderSrc, fragmentShaderSrc);
         const lineProgram = createProgram(lineVertexShaderSrc, lineFragmentShaderSrc);
-
         const nodeBuffer = gl.createBuffer();
         const lineBuffer = gl.createBuffer();
 
         function resize() {
-            canvas.width = window.innerWidth * window.devicePixelRatio;
-            canvas.height = window.innerHeight * window.devicePixelRatio;
+            const dpr = window.devicePixelRatio;
+            canvas.width = window.innerWidth * dpr;
+            canvas.height = window.innerHeight * dpr;
             canvas.style.width = window.innerWidth + 'px';
             canvas.style.height = window.innerHeight + 'px';
+            labelCanvas.width = window.innerWidth * dpr;
+            labelCanvas.height = window.innerHeight * dpr;
+            labelCanvas.style.width = window.innerWidth + 'px';
+            labelCanvas.style.height = window.innerHeight + 'px';
             gl.viewport(0, 0, canvas.width, canvas.height);
             render();
         }
@@ -493,9 +535,7 @@ GRAPH_HTML = """
             if (!v1 || !v2) return true;
             const threshold = 100 / scale;
             return Math.abs(v1.min_x - v2.min_x) > threshold ||
-                   Math.abs(v1.max_x - v2.max_x) > threshold ||
-                   Math.abs(v1.min_y - v2.min_y) > threshold ||
-                   Math.abs(v1.max_y - v2.max_y) > threshold;
+                   Math.abs(v1.max_x - v2.max_x) > threshold;
         }
 
         async function loadViewportData() {
@@ -508,8 +548,7 @@ GRAPH_HTML = """
 
             try {
                 const url = `/admin/graph/data?min_x=${vp.min_x}&max_x=${vp.max_x}&min_y=${vp.min_y}&max_y=${vp.max_y}`;
-                const response = await fetch(url);
-                const data = await response.json();
+                const data = await (await fetch(url)).json();
 
                 nodes = data.nodes;
                 links = data.links;
@@ -518,7 +557,7 @@ GRAPH_HTML = """
 
                 render();
             } catch (e) {
-                console.error('Failed to load viewport data:', e);
+                console.error('Failed to load:', e);
             } finally {
                 loadingViewport = false;
             }
@@ -529,14 +568,35 @@ GRAPH_HTML = """
             viewportDebounceTimer = setTimeout(loadViewportData, 100);
         }
 
+        function isNodeVisible(node) {
+            if (typeFilters.size > 0 && !typeFilters.has(node.type)) return false;
+            return true;
+        }
+
         function getNodeColor(node) {
-            if (highlightedNodes.size > 0 && !highlightedNodes.has(node.id)) {
-                return [0.15, 0.15, 0.2];
+            if (!isNodeVisible(node)) return [0.1, 0.1, 0.12, 0.2];
+
+            const isHighlighted = highlightedNodes.size === 0 || highlightedNodes.has(node.id);
+            const isNeighbor = neighborNodes.has(node.id);
+            const isSelected = node === selectedNode;
+
+            if (!isHighlighted && !isNeighbor && !isSelected && highlightedNodes.size > 0) {
+                return [0.15, 0.15, 0.2, 0.3];
             }
+            if (!isHighlighted && !isNeighbor && !isSelected && neighborNodes.size > 0) {
+                return [0.15, 0.15, 0.2, 0.3];
+            }
+
+            let color;
             if (showClusters) {
-                return clusterPalette[node.cluster % clusterPalette.length];
+                color = clusterPalette[node.cluster % clusterPalette.length];
+            } else {
+                color = typeColors[node.type] || typeColors.concept;
             }
-            return typeColors[node.type] || typeColors.concept;
+
+            // Add glow (alpha > 0.95) for important nodes
+            const importance = node.conn > 10 ? 1.0 : 0.9;
+            return [color[0], color[1], color[2], importance];
         }
 
         function render() {
@@ -547,6 +607,10 @@ GRAPH_HTML = """
 
             const w = canvas.width / window.devicePixelRatio;
             const h = canvas.height / window.devicePixelRatio;
+            const dpr = window.devicePixelRatio;
+
+            // Clear label canvas
+            labelCtx.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
 
             // Draw lines
             if (links.length > 0) {
@@ -555,30 +619,26 @@ GRAPH_HTML = """
                 gl.uniform2f(gl.getUniformLocation(lineProgram, 'u_view'), viewX, viewY);
                 gl.uniform1f(gl.getUniformLocation(lineProgram, 'u_scale'), scale);
 
-                const lineOpacity = highlightedNodes.size > 0 ? 0.05 : 0.12;
+                const lineOpacity = (highlightedNodes.size > 0 || neighborNodes.size > 0) ? 0.03 : 0.1;
                 gl.uniform4f(gl.getUniformLocation(lineProgram, 'u_color'), 0.37, 0.92, 0.83, lineOpacity);
 
                 const lineData = [];
                 for (const link of links) {
                     const s = nodeMap[link.source];
                     const t = nodeMap[link.target];
-                    if (s && t) {
+                    if (s && t && isNodeVisible(s) && isNodeVisible(t)) {
                         if (showBundling) {
-                            // Curved edges via control point
-                            const mx = (s.x + t.x) / 2;
-                            const my = (s.y + t.y) / 2;
-                            const dx = t.x - s.x;
-                            const dy = t.y - s.y;
-                            const cx = mx - dy * 0.15;
-                            const cy = my + dx * 0.15;
-                            // Approximate curve with segments
+                            const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2;
+                            const dx = t.x - s.x, dy = t.y - s.y;
+                            const cx = mx - dy * 0.15, cy = my + dx * 0.15;
                             for (let i = 0; i < 8; i++) {
                                 const t1 = i / 8, t2 = (i + 1) / 8;
-                                const x1 = (1-t1)*(1-t1)*s.x + 2*(1-t1)*t1*cx + t1*t1*t.x;
-                                const y1 = (1-t1)*(1-t1)*s.y + 2*(1-t1)*t1*cy + t1*t1*t.y;
-                                const x2 = (1-t2)*(1-t2)*s.x + 2*(1-t2)*t2*cx + t2*t2*t.x;
-                                const y2 = (1-t2)*(1-t2)*s.y + 2*(1-t2)*t2*cy + t2*t2*t.y;
-                                lineData.push(x1, y1, x2, y2);
+                                lineData.push(
+                                    (1-t1)*(1-t1)*s.x + 2*(1-t1)*t1*cx + t1*t1*t.x,
+                                    (1-t1)*(1-t1)*s.y + 2*(1-t1)*t1*cy + t1*t1*t.y,
+                                    (1-t2)*(1-t2)*s.x + 2*(1-t2)*t2*cx + t2*t2*t.x,
+                                    (1-t2)*(1-t2)*s.y + 2*(1-t2)*t2*cy + t2*t2*t.y
+                                );
                             }
                         } else {
                             lineData.push(s.x, s.y, t.x, t.y);
@@ -588,7 +648,6 @@ GRAPH_HTML = """
 
                 gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
                 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(lineData), gl.DYNAMIC_DRAW);
-
                 const posLoc = gl.getAttribLocation(lineProgram, 'a_position');
                 gl.enableVertexAttribArray(posLoc);
                 gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
@@ -603,24 +662,36 @@ GRAPH_HTML = """
                 gl.uniform1f(gl.getUniformLocation(nodeProgram, 'u_scale'), scale);
 
                 const nodeData = [];
+                const labelsToRender = [];
+
                 for (const node of nodes) {
                     const color = getNodeColor(node);
-                    const baseSize = Math.max(4, Math.min(16, Math.sqrt(node.conn || 1) * 2.5));
-                    const size = baseSize * Math.max(0.8, Math.min(2.5, scale * 0.7));
+                    // BIGGER nodes: base 6-24, scaled by connections more aggressively
+                    const baseSize = Math.max(6, Math.min(24, Math.sqrt(node.conn || 1) * 4));
+                    const size = baseSize * Math.max(1, Math.min(3, scale * 0.8));
 
-                    // Highlight selected/hovered
                     let finalColor = color;
-                    if (node === selectedNode || node === hoveredNode) {
-                        finalColor = [1, 1, 1];
+                    if (node === selectedNode) {
+                        finalColor = [1, 1, 1, 1];
+                    } else if (node === hoveredNode) {
+                        finalColor = [1, 1, 1, 0.9];
+                    } else if (neighborNodes.has(node.id)) {
+                        finalColor = [color[0] * 1.2, color[1] * 1.2, color[2] * 1.2, 1];
                     }
 
-                    nodeData.push(node.x, node.y, finalColor[0], finalColor[1], finalColor[2], size);
+                    nodeData.push(node.x, node.y, finalColor[0], finalColor[1], finalColor[2], finalColor[3], size);
+
+                    // Collect labels for high-connection nodes
+                    if (isNodeVisible(node) && node.conn > 5 && scale > 0.3) {
+                        const pos = worldToScreen(node.x, node.y);
+                        labelsToRender.push({ node, pos, size });
+                    }
                 }
 
                 gl.bindBuffer(gl.ARRAY_BUFFER, nodeBuffer);
                 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(nodeData), gl.DYNAMIC_DRAW);
 
-                const stride = 6 * 4;
+                const stride = 7 * 4;
                 const posLoc = gl.getAttribLocation(nodeProgram, 'a_position');
                 const colorLoc = gl.getAttribLocation(nodeProgram, 'a_color');
                 const sizeLoc = gl.getAttribLocation(nodeProgram, 'a_size');
@@ -628,11 +699,28 @@ GRAPH_HTML = """
                 gl.enableVertexAttribArray(posLoc);
                 gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, stride, 0);
                 gl.enableVertexAttribArray(colorLoc);
-                gl.vertexAttribPointer(colorLoc, 3, gl.FLOAT, false, stride, 8);
+                gl.vertexAttribPointer(colorLoc, 4, gl.FLOAT, false, stride, 8);
                 gl.enableVertexAttribArray(sizeLoc);
-                gl.vertexAttribPointer(sizeLoc, 1, gl.FLOAT, false, stride, 20);
+                gl.vertexAttribPointer(sizeLoc, 1, gl.FLOAT, false, stride, 24);
 
                 gl.drawArrays(gl.POINTS, 0, nodes.length);
+
+                // Render labels on 2D canvas
+                labelCtx.save();
+                labelCtx.scale(dpr, dpr);
+                labelCtx.font = '11px -apple-system, sans-serif';
+                labelCtx.textAlign = 'center';
+
+                for (const { node, pos, size } of labelsToRender) {
+                    if (pos.x < -100 || pos.x > w + 100 || pos.y < -100 || pos.y > h + 100) continue;
+
+                    const label = node.name.length > 20 ? node.name.slice(0, 20) + '...' : node.name;
+                    const screenSize = size * scale;
+
+                    labelCtx.fillStyle = 'rgba(255,255,255,0.7)';
+                    labelCtx.fillText(label, pos.x, pos.y + screenSize / 2 + 14);
+                }
+                labelCtx.restore();
             }
         }
 
@@ -641,11 +729,12 @@ GRAPH_HTML = """
             let closest = null, closestDist = Infinity;
 
             for (const node of nodes) {
+                if (!isNodeVisible(node)) continue;
                 const dx = node.x - world.x;
                 const dy = node.y - world.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
-                const baseSize = Math.max(4, Math.min(16, Math.sqrt(node.conn || 1) * 2.5));
-                const threshold = (baseSize * 2) / scale + 10;
+                const baseSize = Math.max(6, Math.min(24, Math.sqrt(node.conn || 1) * 4));
+                const threshold = (baseSize * 2) / scale + 15;
 
                 if (dist < threshold && dist < closestDist) {
                     closest = node;
@@ -663,17 +752,39 @@ GRAPH_HTML = """
             tooltip.style.top = (y + 15) + 'px';
             tooltip.classList.add('visible');
         }
-        function hideTooltip() {
-            tooltip.classList.remove('visible');
-        }
+        function hideTooltip() { tooltip.classList.remove('visible'); }
 
-        // Node info panel
-        function showNodeInfo(node) {
+        // Node info panel with neighbors
+        async function showNodeInfo(node) {
             const panel = document.getElementById('node-info');
             const content = document.getElementById('node-info-content');
             const color = typeColorsHex[node.type];
 
-            let html = `
+            // Fetch neighbors
+            let neighborsHtml = '<div style="color:#6b6b8a;padding:8px 0;">Loading...</div>';
+            try {
+                const res = await fetch(`/admin/graph/neighbors?node_id=${encodeURIComponent(node.id)}`);
+                const data = await res.json();
+
+                neighborNodes.clear();
+                data.neighbors.forEach(n => neighborNodes.add(n.id));
+                render();
+
+                if (data.neighbors.length > 0) {
+                    neighborsHtml = data.neighbors.map(n => `
+                        <div class="neighbor-item" data-x="${n.x}" data-y="${n.y}" data-id="${n.id}">
+                            <span class="neighbor-dot" style="background:${typeColorsHex[n.type]}"></span>
+                            <span class="neighbor-name">${n.name}</span>
+                        </div>
+                    `).join('');
+                } else {
+                    neighborsHtml = '<div style="color:#6b6b8a;padding:8px 0;">No connections</div>';
+                }
+            } catch (e) {
+                neighborsHtml = '<div style="color:#6b6b8a;padding:8px 0;">Failed to load</div>';
+            }
+
+            content.innerHTML = `
                 <span class="type-badge" style="background:${color}20;color:${color}">${node.type}</span>
                 <h3>${node.name}</h3>
                 <div class="info-row">
@@ -684,21 +795,74 @@ GRAPH_HTML = """
                     <div class="info-label">Cluster</div>
                     <div class="info-value">${node.cluster}</div>
                 </div>
+                ${node.fullContent && node.fullContent !== node.name ? `
+                <div class="info-row">
+                    <div class="info-label">Content</div>
+                    <div class="info-value" style="max-height:100px;overflow-y:auto;">${node.fullContent}</div>
+                </div>` : ''}
+                <div class="info-row">
+                    <div class="info-label">Connected Nodes</div>
+                    <div style="max-height:200px;overflow-y:auto;margin-top:8px;">${neighborsHtml}</div>
+                </div>
             `;
-            if (node.fullContent && node.fullContent !== node.name) {
-                html += `<div class="info-row"><div class="info-label">Content</div><div class="info-value" style="max-height:150px;overflow-y:auto;">${node.fullContent}</div></div>`;
-            }
-            content.innerHTML = html;
             panel.classList.add('visible');
+
+            // Add click handlers for neighbors
+            content.querySelectorAll('.neighbor-item').forEach(item => {
+                item.addEventListener('click', () => {
+                    const x = parseFloat(item.dataset.x);
+                    const y = parseFloat(item.dataset.y);
+                    const id = item.dataset.id;
+                    viewX = x;
+                    viewY = y;
+                    if (nodeMap[id]) {
+                        selectedNode = nodeMap[id];
+                        showNodeInfo(selectedNode);
+                    }
+                    render();
+                    scheduleViewportLoad();
+                });
+            });
         }
 
         function closeNodeInfo() {
             document.getElementById('node-info').classList.remove('visible');
             selectedNode = null;
+            neighborNodes.clear();
             render();
         }
 
-        // Toggle functions
+        // Type filter
+        function toggleTypeFilter(type) {
+            const item = document.querySelector(`.legend-item[data-type="${type}"]`);
+
+            if (typeFilters.has(type)) {
+                typeFilters.delete(type);
+                item.classList.remove('active');
+            } else {
+                // If clicking same type that's the only active one, clear all
+                if (typeFilters.size === 1 && typeFilters.has(type)) {
+                    typeFilters.clear();
+                    document.querySelectorAll('.legend-item').forEach(el => el.classList.remove('active', 'dimmed'));
+                } else {
+                    typeFilters.add(type);
+                    item.classList.add('active');
+                }
+            }
+
+            // Update dimmed state
+            document.querySelectorAll('.legend-item').forEach(el => {
+                const t = el.dataset.type;
+                if (typeFilters.size > 0 && !typeFilters.has(t)) {
+                    el.classList.add('dimmed');
+                } else {
+                    el.classList.remove('dimmed');
+                }
+            });
+
+            render();
+        }
+
         function toggleClusters() {
             showClusters = !showClusters;
             document.getElementById('cluster-btn').classList.toggle('active', showClusters);
@@ -743,22 +907,20 @@ GRAPH_HTML = """
 
         async function doSearch(q) {
             try {
-                const res = await fetch(`/admin/graph/search?q=${encodeURIComponent(q)}`);
-                const data = await res.json();
+                const data = await (await fetch(`/admin/graph/search?q=${encodeURIComponent(q)}`)).json();
 
                 highlightedNodes.clear();
                 data.results.forEach(r => highlightedNodes.add(r.id));
 
-                if (data.results.length === 0) {
-                    searchResults.innerHTML = '<div style="padding:12px;color:#6b6b8a;">No results</div>';
-                } else {
-                    searchResults.innerHTML = data.results.slice(0, 20).map(r => `
+                searchResults.innerHTML = data.results.length === 0
+                    ? '<div style="padding:12px;color:#6b6b8a;">No results</div>'
+                    : data.results.slice(0, 20).map(r => `
                         <div class="search-result" data-x="${r.x}" data-y="${r.y}" data-id="${r.id}">
                             <span class="search-result-name">${r.name}</span>
                             <span class="search-result-type" style="background:${typeColorsHex[r.type]}20;color:${typeColorsHex[r.type]}">${r.type}</span>
                         </div>
                     `).join('');
-                }
+
                 searchResults.classList.add('visible');
                 render();
             } catch (e) {
@@ -769,10 +931,8 @@ GRAPH_HTML = """
         searchResults.addEventListener('click', (e) => {
             const result = e.target.closest('.search-result');
             if (result) {
-                const x = parseFloat(result.dataset.x);
-                const y = parseFloat(result.dataset.y);
-                viewX = x;
-                viewY = y;
+                viewX = parseFloat(result.dataset.x);
+                viewY = parseFloat(result.dataset.y);
                 scale = 2;
                 searchResults.classList.remove('visible');
                 render();
@@ -789,34 +949,24 @@ GRAPH_HTML = """
 
         canvas.addEventListener('mousemove', (e) => {
             if (isDragging) {
-                const dx = e.clientX - lastMouseX;
-                const dy = e.clientY - lastMouseY;
-                viewX -= dx / scale;
-                viewY += dy / scale;
+                viewX -= (e.clientX - lastMouseX) / scale;
+                viewY += (e.clientY - lastMouseY) / scale;
                 lastMouseX = e.clientX;
                 lastMouseY = e.clientY;
                 render();
                 scheduleViewportLoad();
             } else {
-                // Hover tooltip
                 const node = findNodeAt(e.clientX, e.clientY);
                 if (node !== hoveredNode) {
                     hoveredNode = node;
-                    if (node) {
-                        showTooltip(node, e.clientX, e.clientY);
-                    } else {
-                        hideTooltip();
-                    }
+                    node ? showTooltip(node, e.clientX, e.clientY) : hideTooltip();
                     render();
                 }
             }
         });
 
         canvas.addEventListener('mouseup', (e) => {
-            const dx = Math.abs(e.clientX - dragStartX);
-            const dy = Math.abs(e.clientY - dragStartY);
-
-            if (dx < 5 && dy < 5) {
+            if (Math.abs(e.clientX - dragStartX) < 5 && Math.abs(e.clientY - dragStartY) < 5) {
                 const node = findNodeAt(e.clientX, e.clientY);
                 if (node) {
                     selectedNode = node;
@@ -834,8 +984,7 @@ GRAPH_HTML = """
             e.preventDefault();
             const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
             const mouseWorld = screenToWorld(e.clientX, e.clientY);
-            scale *= zoomFactor;
-            scale = Math.max(0.05, Math.min(10, scale));
+            scale = Math.max(0.05, Math.min(10, scale * zoomFactor));
             const newMouseWorld = screenToWorld(e.clientX, e.clientY);
             viewX += mouseWorld.x - newMouseWorld.x;
             viewY += mouseWorld.y - newMouseWorld.y;
@@ -847,20 +996,19 @@ GRAPH_HTML = """
             if (e.key === 'Escape') {
                 closeNodeInfo();
                 highlightedNodes.clear();
+                typeFilters.clear();
+                document.querySelectorAll('.legend-item').forEach(el => el.classList.remove('active', 'dimmed'));
                 searchInput.value = '';
                 searchResults.classList.remove('visible');
                 render();
             }
         });
 
-        // Initialize
         async function init() {
             resize();
             window.addEventListener('resize', resize);
 
-            const boundsRes = await fetch('/admin/graph/bounds');
-            const boundsData = await boundsRes.json();
-
+            const boundsData = await (await fetch('/admin/graph/bounds')).json();
             if (!boundsData.has_layout) {
                 document.getElementById('loading').innerHTML = 'No layout. Run: uv run python scripts/compute_layout.py';
                 return;
@@ -869,14 +1017,12 @@ GRAPH_HTML = """
             bounds = boundsData;
             viewX = (bounds.min_x + bounds.max_x) / 2;
             viewY = (bounds.min_y + bounds.max_y) / 2;
+            scale = Math.max(0.05, Math.min(1, Math.min(
+                window.innerWidth / (bounds.max_x - bounds.min_x) * 0.8,
+                window.innerHeight / (bounds.max_y - bounds.min_y) * 0.8
+            )));
 
-            const graphWidth = bounds.max_x - bounds.min_x;
-            const graphHeight = bounds.max_y - bounds.min_y;
-            scale = Math.min(window.innerWidth / graphWidth * 0.8, window.innerHeight / graphHeight * 0.8);
-            scale = Math.max(0.05, Math.min(1, scale));
-
-            const statsRes = await fetch('/admin/graph/stats');
-            const stats = await statsRes.json();
+            const stats = await (await fetch('/admin/graph/stats')).json();
             document.getElementById('c-count').textContent = stats.concepts;
             document.getElementById('s-count').textContent = stats.semantic;
             document.getElementById('e-count').textContent = stats.episodic;
