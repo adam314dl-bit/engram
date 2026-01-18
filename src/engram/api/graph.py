@@ -1604,12 +1604,22 @@ GRAPH_HTML = """
             Graph.linkWidth(Graph.linkWidth());
         }
 
-        // STATIC LAYOUT: Disable all forces - positions come from server
-        // This dramatically improves performance for large graphs
-        Graph.cooldownTicks(0);  // No simulation iterations
-        Graph.d3Force('charge', null);
-        Graph.d3Force('link', null);
-        Graph.d3Force('center', null);
+        // STATIC LAYOUT: Run brief simulation to resolve collisions, then freeze
+        // Server provides initial positions, simulation just fixes overlaps
+        Graph.cooldownTicks(100);  // Run only 100 iterations to resolve collisions
+        Graph.d3AlphaDecay(0.05);  // Faster decay so it stops quickly
+        Graph.d3Force('charge').strength(-30);  // Light repulsion to resolve overlaps
+        Graph.d3Force('link').distance(30).strength(0.1);  // Weak links
+        Graph.d3Force('center', null);  // No centering - keep cluster positions
+
+        // After simulation ends, freeze all positions
+        Graph.onEngineStop(() => {
+            const nodes = Graph.graphData().nodes;
+            nodes.forEach(n => {
+                n.fx = n.x;
+                n.fy = n.y;
+            });
+        });
 
         document.addEventListener('keydown', e => {
             if (e.key === 'Escape') {
@@ -1705,12 +1715,7 @@ GRAPH_HTML = """
                     clusterNames[clusterId] = name;
                 });
 
-                // Fix node positions (prevent any movement)
-                data.nodes.forEach(n => {
-                    n.fx = n.x;
-                    n.fy = n.y;
-                });
-
+                // Positions come from server, simulation will resolve collisions then freeze
                 Graph.graphData(data);
 
                 // Zoom to dense area immediately (no simulation to wait for)
