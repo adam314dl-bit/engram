@@ -50,7 +50,7 @@ async def get_graph_data(request: Request) -> dict:
         RETURN c.id as id, c.name as name, c.type as type,
                coalesce(c.activation_count, 0) as weight, conn
         ORDER BY conn DESC
-        LIMIT 400
+        LIMIT 100
         """
     )
     for c in concepts:
@@ -69,7 +69,7 @@ async def get_graph_data(request: Request) -> dict:
         RETURN s.id as id, s.content as content, s.memory_type as type,
                s.importance as importance
         ORDER BY coalesce(s.importance, 0) DESC
-        LIMIT 150
+        LIMIT 40
         """
     )
     for m in memories:
@@ -91,7 +91,7 @@ async def get_graph_data(request: Request) -> dict:
         RETURN e.id as id, e.query as query, e.behavior_name as behavior,
                e.importance as importance
         ORDER BY coalesce(e.importance, 0) DESC
-        LIMIT 100
+        LIMIT 25
         """
     )
     for e in episodes:
@@ -113,7 +113,7 @@ async def get_graph_data(request: Request) -> dict:
         RETURN c1.id as source, c2.id as target,
                r.type as relType, coalesce(r.weight, 0.5) as weight
         ORDER BY coalesce(r.weight, 0.5) DESC
-        LIMIT 600
+        LIMIT 150
         """
     )
     for r in concept_rels:
@@ -130,7 +130,7 @@ async def get_graph_data(request: Request) -> dict:
         """
         MATCH (s:SemanticMemory)-[:ABOUT]->(c:Concept)
         RETURN s.id as source, c.id as target
-        LIMIT 300
+        LIMIT 75
         """
     )
     for r in memory_rels:
@@ -147,7 +147,7 @@ async def get_graph_data(request: Request) -> dict:
         """
         MATCH (e:EpisodicMemory)-[:ACTIVATED]->(c:Concept)
         RETURN e.id as source, c.id as target
-        LIMIT 200
+        LIMIT 50
         """
     )
     for r in episode_rels:
