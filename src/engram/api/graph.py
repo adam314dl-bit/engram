@@ -694,10 +694,10 @@ GRAPH_HTML = """
 
         // How many top hubs to start from (based on zoom)
         function getNumStartHubs() {
-            if (currentZoom < 0.2) return 3;
-            if (currentZoom < 0.4) return 5;
-            if (currentZoom < 0.6) return 8;
-            if (currentZoom < 1.0) return 12;
+            if (currentZoom < 0.3) return 3;
+            if (currentZoom < 0.5) return 5;
+            if (currentZoom < 0.8) return 8;
+            if (currentZoom < 1.2) return 12;
             return 20;
         }
 
@@ -711,26 +711,39 @@ GRAPH_HTML = """
 
         // How many top neighbors to explore at each step
         function getNeighborsPerStep() {
-            if (currentZoom < 0.3) return 3;
-            if (currentZoom < 0.6) return 4;
-            if (currentZoom < 1.0) return 5;
+            if (currentZoom < 0.3) return 2;
+            if (currentZoom < 0.5) return 3;
+            if (currentZoom < 0.8) return 4;
+            if (currentZoom < 1.2) return 5;
             return 7;
         }
 
-        // Compute visible nodes using BFS from top hubs, limited depth
+        // Minimum connections for a neighbor to be included
+        function getMinConnFilter() {
+            if (currentZoom < 0.3) return Math.max(10, maxConn * 0.15);
+            if (currentZoom < 0.5) return Math.max(6, maxConn * 0.08);
+            if (currentZoom < 0.8) return Math.max(4, maxConn * 0.04);
+            if (currentZoom < 1.2) return Math.max(2, maxConn * 0.02);
+            return 1;
+        }
+
+        // Compute visible nodes using BFS from top hubs, limited depth + connection filter
         function computeVisibleNodes() {
             visibleNodes.clear();
 
             const numHubs = getNumStartHubs();
             const maxDepth = getMaxDepth();
             const neighborsPerStep = getNeighborsPerStep();
+            const minConn = getMinConnFilter();
 
-            // Get top hubs by connection count
-            const sortedNodes = Object.values(allNodes).sort((a, b) => (b.conn || 0) - (a.conn || 0));
+            // Get top hubs by connection count (must meet min threshold)
+            const sortedNodes = Object.values(allNodes)
+                .filter(n => (n.conn || 0) >= minConn)
+                .sort((a, b) => (b.conn || 0) - (a.conn || 0));
             const startHubs = sortedNodes.slice(0, numHubs);
 
             // BFS from each hub
-            const nodeDepth = {};  // Track depth of each node
+            const nodeDepth = {};
             startHubs.forEach(hub => {
                 nodeDepth[hub.id] = 0;
                 visibleNodes.add(hub.id);
@@ -744,9 +757,11 @@ GRAPH_HTML = """
 
                 if (depth >= maxDepth) continue;
 
-                // Get neighbors sorted by connections
+                // Get neighbors sorted by connections, filtered by min threshold
                 const neighbors = graphAdjacency[id] || [];
-                const sortedNeighbors = [...neighbors].sort((a, b) => (b.conn || 0) - (a.conn || 0));
+                const sortedNeighbors = [...neighbors]
+                    .filter(n => (n.conn || 0) >= minConn)
+                    .sort((a, b) => (b.conn || 0) - (a.conn || 0));
 
                 // Take top N neighbors
                 let added = 0;
@@ -762,7 +777,7 @@ GRAPH_HTML = """
                 }
             }
 
-            console.log(`LOD: zoom=${currentZoom.toFixed(2)}, hubs=${numHubs}, depth=${maxDepth}, neighbors=${neighborsPerStep}, visible=${visibleNodes.size} nodes`);
+            console.log(`LOD: zoom=${currentZoom.toFixed(2)}, hubs=${numHubs}, depth=${maxDepth}, minConn=${minConn.toFixed(0)}, visible=${visibleNodes.size}`);
         }
 
         // Check if node is visible at current LOD
