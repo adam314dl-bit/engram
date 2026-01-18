@@ -696,23 +696,23 @@ GRAPH_HTML = """
         // Returns minimum connections a node needs to be visible
         function getMinConnThreshold() {
             // Zoomed out = high threshold, zoomed in = low threshold
-            if (currentZoom < 0.2) return Math.max(30, maxConn * 0.4);   // Top hubs only
-            if (currentZoom < 0.35) return Math.max(20, maxConn * 0.25);
-            if (currentZoom < 0.5) return Math.max(12, maxConn * 0.15);
-            if (currentZoom < 0.7) return Math.max(8, maxConn * 0.08);
-            if (currentZoom < 1.0) return Math.max(5, maxConn * 0.04);
-            if (currentZoom < 1.5) return Math.max(3, maxConn * 0.02);
-            if (currentZoom < 2.0) return 2;
-            return 1;  // Show all when very zoomed in
+            // Lower thresholds to show more nodes
+            if (currentZoom < 0.2) return Math.max(15, maxConn * 0.15);   // Top hubs only
+            if (currentZoom < 0.35) return Math.max(10, maxConn * 0.08);
+            if (currentZoom < 0.5) return Math.max(6, maxConn * 0.05);
+            if (currentZoom < 0.7) return Math.max(4, maxConn * 0.03);
+            if (currentZoom < 1.0) return Math.max(3, maxConn * 0.02);
+            if (currentZoom < 1.5) return 2;
+            return 1;  // Show all when zoomed in
         }
 
         // Maximum neighbors to show per hub (prevents explosion)
         function getMaxNeighborsPerHub() {
-            if (currentZoom < 0.3) return 10;
-            if (currentZoom < 0.5) return 15;
-            if (currentZoom < 0.7) return 25;
-            if (currentZoom < 1.0) return 40;
-            return 60;
+            if (currentZoom < 0.3) return 20;
+            if (currentZoom < 0.5) return 35;
+            if (currentZoom < 0.7) return 50;
+            if (currentZoom < 1.0) return 80;
+            return 150;
         }
 
         // Compute which nodes are visible using hierarchical filtering
