@@ -1,9 +1,10 @@
-"""Compute graph layout positions and store in Neo4j.
+"""Compute graph layout positions and clusters, store in Neo4j.
 
 This script:
 1. Fetches all nodes and relationships from Neo4j
 2. Computes 2D layout using NetworkX spring layout
-3. Stores x/y coordinates back to each node in Neo4j
+3. Detects communities using Louvain algorithm
+4. Stores x/y coordinates and cluster IDs back to each node in Neo4j
 
 Run after ingestion or when graph structure changes significantly.
 """
@@ -95,9 +96,25 @@ async def compute_and_store_layout():
         scale=3000,  # Larger scale for more spread
     )
 
-    print("Layout computed. Storing positions in Neo4j...")
+    print("Layout computed.")
 
-    # Store positions back to Neo4j in batches
+    # Detect communities using Louvain algorithm
+    print("Detecting communities...")
+    try:
+        communities = nx.community.louvain_communities(G, seed=42)
+        # Map node -> cluster_id
+        node_clusters = {}
+        for cluster_id, community in enumerate(communities):
+            for node_id in community:
+                node_clusters[node_id] = cluster_id
+        print(f"Found {len(communities)} communities")
+    except Exception as e:
+        print(f"Community detection failed: {e}, using single cluster")
+        node_clusters = {node_id: 0 for node_id in all_nodes}
+
+    print("Storing positions and clusters in Neo4j...")
+
+    # Store positions and clusters back to Neo4j in batches
     batch_size = 500
     node_list = list(positions.items())
 
@@ -106,12 +123,13 @@ async def compute_and_store_layout():
 
         # Build batch update query
         for node_id, (x, y) in batch:
+            cluster_id = node_clusters.get(node_id, 0)
             await db.execute_query(
                 """
                 MATCH (n) WHERE n.id = $id
-                SET n.layout_x = $x, n.layout_y = $y
+                SET n.layout_x = $x, n.layout_y = $y, n.cluster = $cluster
                 """,
-                id=node_id, x=float(x), y=float(y)
+                id=node_id, x=float(x), y=float(y), cluster=cluster_id
             )
 
         progress = min(i + batch_size, len(node_list))
