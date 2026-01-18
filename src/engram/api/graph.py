@@ -1644,8 +1644,8 @@ GRAPH_HTML = """
         // Server provides initial positions, simulation spreads them out nicely
         Graph.cooldownTicks(1000);  // Long simulation for good spread
         Graph.d3AlphaDecay(0.008);  // Very slow decay - runs much longer
-        Graph.d3Force('charge').strength(-120);  // Strong repulsion
-        Graph.d3Force('link').distance(60).strength(0.15);  // Spread linked nodes
+        Graph.d3Force('charge').strength(-40);  // Light repulsion - tighter clusters
+        Graph.d3Force('link').distance(25).strength(0.3);  // Pull linked nodes closer
         Graph.d3Force('center', null);  // No centering - keep cluster positions
 
         // After simulation ends, freeze all positions
