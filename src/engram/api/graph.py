@@ -837,35 +837,26 @@ GRAPH_HTML = """
         let pathLinks = new Set();
         let settingPathNode = null;  // 'start' or 'end'
 
-        // LOD (Level of Detail) state - dynamic based on data
+        // LOD (Level of Detail) state
         let currentZoom = 1;
-        let totalNodes = 0;
+        let lodThresholds = {
+            0.2: 200,   // Very zoomed out: top 200 nodes
+            0.4: 500,   // Zoomed out: top 500 nodes
+            0.6: 800,   // Medium: top 800 nodes
+            1.0: 1500,  // Normal: top 1500 nodes
+            1.5: 3000,  // Zoomed in: all nodes
+            999: 99999  // Very zoomed in: show all
+        };
         let nodeRanks = {};  // nodeId -> rank (lower = more important)
 
-        // Dynamic LOD: percentages of total nodes shown at each zoom level
-        // More gradual progression to keep animations visible longer
-        const lodPercentages = {
-            0.10: 0.01,   // Extremely zoomed out: top 1% (biggest stars only)
-            0.20: 0.03,   // Very zoomed out: top 3%
-            0.30: 0.06,   // Zoomed out: top 6%
-            0.45: 0.12,   // Mid-far: top 12%
-            0.60: 0.20,   // Mid zoom: top 20%
-            0.80: 0.30,   // Closer: top 30%
-            1.00: 0.45,   // Normal: top 45%
-            1.30: 0.60,   // Zoomed in: top 60%
-            1.70: 0.80,   // More zoomed: top 80%
-            2.50: 1.0,    // Very zoomed: all nodes
-            999:  1.0
-        };
-
-        // Get LOD limit based on zoom level (returns node count)
+        // Get LOD limit based on zoom level
         function getLodLimit() {
-            for (const [threshold, pct] of Object.entries(lodPercentages).sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]))) {
+            for (const [threshold, limit] of Object.entries(lodThresholds).sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]))) {
                 if (currentZoom < parseFloat(threshold)) {
-                    return Math.max(50, Math.floor(totalNodes * pct));  // At least 50 nodes
+                    return limit;
                 }
             }
-            return totalNodes;
+            return 99999;
         }
 
         // Check if node is visible at current LOD
@@ -1203,16 +1194,14 @@ GRAPH_HTML = """
                 // LOD filter - hide nodes below current zoom level threshold
                 const visibleAtLod = isNodeVisibleAtLod(node);
                 if (!visibleAtLod) {
-                    return;  // Don't render nodes outside LOD
+                    // Don't render nodes outside LOD
+                    return;
                 }
-
-                // Performance mode: disable expensive effects when many nodes visible
-                const visibleCount = getLodLimit();
-                const perfMode = visibleCount > 800;  // Keep animations until 800+ nodes visible
 
                 // Importance filter
                 const meetsImportance = (node.weight || 0) >= importanceThreshold;
                 if (!meetsImportance) {
+                    // Draw very faint node
                     ctx.beginPath();
                     ctx.arc(node.x, node.y, size * 0.5, 0, 2 * Math.PI);
                     ctx.fillStyle = '#0f0f1a';
@@ -1229,42 +1218,24 @@ GRAPH_HTML = """
                 const isHovered = hoveredNode === node;
                 const isSelected = selected === node;
                 const conn = node.conn || 0;
-                const isHub = conn > 8;
+                const isHub = conn > 8;  // High-connection node = sun
                 const isMajorHub = conn > 15;
                 const isSuperHub = conn > 25;
 
-                // PERFORMANCE MODE: Simple rendering
-                if (perfMode) {
-                    const nodeSize = isSuperHub ? size * 1.3 : isMajorHub ? size * 1.2 : size;
-                    ctx.beginPath();
-                    ctx.arc(node.x, node.y, nodeSize, 0, 2 * Math.PI);
-                    ctx.fillStyle = isActive ? color : '#1a1a2e';
-                    ctx.fill();
-
-                    // Only show glow for selected/hovered
-                    if (isSelected || isHovered) {
-                        ctx.shadowColor = color;
-                        ctx.shadowBlur = 15;
-                        ctx.beginPath();
-                        ctx.arc(node.x, node.y, nodeSize + 2, 0, 2 * Math.PI);
-                        ctx.strokeStyle = '#fff';
-                        ctx.lineWidth = 1.5;
-                        ctx.stroke();
-                        ctx.shadowBlur = 0;
-                    }
-                    return;  // Skip fancy effects
-                }
-
-                // QUALITY MODE: Full effects (when fewer nodes visible)
                 // Sun corona effect for hubs - pulsing synced with particle flow
                 if (isHub && isActive) {
+                    // Slower pulse synced with particle arrival (~3 seconds per cycle)
                     const time = Date.now() * 0.001;
                     const pulseSpeed = isSuperHub ? 0.8 : isMajorHub ? 0.6 : 0.5;
                     const pulseAmount = isSuperHub ? 0.15 : isMajorHub ? 0.12 : 0.08;
                     const pulse = 1 + Math.sin(time * pulseSpeed * Math.PI) * pulseAmount;
+
+                    // Secondary faster micro-pulse (like particles arriving)
                     const microPulse = 1 + Math.sin(time * 3 + conn * 0.5) * 0.03;
+
                     const coronaSize = size * (isSuperHub ? 3.5 : isMajorHub ? 2.8 : 2) * pulse * microPulse;
 
+                    // Outer glow with breathing effect
                     const glowIntensity = 0.4 + Math.sin(time * pulseSpeed * Math.PI) * 0.2;
                     const gradient = ctx.createRadialGradient(node.x, node.y, size * 0.3, node.x, node.y, coronaSize);
                     gradient.addColorStop(0, color + Math.floor(glowIntensity * 255).toString(16).padStart(2, '0'));
@@ -1276,6 +1247,7 @@ GRAPH_HTML = """
                     ctx.fillStyle = gradient;
                     ctx.fill();
 
+                    // Extra ring for super hubs - pulses when "receiving" particles
                     if (isSuperHub) {
                         const ringPulse = 1 + Math.sin(time * 1.5) * 0.15;
                         ctx.beginPath();
@@ -1307,7 +1279,7 @@ GRAPH_HTML = """
                     ctx.shadowBlur = 5;
                 }
 
-                // Draw node
+                // Draw node (hubs are larger based on connection count)
                 const nodeSize = isOnPath ? size * 1.2 : isSuperHub ? size * 1.3 : isMajorHub ? size * 1.2 : isHub ? size * 1.1 : size;
                 ctx.beginPath();
                 ctx.arc(node.x, node.y, nodeSize, 0, 2 * Math.PI);
@@ -1429,19 +1401,11 @@ GRAPH_HTML = """
             })
             .linkCurvature(0.15)  // Slightly curved edges
             .linkDirectionalParticles(l => {
-                // Performance mode: no particles when many nodes visible
-                const visibleCount = getLodLimit();
-                if (visibleCount > 800) return 0;
-
                 // Show particles on path links
                 if (pathLinks.has(l)) return 4;
 
                 const sourceNode = allNodes[l.source.id || l.source];
                 const targetNode = allNodes[l.target.id || l.target];
-
-                // Hide particles for non-visible nodes
-                if (sourceNode && !isNodeVisibleAtLod(sourceNode)) return 0;
-                if (targetNode && !isNodeVisibleAtLod(targetNode)) return 0;
 
                 // Hide particles if nodes are filtered by importance
                 if (importanceThreshold > 0) {
@@ -1640,12 +1604,12 @@ GRAPH_HTML = """
             Graph.linkWidth(Graph.linkWidth());
         }
 
-        // STATIC LAYOUT: Run simulation to spread nodes and resolve collisions, then freeze
-        // Server provides initial positions, simulation spreads them out nicely
-        Graph.cooldownTicks(1000);  // Long simulation for good spread
-        Graph.d3AlphaDecay(0.008);  // Very slow decay - runs much longer
-        Graph.d3Force('charge').strength(-40);  // Light repulsion - tighter clusters
-        Graph.d3Force('link').distance(25).strength(0.3);  // Pull linked nodes closer
+        // STATIC LAYOUT: Run brief simulation to resolve collisions, then freeze
+        // Server provides initial positions, simulation just fixes overlaps
+        Graph.cooldownTicks(100);  // Run only 100 iterations to resolve collisions
+        Graph.d3AlphaDecay(0.05);  // Faster decay so it stops quickly
+        Graph.d3Force('charge').strength(-30);  // Light repulsion to resolve overlaps
+        Graph.d3Force('link').distance(30).strength(0.1);  // Weak links
         Graph.d3Force('center', null);  // No centering - keep cluster positions
 
         // After simulation ends, freeze all positions
@@ -1689,15 +1653,14 @@ GRAPH_HTML = """
                     '<div>Nodes: <strong style="color:#5eead4;text-shadow:0 0 5px #5eead4">' + data.nodes.length + '</strong></div>' +
                     '<div>Links: <strong style="color:#5eead4;text-shadow:0 0 5px #5eead4">' + data.links.length + '</strong></div>';
 
-                // Set total for dynamic LOD calculations
-                totalNodes = data.nodes.length;
-
-                // Rank nodes by connection count (most connected = rank 0)
-                // This determines which nodes appear first when zoomed out
-                const sortedByConn = [...data.nodes].sort((a, b) => (b.conn || 0) - (a.conn || 0));
-                sortedByConn.forEach((n, i) => nodeRanks[n.id] = i);
-
-                console.log(`LOD: ${totalNodes} nodes, zoom ${currentZoom.toFixed(2)} -> showing top ${getLodLimit()} nodes`);
+                // Compute node ranks by importance (weight + connections)
+                // Lower rank = more important = shown earlier when zoomed out
+                const sortedNodes = [...data.nodes].sort((a, b) => {
+                    const scoreA = (a.weight || 0) + (a.conn || 0) * 0.5;
+                    const scoreB = (b.weight || 0) + (b.conn || 0) * 0.5;
+                    return scoreB - scoreA;  // Higher score = lower rank
+                });
+                sortedNodes.forEach((n, i) => nodeRanks[n.id] = i);
 
                 // Store nodes for lookup
                 data.nodes.forEach(n => allNodes[n.id] = n);
