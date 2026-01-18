@@ -1,4 +1,4 @@
-"""Graph visualization with clustering and 10% most important data."""
+"""Graph visualization with WebGL (3D force-graph) for better performance."""
 
 import logging
 
@@ -169,7 +169,7 @@ GRAPH_HTML = """
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; }
-        body { background: #0a0a12; font-family: -apple-system, sans-serif; }
+        body { background: #0a0a12; font-family: -apple-system, sans-serif; overflow: hidden; }
         #graph { width: 100vw; height: 100vh; }
         #info { position: absolute; top: 16px; left: 16px; color: #8b949e; z-index: 10; pointer-events: none; }
         #info h1 { font-size: 11px; color: #5eead480; font-weight: 400; text-transform: uppercase; letter-spacing: 3px; margin-top: 6px; }
@@ -316,6 +316,18 @@ GRAPH_HTML = """
             font-size: 16px;
         }
         #node-info .close-btn:hover { color: #5eead4; }
+        #mode-indicator {
+            position: absolute;
+            bottom: 16px;
+            right: 16px;
+            background: rgba(94,234,212,0.1);
+            border: 1px solid #5eead4;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 10px;
+            color: #5eead4;
+            z-index: 10;
+        }
     </style>
 </head>
 <body>
@@ -337,14 +349,14 @@ GRAPH_HTML = """
         <button class="legend-btn" id="cluster-btn" onclick="toggleClusterMode()"><span class="legend-dot" style="background:linear-gradient(135deg,#5eead4,#a78bfa,#f472b6)"></span>Clusters<span class="legend-count" id="cluster-count">-</span></button>
     </div>
     <div id="stats">Loading...</div>
-    <div id="loading">Loading graph...</div>
+    <div id="loading">Loading graph (WebGL)...</div>
+    <div id="mode-indicator">WebGL Mode</div>
 
-    <script src="https://unpkg.com/force-graph"></script>
+    <script src="https://unpkg.com/3d-force-graph"></script>
     <script>
         const typeColors = { concept: '#5eead4', semantic: '#a78bfa', episodic: '#f472b6' };
         const typeLabels = { concept: 'Concept', semantic: 'Semantic Memory', episodic: 'Episodic Memory' };
 
-        // Cluster colors
         const clusterPalette = [
             '#5eead4', '#a78bfa', '#f472b6', '#fbbf24', '#34d399',
             '#60a5fa', '#fb7185', '#a3e635', '#22d3ee', '#c084fc',
@@ -360,7 +372,6 @@ GRAPH_HTML = """
         let allNodes = {};
         let selectedTypes = new Set();
         let typeNeighbors = new Set();
-        let hoveredNode = null;
 
         function getNodeColor(node) {
             if (useClusterColors && clusterColors[node.id]) {
@@ -372,10 +383,9 @@ GRAPH_HTML = """
         function toggleClusterMode() {
             useClusterColors = !useClusterColors;
             document.getElementById('cluster-btn').classList.toggle('active', useClusterColors);
-            refresh();
+            Graph.nodeColor(n => getNodeColor(n));
         }
 
-        // Cluster detection using Label Propagation
         function detectClusters(nodes, links) {
             const adj = {};
             nodes.forEach(n => adj[n.id] = []);
@@ -420,7 +430,6 @@ GRAPH_HTML = """
                 if (!changed) break;
             }
 
-            // Merge small clusters
             const labelSizes = {};
             nodes.forEach(n => {
                 const lbl = labels[n.id];
@@ -475,7 +484,7 @@ GRAPH_HTML = """
                 neighbors.clear();
                 closeNodeInfo();
             }
-            refresh();
+            updateVisibility();
         }
 
         function updateTypeNeighbors() {
@@ -484,18 +493,34 @@ GRAPH_HTML = """
             Object.values(allNodes).forEach(n => {
                 if (selectedTypes.has(n.type)) typeNeighbors.add(n.id);
             });
-            Graph.graphData().links.forEach(l => {
-                const sourceId = l.source.id || l.source;
-                const targetId = l.target.id || l.target;
-                const sourceNode = allNodes[sourceId];
-                const targetNode = allNodes[targetId];
-                if (sourceNode && targetNode) {
-                    if (selectedTypes.has(sourceNode.type) && selectedTypes.has(targetNode.type)) {
-                        typeNeighbors.add(sourceId);
-                        typeNeighbors.add(targetId);
+        }
+
+        function updateVisibility() {
+            Graph
+                .nodeColor(n => {
+                    if (selectedTypes.size > 0 && !selectedTypes.has(n.type)) return '#1a1a2e';
+                    if (selected && !neighbors.has(n.id)) return '#1a1a2e';
+                    return getNodeColor(n);
+                })
+                .linkColor(l => {
+                    const sourceId = l.source.id || l.source;
+                    const targetId = l.target.id || l.target;
+                    if (selectedTypes.size > 0) {
+                        const sn = allNodes[sourceId];
+                        const tn = allNodes[targetId];
+                        if (sn && tn && selectedTypes.has(sn.type) && selectedTypes.has(tn.type)) {
+                            return 'rgba(94,234,212,0.6)';
+                        }
+                        return 'rgba(0,0,0,0)';
                     }
-                }
-            });
+                    if (selected) {
+                        if (sourceId === selected.id || targetId === selected.id) {
+                            return 'rgba(94,234,212,0.8)';
+                        }
+                        return 'rgba(0,0,0,0)';
+                    }
+                    return 'rgba(94,234,212,0.15)';
+                });
         }
 
         // Search
@@ -547,13 +572,14 @@ GRAPH_HTML = """
             selected = node;
             neighbors = new Set([node.id]);
             Graph.graphData().links.forEach(l => {
-                if (l.source.id === node.id) neighbors.add(l.target.id);
-                if (l.target.id === node.id) neighbors.add(l.source.id);
+                const sid = l.source.id || l.source;
+                const tid = l.target.id || l.target;
+                if (sid === node.id) neighbors.add(tid);
+                if (tid === node.id) neighbors.add(sid);
             });
             showNodeInfo(node);
-            Graph.centerAt(node.x, node.y, 500);
-            Graph.zoom(2, 500);
-            refresh();
+            Graph.cameraPosition({ x: node.x, y: node.y, z: 300 }, node, 1000);
+            updateVisibility();
         }
 
         function showNodeInfo(node) {
@@ -590,8 +616,10 @@ GRAPH_HTML = """
 
             const connected = [];
             Graph.graphData().links.forEach(l => {
-                if (l.source.id === node.id && allNodes[l.target.id]) connected.push(allNodes[l.target.id]);
-                else if (l.target.id === node.id && allNodes[l.source.id]) connected.push(allNodes[l.source.id]);
+                const sid = l.source.id || l.source;
+                const tid = l.target.id || l.target;
+                if (sid === node.id && allNodes[tid]) connected.push(allNodes[tid]);
+                else if (tid === node.id && allNodes[sid]) connected.push(allNodes[sid]);
             });
 
             if (connected.length > 0) {
@@ -618,91 +646,20 @@ GRAPH_HTML = """
             document.getElementById('node-info').classList.remove('visible');
         }
 
-        const Graph = ForceGraph()
+        // Initialize 3D Force Graph with WebGL
+        const Graph = ForceGraph3D()
             (document.getElementById('graph'))
             .backgroundColor('#0a0a12')
-            .nodeCanvasObject((node, ctx, globalScale) => {
-                const size = Math.min(20, Math.max(4, Math.sqrt(node.conn || 1) * 3));
-                const color = getNodeColor(node);
-
-                const isNodeActive = !selected || neighbors.has(node.id);
-                const isTypeActive = selectedTypes.size === 0 || typeNeighbors.has(node.id);
-                const isActive = isNodeActive && isTypeActive;
-                const isHovered = hoveredNode === node;
-                const isSelected = selected === node;
-
-                if (isHovered || isSelected) {
-                    ctx.shadowColor = color;
-                    ctx.shadowBlur = isSelected ? 20 : 12;
-                }
-
-                ctx.beginPath();
-                ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
-                ctx.fillStyle = isActive ? color : '#1a1a2e';
-                ctx.fill();
-                ctx.shadowBlur = 0;
-
-                if (isHovered || isSelected) {
-                    ctx.beginPath();
-                    ctx.arc(node.x, node.y, size + 2, 0, 2 * Math.PI);
-                    ctx.strokeStyle = '#fff';
-                    ctx.lineWidth = isSelected ? 2 : 1;
-                    ctx.stroke();
-                }
-
-                const showLabel = (selected && neighbors.has(node.id)) ||
-                                  (selectedTypes.size > 0 && typeNeighbors.has(node.id)) ||
-                                  (globalScale > 1.0 && size > 10) ||
-                                  (globalScale > 2.0);
-                if (showLabel && isActive) {
-                    const label = node.name.length > 20 ? node.name.slice(0,20) + '..' : node.name;
-                    ctx.font = `${10/globalScale}px -apple-system, sans-serif`;
-                    ctx.textAlign = 'center';
-                    ctx.fillStyle = '#e0e0ff';
-                    ctx.fillText(label, node.x, node.y + size + 10/globalScale);
-                }
-            })
-            .nodePointerAreaPaint((node, color, ctx) => {
-                const size = Math.min(20, Math.max(4, Math.sqrt(node.conn || 1) * 3)) + 4;
-                ctx.beginPath();
-                ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
-                ctx.fillStyle = color;
-                ctx.fill();
-            })
-            .linkColor(l => {
-                const sourceId = l.source.id || l.source;
-                const targetId = l.target.id || l.target;
-                const sourceNode = allNodes[sourceId];
-                const targetNode = allNodes[targetId];
-
-                if (selectedTypes.size > 0) {
-                    if (sourceNode && targetNode && selectedTypes.has(sourceNode.type) && selectedTypes.has(targetNode.type)) {
-                        return '#5eead4';
-                    }
-                    return '#0a0a12';
-                }
-                if (!selected) return '#2a2a4e';
-                return (sourceId === selected.id || targetId === selected.id) ? '#5eead4' : '#1a1a2e';
-            })
-            .linkWidth(l => {
-                const sourceId = l.source.id || l.source;
-                const targetId = l.target.id || l.target;
-                if (selectedTypes.size > 0) {
-                    const sourceNode = allNodes[sourceId];
-                    const targetNode = allNodes[targetId];
-                    if (sourceNode && targetNode && selectedTypes.has(sourceNode.type) && selectedTypes.has(targetNode.type)) {
-                        return 2;
-                    }
-                    return 0.2;
-                }
-                if (!selected) return 1;
-                return (sourceId === selected.id || targetId === selected.id) ? 2 : 0.2;
-            })
-            .onNodeHover(node => {
-                hoveredNode = node;
-                document.body.style.cursor = node ? 'pointer' : 'default';
-                refresh();
-            })
+            .nodeColor(n => getNodeColor(n))
+            .nodeVal(n => Math.max(1, Math.sqrt(n.conn || 1) * 2))
+            .nodeOpacity(0.9)
+            .linkColor(() => 'rgba(94,234,212,0.15)')
+            .linkOpacity(0.6)
+            .linkWidth(0.5)
+            .linkDirectionalParticles(2)
+            .linkDirectionalParticleWidth(1.5)
+            .linkDirectionalParticleSpeed(0.005)
+            .linkDirectionalParticleColor(() => '#5eead4')
             .onNodeClick(node => {
                 selectedTypes.clear();
                 typeNeighbors.clear();
@@ -712,16 +669,10 @@ GRAPH_HTML = """
                     selected = null;
                     neighbors.clear();
                     closeNodeInfo();
+                    updateVisibility();
                 } else {
-                    selected = node;
-                    neighbors = new Set([node.id]);
-                    Graph.graphData().links.forEach(l => {
-                        if (l.source.id === node.id) neighbors.add(l.target.id);
-                        if (l.target.id === node.id) neighbors.add(l.source.id);
-                    });
-                    showNodeInfo(node);
+                    selectNode(node);
                 }
-                refresh();
             })
             .onBackgroundClick(() => {
                 selected = null;
@@ -730,19 +681,18 @@ GRAPH_HTML = """
                 typeNeighbors.clear();
                 document.querySelectorAll('.legend-btn[data-type]').forEach(el => el.classList.remove('active'));
                 closeNodeInfo();
-                refresh();
+                updateVisibility();
             })
             .cooldownTime(3000)
             .d3VelocityDecay(0.3)
-            .nodeLabel(null);
+            .nodeLabel(n => n.name);
 
-        Graph.d3Force('charge').strength(-80);
-        Graph.d3Force('link').distance(60);
+        // Configure forces
+        Graph.d3Force('charge').strength(-50);
+        Graph.d3Force('link').distance(40);
 
-        function refresh() {
-            Graph.nodeColor(Graph.nodeColor());
-            Graph.linkColor(Graph.linkColor());
-        }
+        // Set top-down view (like 2D)
+        Graph.cameraPosition({ x: 0, y: 0, z: 1000 });
 
         document.addEventListener('keydown', e => {
             if (e.key === 'Escape') {
@@ -754,7 +704,7 @@ GRAPH_HTML = """
                 closeNodeInfo();
                 searchInput.value = '';
                 searchResults.classList.remove('visible');
-                refresh();
+                updateVisibility();
             }
         });
 
@@ -763,7 +713,11 @@ GRAPH_HTML = """
             .then(data => {
                 document.getElementById('loading').style.display = 'none';
 
-                data.nodes.forEach(n => allNodes[n.id] = n);
+                data.nodes.forEach(n => {
+                    allNodes[n.id] = n;
+                    // Flatten to 2D (z = 0)
+                    n.fz = 0;
+                });
 
                 const c = data.nodes.filter(n => n.type === 'concept').length;
                 const s = data.nodes.filter(n => n.type === 'semantic').length;
@@ -775,13 +729,10 @@ GRAPH_HTML = """
                     '<div>Nodes: <strong style="color:#5eead4">' + data.nodes.length + '</strong></div>' +
                     '<div>Links: <strong style="color:#5eead4">' + data.links.length + '</strong></div>';
 
-                // Detect clusters
                 const numClusters = detectClusters(data.nodes, data.links);
                 document.getElementById('cluster-count').textContent = numClusters;
 
                 Graph.graphData(data);
-
-                setTimeout(() => Graph.zoom(0.5, 1000), 2000);
             });
     </script>
 </body>
