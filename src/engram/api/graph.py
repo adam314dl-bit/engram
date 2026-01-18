@@ -564,6 +564,9 @@ GRAPH_HTML = """
         ];
 
         let clusterColors = {};  // nodeId -> color
+        let nodeCluster = {};    // nodeId -> cluster index
+        let clusterCenters = {}; // cluster index -> {x, y, size, name}
+        let clusterNames = {};   // cluster index -> name (most important node)
         let colors = typeColors;  // default to type colors
         let useClusterColors = false;
 
@@ -786,11 +789,61 @@ GRAPH_HTML = """
             const labelToCluster = {};
             uniqueLabels.forEach((lbl, i) => labelToCluster[lbl] = i);
 
-            // Assign colors
+            // Count nodes per cluster to determine sizes
+            const clusterSizes = {};
+            nodes.forEach(n => {
+                const cluster = labelToCluster[labels[n.id]];
+                clusterSizes[cluster] = (clusterSizes[cluster] || 0) + 1;
+            });
+
+            // Calculate cluster centers arranged in a spiral/circle pattern
+            // Larger clusters get more space, positioned based on size
+            const numClusters = uniqueLabels.length;
+            const sortedClusters = Object.entries(clusterSizes)
+                .sort((a, b) => b[1] - a[1])  // Largest first
+                .map(([idx]) => parseInt(idx));
+
+            const baseRadius = Math.sqrt(nodes.length) * 25;  // Base spread radius
+            clusterCenters = {};
+
+            sortedClusters.forEach((clusterIdx, i) => {
+                // Spiral arrangement - larger clusters near center, smaller ones outside
+                const angle = (i / numClusters) * 2 * Math.PI + Math.random() * 0.3;
+                const ringIndex = Math.floor(i / 6);  // 6 clusters per ring
+                const radius = baseRadius * (0.5 + ringIndex * 0.8);
+                clusterCenters[clusterIdx] = {
+                    x: Math.cos(angle) * radius,
+                    y: Math.sin(angle) * radius,
+                    size: clusterSizes[clusterIdx]
+                };
+            });
+
+            // Assign colors and cluster index to nodes, find cluster representative names
             clusterColors = {};
+            nodeCluster = {};
+            const clusterBestNode = {};  // cluster -> {node, score}
+
             nodes.forEach(n => {
                 const cluster = labelToCluster[labels[n.id]];
                 clusterColors[n.id] = clusterPalette[cluster % clusterPalette.length];
+                nodeCluster[n.id] = cluster;
+                n.cluster = cluster;  // Store on node for force access
+
+                // Track best node for cluster name (prefer concepts with high weight)
+                const score = (n.weight || 0) + (n.conn || 0) * 0.5 + (n.type === 'concept' ? 10 : 0);
+                if (!clusterBestNode[cluster] || score > clusterBestNode[cluster].score) {
+                    clusterBestNode[cluster] = { node: n, score };
+                }
+            });
+
+            // Set cluster names from best representative node
+            clusterNames = {};
+            Object.entries(clusterBestNode).forEach(([cluster, {node}]) => {
+                let name = node.name || '';
+                // Truncate long names
+                if (name.length > 25) name = name.slice(0, 22) + '...';
+                clusterNames[cluster] = name;
+                clusterCenters[cluster].name = name;
             });
 
             return uniqueLabels.length;
@@ -1219,7 +1272,62 @@ GRAPH_HTML = """
             })
             .d3VelocityDecay(0.4)
             .cooldownTime(2500)
-            .nodeLabel(null);  // Disable hover tooltip
+            .nodeLabel(null)  // Disable hover tooltip
+            .onRenderFramePost((ctx, globalScale) => {
+                // Draw cluster labels when zoomed out
+                if (currentZoom > 0.6) return;  // Only show when zoomed out
+
+                ctx.save();
+                Object.entries(clusterCenters).forEach(([clusterId, center]) => {
+                    if (!center.name) return;
+
+                    // Calculate actual center from nodes in this cluster
+                    const clusterNodes = Graph.graphData().nodes.filter(n => n.cluster == clusterId);
+                    if (clusterNodes.length === 0) return;
+
+                    let cx = 0, cy = 0;
+                    clusterNodes.forEach(n => { cx += n.x; cy += n.y; });
+                    cx /= clusterNodes.length;
+                    cy /= clusterNodes.length;
+
+                    // Draw cluster label with glow
+                    const color = clusterPalette[clusterId % clusterPalette.length];
+                    const fontSize = Math.max(16, 24 / currentZoom);
+
+                    // Glow effect
+                    ctx.shadowColor = color;
+                    ctx.shadowBlur = 20;
+
+                    // Background pill
+                    ctx.font = `bold ${fontSize}px -apple-system, sans-serif`;
+                    const textWidth = ctx.measureText(center.name).width;
+                    const padding = fontSize * 0.4;
+
+                    ctx.fillStyle = 'rgba(10, 10, 18, 0.85)';
+                    ctx.beginPath();
+                    ctx.roundRect(
+                        cx - textWidth/2 - padding,
+                        cy - fontSize/2 - padding * 0.6,
+                        textWidth + padding * 2,
+                        fontSize + padding * 1.2,
+                        fontSize * 0.3
+                    );
+                    ctx.fill();
+
+                    // Border
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+
+                    // Text
+                    ctx.shadowBlur = 0;
+                    ctx.fillStyle = color;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(center.name, cx, cy);
+                });
+                ctx.restore();
+            });
 
         // Position edge tooltip at mouse
         document.getElementById('graph').addEventListener('mousemove', e => {
@@ -1234,9 +1342,77 @@ GRAPH_HTML = """
             Graph.linkWidth(Graph.linkWidth());
         }
 
-        // More spacing
-        Graph.d3Force('charge').strength(-300);
-        Graph.d3Force('link').distance(80);
+        // Galaxy layout forces
+        // Base repulsion between all nodes
+        Graph.d3Force('charge').strength(-150);
+        Graph.d3Force('link').distance(50).strength(0.3);
+
+        // Custom cluster force - pulls nodes toward their cluster center
+        function clusterForce(alpha) {
+            return function(d) {
+                if (d.cluster === undefined) return;
+                const center = clusterCenters[d.cluster];
+                if (!center) return;
+
+                // Pull toward cluster center
+                const clusterStrength = 0.15;
+                d.vx -= (d.x - center.x) * clusterStrength * alpha;
+                d.vy -= (d.y - center.y) * clusterStrength * alpha;
+            };
+        }
+
+        // Inter-cluster repulsion - push nodes of different clusters apart
+        function interClusterForce(alpha) {
+            const nodes = Graph.graphData().nodes;
+            const repulsionStrength = 800;
+
+            for (let i = 0; i < nodes.length; i++) {
+                for (let j = i + 1; j < nodes.length; j++) {
+                    const a = nodes[i];
+                    const b = nodes[j];
+
+                    // Only apply extra repulsion between different clusters
+                    if (a.cluster === b.cluster) continue;
+
+                    const dx = a.x - b.x;
+                    const dy = a.y - b.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+                    // Strong repulsion at close range between different clusters
+                    if (dist < 300) {
+                        const force = (repulsionStrength * alpha) / (dist * dist);
+                        const fx = dx / dist * force;
+                        const fy = dy / dist * force;
+
+                        a.vx += fx;
+                        a.vy += fy;
+                        b.vx -= fx;
+                        b.vy -= fy;
+                    }
+                }
+            }
+        }
+
+        // Apply custom forces after graph data loads
+        function applyGalaxyForces() {
+            const simulation = Graph.d3Force('link').simulation;
+            if (!simulation) {
+                // Simulation not ready, try again
+                setTimeout(applyGalaxyForces, 100);
+                return;
+            }
+
+            // Add cluster attraction force
+            simulation.force('cluster', (alpha) => {
+                Graph.graphData().nodes.forEach(clusterForce(alpha));
+            });
+
+            // Add inter-cluster repulsion
+            simulation.force('interCluster', interClusterForce);
+
+            // Reheat simulation
+            simulation.alpha(1).restart();
+        }
 
         document.addEventListener('keydown', e => {
             if (e.key === 'Escape') {
@@ -1293,7 +1469,21 @@ GRAPH_HTML = """
                 const numClusters = detectClusters(data.nodes, data.links);
                 document.getElementById('cluster-count').textContent = numClusters;
 
+                // Set initial node positions near their cluster centers
+                data.nodes.forEach(n => {
+                    const center = clusterCenters[n.cluster];
+                    if (center) {
+                        // Start near cluster center with some random spread
+                        const spread = Math.sqrt(center.size) * 8;
+                        n.x = center.x + (Math.random() - 0.5) * spread;
+                        n.y = center.y + (Math.random() - 0.5) * spread;
+                    }
+                });
+
                 Graph.graphData(data);
+
+                // Apply galaxy forces after a short delay
+                setTimeout(applyGalaxyForces, 200);
             });
     </script>
 </body>
