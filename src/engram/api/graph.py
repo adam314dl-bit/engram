@@ -1642,10 +1642,10 @@ GRAPH_HTML = """
 
         // STATIC LAYOUT: Run simulation to spread nodes and resolve collisions, then freeze
         // Server provides initial positions, simulation spreads them out nicely
-        Graph.cooldownTicks(400);  // More iterations for better spread
-        Graph.d3AlphaDecay(0.015);  // Slower decay - let it run longer
-        Graph.d3Force('charge').strength(-80);  // Stronger repulsion for better spread
-        Graph.d3Force('link').distance(50).strength(0.2);  // Moderate link pull
+        Graph.cooldownTicks(1000);  // Long simulation for good spread
+        Graph.d3AlphaDecay(0.008);  // Very slow decay - runs much longer
+        Graph.d3Force('charge').strength(-120);  // Strong repulsion
+        Graph.d3Force('link').distance(60).strength(0.15);  // Spread linked nodes
         Graph.d3Force('center', null);  // No centering - keep cluster positions
 
         // After simulation ends, freeze all positions
