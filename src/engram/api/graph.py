@@ -38,12 +38,12 @@ async def get_graph_data(request: Request) -> dict:
     """Get graph data for visualization.
 
     Returns top N most connected nodes for performance.
-    Hardcoded limit: 1200 nodes max for smooth Canvas 2D rendering.
+    Hardcoded limit: 600 nodes max for smooth Canvas 2D rendering.
     """
     db = get_db(request)
 
     # Hardcoded limit for smooth performance
-    MAX_NODES = 1200
+    MAX_NODES = 600
 
     # Get all nodes with their connection counts in one query
     # This lets us pick the most connected nodes across all types
