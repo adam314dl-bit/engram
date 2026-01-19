@@ -356,8 +356,247 @@ def spiral_galaxy_layout(positions, node_clusters, arms=4, spread=10000, rotatio
     return new_positions
 
 
+def gpu_cluster_layout(nodes, edges, node_clusters, base_radius=500, padding=1.4):
+    """GPU-accelerated cluster layout using cuGraph ForceAtlas2.
+
+    1. Creates super-graph with clusters as nodes
+    2. Uses cuGraph ForceAtlas2 for cluster positions (GPU)
+    3. Scales positions to avoid overlap based on cluster radii
+    4. Computes local layouts within clusters (parallel CPU)
+
+    Args:
+        nodes: list of node IDs
+        edges: list of (source, target) tuples
+        node_clusters: dict of node_id -> cluster_id
+        base_radius: base radius multiplier
+        padding: space between clusters
+
+    Returns:
+        dict of node_id -> (x, y)
+    """
+    import cudf
+    import cugraph
+    import math
+
+    print("Computing GPU-accelerated cluster layout...")
+
+    # Group nodes by cluster
+    cluster_nodes = {}
+    for node_id in nodes:
+        cluster_id = node_clusters.get(node_id, 0)
+        if cluster_id not in cluster_nodes:
+            cluster_nodes[cluster_id] = []
+        cluster_nodes[cluster_id].append(node_id)
+
+    # Compute radius for each cluster
+    cluster_radii = {}
+    for cluster_id, node_list in cluster_nodes.items():
+        cluster_radii[cluster_id] = base_radius * math.sqrt(len(node_list))
+
+    print(f"Clusters: {len(cluster_nodes)}, radius range: {min(cluster_radii.values()):.0f} - {max(cluster_radii.values()):.0f}")
+
+    # Build inter-cluster edge list with weights
+    inter_cluster_edges = {}
+    for src, dst in edges:
+        c1 = node_clusters.get(src, 0)
+        c2 = node_clusters.get(dst, 0)
+        if c1 != c2:
+            key = (min(c1, c2), max(c1, c2))
+            inter_cluster_edges[key] = inter_cluster_edges.get(key, 0) + 1
+
+    # Create cluster ID mapping (cuGraph needs integer indices)
+    cluster_ids = list(cluster_nodes.keys())
+    cluster_to_idx = {cid: i for i, cid in enumerate(cluster_ids)}
+    idx_to_cluster = {i: cid for i, cid in enumerate(cluster_ids)}
+
+    print(f"Inter-cluster edges: {len(inter_cluster_edges)}")
+
+    # Create edge dataframe for cuGraph
+    if inter_cluster_edges:
+        src_list = [cluster_to_idx[e[0]] for e in inter_cluster_edges.keys()]
+        dst_list = [cluster_to_idx[e[1]] for e in inter_cluster_edges.keys()]
+        weight_list = list(inter_cluster_edges.values())
+        edge_df = cudf.DataFrame({"src": src_list, "dst": dst_list, "weight": weight_list})
+    else:
+        edge_df = cudf.DataFrame({"src": [], "dst": [], "weight": []})
+
+    # Create cuGraph graph
+    G = cugraph.Graph()
+    if len(edge_df) > 0:
+        G.from_cudf_edgelist(edge_df, source="src", destination="dst", edge_attr="weight")
+
+    print("Running ForceAtlas2 on GPU...")
+
+    # Run ForceAtlas2 for cluster layout
+    positions_df = cugraph.force_atlas2(
+        G,
+        max_iter=500,
+        pos_list=None,
+        outbound_attraction_distribution=True,
+        lin_log_mode=False,
+        edge_weight_influence=1.0,
+        jitter_tolerance=1.0,
+        barnes_hut_optimize=True,
+        barnes_hut_theta=1.2,
+        scaling_ratio=2.0,
+        strong_gravity_mode=False,
+        gravity=1.0,
+    )
+
+    # Extract positions
+    cluster_positions = {}
+    for row in positions_df.to_pandas().itertuples():
+        cluster_id = idx_to_cluster[row.vertex]
+        cluster_positions[cluster_id] = (row.x, row.y)
+
+    # Add isolated clusters (not in any edge)
+    import random
+    random.seed(42)
+    for cluster_id in cluster_ids:
+        if cluster_id not in cluster_positions:
+            angle = random.uniform(0, 2 * math.pi)
+            r = random.uniform(1000, 5000)
+            cluster_positions[cluster_id] = (r * math.cos(angle), r * math.sin(angle))
+
+    print("Scaling cluster positions to avoid overlap...")
+
+    # Scale positions based on cluster radii to avoid overlap
+    cluster_centers = separate_cluster_positions(
+        cluster_positions, cluster_radii, padding=padding
+    )
+
+    print("Computing local layouts (parallel CPU)...")
+
+    # Build edge lookup for local layouts
+    node_edges = {}
+    for src, dst in edges:
+        if src not in node_edges:
+            node_edges[src] = []
+        if dst not in node_edges:
+            node_edges[dst] = []
+        node_edges[src].append(dst)
+        node_edges[dst].append(src)
+
+    # Compute local layouts (reuse parallel code from circle_packing_layout)
+    positions = compute_local_layouts_parallel(
+        cluster_nodes, cluster_centers, cluster_radii, node_edges
+    )
+
+    print("GPU cluster layout complete.")
+    return positions
+
+
+def separate_cluster_positions(cluster_positions, cluster_radii, padding=1.4, iterations=100):
+    """Iteratively separate clusters to avoid overlap based on their radii."""
+    import math
+
+    # Convert to mutable positions
+    positions = {cid: list(pos) for cid, pos in cluster_positions.items()}
+    cluster_ids = list(positions.keys())
+
+    for iteration in range(iterations):
+        max_overlap = 0
+
+        for i, c1 in enumerate(cluster_ids):
+            for c2 in cluster_ids[i+1:]:
+                p1 = positions[c1]
+                p2 = positions[c2]
+                r1 = cluster_radii[c1] * padding
+                r2 = cluster_radii[c2] * padding
+
+                dx = p2[0] - p1[0]
+                dy = p2[1] - p1[1]
+                dist = math.sqrt(dx*dx + dy*dy)
+                min_dist = r1 + r2
+
+                if dist < min_dist and dist > 0:
+                    overlap = min_dist - dist
+                    max_overlap = max(max_overlap, overlap)
+
+                    # Push apart
+                    push = (overlap / 2 + 1) / dist
+                    positions[c1][0] -= dx * push
+                    positions[c1][1] -= dy * push
+                    positions[c2][0] += dx * push
+                    positions[c2][1] += dy * push
+                elif dist == 0:
+                    # Same position, push randomly
+                    import random
+                    angle = random.uniform(0, 2 * math.pi)
+                    push = min_dist / 2
+                    positions[c1][0] -= push * math.cos(angle)
+                    positions[c1][1] -= push * math.sin(angle)
+                    positions[c2][0] += push * math.cos(angle)
+                    positions[c2][1] += push * math.sin(angle)
+
+        if max_overlap < 1:
+            print(f"  Separation converged after {iteration + 1} iterations")
+            break
+
+    return {cid: tuple(pos) for cid, pos in positions.items()}
+
+
+def compute_local_layouts_parallel(cluster_nodes, cluster_centers, cluster_radii, node_edges):
+    """Compute local layouts for all clusters in parallel."""
+    import math
+
+    positions = {}
+    complex_tasks = []
+
+    for cluster_id, node_list in cluster_nodes.items():
+        center = cluster_centers[cluster_id]
+        radius = cluster_radii[cluster_id]
+
+        if len(node_list) == 1:
+            positions[node_list[0]] = center
+        elif len(node_list) <= 10:
+            for i, node_id in enumerate(node_list):
+                angle = 2 * math.pi * i / len(node_list)
+                r = radius * 0.6
+                positions[node_id] = (
+                    center[0] + r * math.cos(angle),
+                    center[1] + r * math.sin(angle)
+                )
+        else:
+            cluster_node_set = set(node_list)
+            local_edges = {}
+            for node_id in node_list:
+                if node_id in node_edges:
+                    local_edges[node_id] = [n for n in node_edges[node_id] if n in cluster_node_set]
+            complex_tasks.append((cluster_id, node_list, local_edges, radius * 0.8, center))
+
+    if complex_tasks:
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
+        num_workers = min(multiprocessing.cpu_count(), len(complex_tasks))
+        print(f"  Processing {len(complex_tasks)} complex clusters with {num_workers} workers...")
+
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = {
+                executor.submit(compute_local_layout_task, task): task[0]
+                for task in complex_tasks
+            }
+
+            completed = 0
+            for future in as_completed(futures):
+                cluster_id = futures[future]
+                try:
+                    result = future.result()
+                    positions.update(result)
+                    completed += 1
+                    if completed % 100 == 0:
+                        print(f"    Completed {completed}/{len(complex_tasks)} clusters...")
+                except Exception as e:
+                    print(f"    Error in cluster {cluster_id}: {e}")
+
+    return positions
+
+
 def circle_packing_layout(nodes, edges, node_clusters, base_radius=500, padding=1.3):
     """Circle packing layout: each cluster gets a circle proportional to its size.
+
+    Falls back from GPU to CPU automatically.
 
     Args:
         nodes: list of node IDs
@@ -369,10 +608,18 @@ def circle_packing_layout(nodes, edges, node_clusters, base_radius=500, padding=
     Returns:
         dict of node_id -> (x, y)
     """
+    # Try GPU first
+    try:
+        return gpu_cluster_layout(nodes, edges, node_clusters, base_radius, padding)
+    except ImportError:
+        print("cuGraph not available, using CPU circle packing...")
+    except Exception as e:
+        print(f"GPU layout failed: {e}, falling back to CPU...")
+
     import math
     import random
 
-    print("Computing circle packing layout...")
+    print("Computing CPU circle packing layout...")
 
     # Group nodes by cluster
     cluster_nodes = {}
