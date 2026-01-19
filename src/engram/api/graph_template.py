@@ -1374,7 +1374,7 @@ GRAPH_HTML = """
 
                     labelCtx.shadowBlur = 0;
                     drawTextWithBg(label.name, pos.x, pos.y, `${fontSize}px -apple-system, sans-serif`, textColor);
-
+                }
             }
             labelCtx.restore();
 
