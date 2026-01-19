@@ -461,10 +461,12 @@ def circle_packing_layout(nodes, edges, node_clusters, base_radius=500, padding=
         node_edges[src].append(dst)
         node_edges[dst].append(src)
 
-    # Compute local layout within each cluster
+    # Prepare tasks for parallel processing
+    # Separate into simple (small clusters) and complex (need force-directed)
     positions = {}
+    complex_tasks = []
 
-    for idx, (cluster_id, node_list) in enumerate(cluster_nodes.items()):
+    for cluster_id, node_list in cluster_nodes.items():
         center = cluster_centers[cluster_id]
         radius = cluster_radii[cluster_id]
 
@@ -481,16 +483,54 @@ def circle_packing_layout(nodes, edges, node_clusters, base_radius=500, padding=
                     center[1] + r * math.sin(angle)
                 )
         else:
-            # Larger cluster: use force-directed layout locally
-            local_positions = compute_local_layout(node_list, node_edges, radius * 0.8)
-            for node_id, (lx, ly) in local_positions.items():
-                positions[node_id] = (center[0] + lx, center[1] + ly)
+            # Queue for parallel processing
+            # Extract edges relevant to this cluster
+            cluster_node_set = set(node_list)
+            local_edges = {}
+            for node_id in node_list:
+                if node_id in node_edges:
+                    local_edges[node_id] = [n for n in node_edges[node_id] if n in cluster_node_set]
+            complex_tasks.append((cluster_id, node_list, local_edges, radius * 0.8, center))
 
-        if (idx + 1) % 100 == 0:
-            print(f"  Local layout {idx + 1}/{len(cluster_nodes)} clusters...")
+    # Process complex clusters in parallel
+    if complex_tasks:
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
+        num_workers = min(multiprocessing.cpu_count(), len(complex_tasks))
+        print(f"  Processing {len(complex_tasks)} complex clusters with {num_workers} workers...")
+
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = {
+                executor.submit(compute_local_layout_task, task): task[0]
+                for task in complex_tasks
+            }
+
+            completed = 0
+            for future in as_completed(futures):
+                cluster_id = futures[future]
+                try:
+                    result = future.result()
+                    positions.update(result)
+                    completed += 1
+                    if completed % 100 == 0:
+                        print(f"    Completed {completed}/{len(complex_tasks)} clusters...")
+                except Exception as e:
+                    print(f"    Error in cluster {cluster_id}: {e}")
 
     print("Circle packing layout complete.")
     return positions
+
+
+def compute_local_layout_task(task):
+    """Wrapper for parallel processing of local layout."""
+    cluster_id, node_list, node_edges, radius, center = task
+    local_positions = compute_local_layout(node_list, node_edges, radius)
+    # Apply center offset
+    return {
+        node_id: (center[0] + lx, center[1] + ly)
+        for node_id, (lx, ly) in local_positions.items()
+    }
 
 
 def find_tangent_positions(c1, c2, r):

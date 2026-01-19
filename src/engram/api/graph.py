@@ -593,6 +593,98 @@ GRAPH_HTML = """
         let animationFrameId = null;
         let loadingViewport = false, lastViewport = null, viewportDebounceTimer = null;
 
+        // Animation state for smooth zoom
+        let zoomAnimation = null;
+        let initialView = { x: 0, y: 0, scale: 1 }; // Stored on init
+
+        function animateToCluster(clusterId) {
+            const cluster = clusterCenters[clusterId];
+            if (!cluster) return;
+
+            // Target: center on cluster, zoom to fit cluster radius
+            const targetX = cluster.x;
+            const targetY = cluster.y;
+            // Calculate zoom to fit cluster with some padding
+            const padding = 1.2;
+            const targetScale = Math.max(
+                0.15, // Minimum zoom to ensure we're past cluster label mode
+                Math.min(
+                    window.innerWidth / (cluster.radius * 4 * padding),
+                    window.innerHeight / (cluster.radius * 4 * padding),
+                    1.5 // Max zoom
+                )
+            );
+
+            animateTo(targetX, targetY, targetScale);
+        }
+
+        function animateToOverview() {
+            // Zoom out to initial view (as it was when page loaded)
+            animateTo(initialView.x, initialView.y, initialView.scale);
+        }
+
+        function animateTo(targetX, targetY, targetScale, duration = 800) {
+            // Cancel any existing animation
+            if (zoomAnimation) {
+                cancelAnimationFrame(zoomAnimation.frameId);
+            }
+
+            const startX = viewX;
+            const startY = viewY;
+            const startScale = scale;
+            const startTime = performance.now();
+
+            function easeInOutCubic(t) {
+                return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+            }
+
+            function step(currentTime) {
+                const elapsed = currentTime - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                const eased = easeInOutCubic(progress);
+
+                viewX = startX + (targetX - startX) * eased;
+                viewY = startY + (targetY - startY) * eased;
+                scale = startScale + (targetScale - startScale) * eased;
+
+                render();
+
+                if (progress < 1) {
+                    zoomAnimation = { frameId: requestAnimationFrame(step) };
+                } else {
+                    zoomAnimation = null;
+                    scheduleViewportLoad();
+                }
+            }
+
+            zoomAnimation = { frameId: requestAnimationFrame(step) };
+        }
+
+        function findClusterAtPosition(screenX, screenY) {
+            // Check if click is near a cluster label (when zoomed out)
+            if (scale >= 0.1 || Object.keys(clusterCenters).length === 0) return null;
+
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+
+            for (const [clusterId, center] of Object.entries(clusterCenters)) {
+                if (center.nodeCount < 10) continue;
+
+                const pos = worldToScreen(center.x, center.y);
+                if (pos.x < -200 || pos.x > w + 200 || pos.y < -200 || pos.y > h + 200) continue;
+
+                // Check if click is within label area (approximate)
+                const labelWidth = center.name.length * 8 + 20;
+                const labelHeight = 40;
+
+                if (Math.abs(screenX - pos.x) < labelWidth / 2 &&
+                    Math.abs(screenY - pos.y) < labelHeight) {
+                    return clusterId;
+                }
+            }
+            return null;
+        }
+
         // WebGL shaders
         const vertexShaderSrc = `
             attribute vec2 a_position;
@@ -1283,22 +1375,28 @@ GRAPH_HTML = """
                 neighborsHtml = '<div style="color:#6b6b8a;padding:8px 0;">Failed to load</div>';
             }
 
+            // Determine what content to show
+            const displayContent = node.fullContent || node.name || '';
+            const hasContent = displayContent.length > 0;
+
             content.innerHTML = `
-                <span class="type-badge" style="background:${color}20;color:${color}">${node.type}</span>
+                <span class="type-badge" style="background:${color}20;color:${color}">${node.type}${node.subtype ? ' · ' + node.subtype : ''}</span>
                 <h3>${node.name}</h3>
-                <div class="info-row">
-                    <div class="info-label">Connections</div>
-                    <div class="info-value">${node.conn || 0}</div>
-                </div>
-                <div class="info-row">
-                    <div class="info-label">Cluster</div>
-                    <div class="info-value">${node.cluster}</div>
-                </div>
-                ${node.fullContent && node.fullContent !== node.name ? `
+                ${hasContent ? `
                 <div class="info-row">
                     <div class="info-label">Content</div>
-                    <div class="info-value" style="max-height:100px;overflow-y:auto;">${node.fullContent}</div>
+                    <div class="info-value" style="max-height:150px;overflow-y:auto;white-space:pre-wrap;font-size:12px;line-height:1.5;background:rgba(0,0,0,0.2);padding:8px;border-radius:4px;margin-top:4px;">${displayContent}</div>
                 </div>` : ''}
+                <div class="info-row" style="display:flex;gap:16px;">
+                    <div>
+                        <div class="info-label">Connections</div>
+                        <div class="info-value">${node.conn || 0}</div>
+                    </div>
+                    <div>
+                        <div class="info-label">Cluster</div>
+                        <div class="info-value">${node.cluster}</div>
+                    </div>
+                </div>
                 <div class="info-row">
                     <div class="info-label">Connected Nodes</div>
                     <div style="max-height:200px;overflow-y:auto;margin-top:8px;">${neighborsHtml}</div>
@@ -1575,6 +1673,19 @@ GRAPH_HTML = """
                 render();
                 scheduleViewportLoad();
             } else {
+                // Check for cluster label hover
+                const clusterId = findClusterAtPosition(e.clientX, e.clientY);
+                if (clusterId !== null) {
+                    canvas.style.cursor = 'pointer';
+                    const cluster = clusterCenters[clusterId];
+                    if (cluster) {
+                        showTooltip({ name: `Click to zoom into "${cluster.name}" (${cluster.nodeCount} nodes)` }, e.clientX, e.clientY);
+                    }
+                    hoveredNode = null;
+                    return;
+                }
+
+                canvas.style.cursor = 'default';
                 const node = findNodeAt(e.clientX, e.clientY);
                 if (node !== hoveredNode) {
                     hoveredNode = node;
@@ -1586,6 +1697,15 @@ GRAPH_HTML = """
 
         canvas.addEventListener('mouseup', (e) => {
             if (Math.abs(e.clientX - dragStartX) < 5 && Math.abs(e.clientY - dragStartY) < 5) {
+                // Check for cluster label click first (when zoomed out)
+                const clusterId = findClusterAtPosition(e.clientX, e.clientY);
+                if (clusterId !== null) {
+                    animateToCluster(clusterId);
+                    isDragging = false;
+                    return;
+                }
+
+                // Then check for node click
                 const node = findNodeAt(e.clientX, e.clientY);
                 if (node) {
                     selectedNode = node;
@@ -1614,6 +1734,10 @@ GRAPH_HTML = """
 
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
+                // If zoomed in, zoom out to overview
+                if (scale > 0.08) {
+                    animateToOverview();
+                }
                 closeNodeInfo();
                 highlightedNodes.clear();
                 stopActivationAnimation();
@@ -2014,6 +2138,9 @@ GRAPH_HTML = """
                 window.innerWidth * 0.7 / (graphWidth * 2),
                 window.innerHeight * 0.7 / (graphHeight * 2)
             )));
+
+            // Store initial view for ESC reset
+            initialView = { x: viewX, y: viewY, scale: scale };
 
             const stats = await (await fetch('/admin/graph/stats')).json();
             document.getElementById('c-count').textContent = stats.concepts;
