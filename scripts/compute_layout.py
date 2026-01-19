@@ -992,6 +992,21 @@ def compute_hierarchical_communities(nodes, edges, levels=5):
     node_set = set(nodes)
     edge_list = [(s, t) for s, t in edges if s in node_set and t in node_set]
 
+    # Build neighbor map for hub detection
+    neighbors = {nid: set() for nid in nodes}
+    for s, t in edge_list:
+        neighbors[s].add(t)
+        neighbors[t].add(s)
+
+    # Compute degree (connection count) for each node
+    degree = {nid: len(neighbors[nid]) for nid in nodes}
+
+    # Hub threshold: nodes with >500 connections or top 0.1% by degree
+    hub_threshold = max(500, sorted(degree.values(), reverse=True)[min(len(nodes) // 1000, len(nodes) - 1)] if nodes else 500)
+    hub_nodes = {nid for nid, d in degree.items() if d >= hub_threshold}
+    if hub_nodes:
+        print(f"  Detected {len(hub_nodes)} hub nodes (>={hub_threshold} connections)")
+
     # Initialize hierarchy - all nodes start at cluster 0 for all levels
     hierarchy = {node_id: {f'level{i}': 0 for i in range(levels)} for node_id in nodes}
 
@@ -1168,6 +1183,90 @@ def compute_hierarchical_communities(nodes, edges, levels=5):
                     next_id += 1
 
         sub_clusters = new_sub_clusters
+
+        # Hub splitting: if a cluster contains a hub with many neighbors in the same cluster,
+        # split those neighbors into separate sub-clusters to avoid freezing when expanded
+        hub_split_clusters = {}
+        next_id = max(sub_clusters.keys()) + 1 if sub_clusters else 0
+
+        for sub_id, sub_nodes in sub_clusters.items():
+            sub_node_set = set(sub_nodes)
+            # Find hubs in this cluster
+            cluster_hubs = [nid for nid in sub_nodes if nid in hub_nodes]
+
+            if not cluster_hubs:
+                hub_split_clusters[sub_id] = sub_nodes
+                continue
+
+            # Check if any hub has too many neighbors in this cluster
+            max_hub_neighbors_in_cluster = max_size  # Don't allow more than max_size hub neighbors
+            needs_hub_split = False
+
+            for hub in cluster_hubs:
+                hub_neighbors_here = [n for n in neighbors[hub] if n in sub_node_set]
+                if len(hub_neighbors_here) > max_hub_neighbors_in_cluster:
+                    needs_hub_split = True
+                    break
+
+            if not needs_hub_split or len(sub_nodes) <= max_size:
+                hub_split_clusters[sub_id] = sub_nodes
+                continue
+
+            # Split cluster by distributing hub neighbors across multiple sub-clusters
+            # Strategy: Run Leiden on just the hub's neighbors to find natural groupings
+            all_hub_neighbors = set()
+            for hub in cluster_hubs:
+                all_hub_neighbors.update(n for n in neighbors[hub] if n in sub_node_set)
+
+            # Non-hub-neighbor nodes stay together
+            non_hub_nodes = [n for n in sub_nodes if n not in all_hub_neighbors and n not in cluster_hubs]
+            hub_neighbor_list = list(all_hub_neighbors)
+
+            if len(hub_neighbor_list) > max_size:
+                # Split hub neighbors into chunks
+                num_hub_splits = max(2, (len(hub_neighbor_list) + max_size - 1) // max_size)
+
+                # Try to use Leiden to find natural sub-groupings among hub neighbors
+                hub_neighbor_assignments = run_leiden_on_subgraph(
+                    hub_neighbor_list, target_clusters=num_hub_splits, use_binary_search=False
+                )
+
+                # Group by Leiden assignment
+                hub_neighbor_groups = {}
+                for nid, grp in hub_neighbor_assignments.items():
+                    if grp not in hub_neighbor_groups:
+                        hub_neighbor_groups[grp] = []
+                    hub_neighbor_groups[grp].append(nid)
+
+                # If Leiden didn't split enough, force split
+                if len(hub_neighbor_groups) < num_hub_splits:
+                    chunk_size = max(1, len(hub_neighbor_list) // num_hub_splits)
+                    hub_neighbor_groups = {}
+                    for i in range(num_hub_splits):
+                        start = i * chunk_size
+                        end = start + chunk_size if i < num_hub_splits - 1 else len(hub_neighbor_list)
+                        if start < len(hub_neighbor_list):
+                            hub_neighbor_groups[i] = hub_neighbor_list[start:end]
+
+                # Create sub-clusters: hubs go in first group, non-hub-neighbors distributed
+                first_group = True
+                for grp_id, grp_nodes in hub_neighbor_groups.items():
+                    if first_group:
+                        # First group includes hubs and some non-hub nodes
+                        hub_split_clusters[next_id] = list(cluster_hubs) + grp_nodes + non_hub_nodes[:len(non_hub_nodes)//len(hub_neighbor_groups)]
+                        non_hub_nodes = non_hub_nodes[len(non_hub_nodes)//len(hub_neighbor_groups):]
+                        first_group = False
+                    else:
+                        hub_split_clusters[next_id] = grp_nodes
+                    next_id += 1
+
+                # Remaining non-hub nodes go in last cluster
+                if non_hub_nodes:
+                    hub_split_clusters[next_id - 1].extend(non_hub_nodes)
+            else:
+                hub_split_clusters[sub_id] = sub_nodes
+
+        sub_clusters = hub_split_clusters
 
         # Assign global cluster IDs and recurse
         for sub_id, sub_nodes in sub_clusters.items():

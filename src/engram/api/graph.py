@@ -345,49 +345,14 @@ async def get_cluster_info(request: Request) -> dict:
     )
 
     edges = [{"from": e["from_l0"], "to": e["to_l0"], "weight": e["weight"]} for e in l0_edges]
-
-    # Get top nodes by connection count for LOD display
     total_nodes = sum(c["node_count"] for c in l0_result)
-    # Top 0.01% for L0, top 1% for L1, top 10% for L2
-    top_counts = {
-        "l0": max(3, total_nodes // 10000),  # 0.01%
-        "l1": max(10, total_nodes // 100),    # 1%
-        "l2": max(50, total_nodes // 10),     # 10%
-    }
-
-    top_nodes = await db.execute_query(
-        """
-        MATCH (n)
-        WHERE n.layout_x IS NOT NULL AND n.conn IS NOT NULL
-          AND (n:Concept OR n:SemanticMemory OR n:EpisodicMemory)
-        RETURN n.id as id,
-               COALESCE(n.name, LEFT(n.content, 50), LEFT(n.query, 40)) as name,
-               CASE
-                   WHEN n:Concept THEN 'concept'
-                   WHEN n:SemanticMemory THEN 'semantic'
-                   ELSE 'episodic'
-               END as type,
-               n.layout_x as x, n.layout_y as y,
-               n.conn as conn, n.level0 as level0
-        ORDER BY n.conn DESC
-        LIMIT $limit
-        """,
-        limit=top_counts["l2"]  # Get enough for L2 (includes L0 and L1)
-    )
-
-    top_nodes_list = [{
-        "id": n["id"], "name": (n["name"] or "")[:40], "type": n["type"],
-        "x": n["x"], "y": n["y"], "conn": n["conn"] or 0, "level0": n["level0"]
-    } for n in top_nodes]
 
     return {
         "l0": l0_result,
         "l1": l1_result,
         "l2": l2_result,
         "edges": edges,
-        "total_nodes": total_nodes,
-        "top_nodes": top_nodes_list,
-        "top_counts": top_counts
+        "total_nodes": total_nodes
     }
 
 

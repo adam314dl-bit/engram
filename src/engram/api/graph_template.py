@@ -323,9 +323,8 @@ GRAPH_HTML = """
         let neighborNodes = new Set();
         let activatedNodes = new Set(); // Nodes activated by chat
         let typeFilters = new Set(); // empty = show all
-        let clusterCenters = {}; // { clusterId: { x, y, name, nodeCount, topNodes } }
+        let clusterCenters = {}; // { clusterId: { x, y, name, nodeCount } }
         let interClusterEdges = []; // [{ from: clusterId, to: clusterId, count: n }]
-        let connStats = { max: 1, p9999: 1, p99: 1, p90: 1, p50: 1 }; // Connection percentiles for LOD
 
         // Hierarchical cluster data for semantic zoom (5 levels)
         let level0Centers = {}; // { level0Id: { x, y, radius, name, nodeCount } }
@@ -336,8 +335,6 @@ GRAPH_HTML = """
         let level1Edges = []; // Inter-level1 cluster edges
         let level2Edges = []; // Inter-level2 cluster edges
         let level3Edges = []; // Inter-level3 cluster edges
-        let topNodes = []; // Top connected nodes for LOD display
-        let topCounts = { l0: 3, l1: 10, l2: 50 }; // How many top nodes at each level
 
         let isDragging = false, lastMouseX = 0, lastMouseY = 0, dragStartX = 0, dragStartY = 0;
         let animationFrameId = null;
@@ -1245,40 +1242,10 @@ GRAPH_HTML = """
                 }
             }
 
-            // Draw individual nodes at ALL zoom levels with LOD filtering
-            // L0: top 0.01%, L1: top 1%, L2: top 10%, L3: top 50%, L4: 100%
+            // Draw individual nodes (loaded via lazy loading when cluster is clicked)
             {
-                // LOD: Minimum connections required to be visible at each zoom level
-                const minConnByLevel = {
-                    0: connStats.p9999, // L0: top 0.01%
-                    1: connStats.p99,   // L1: top 1%
-                    2: connStats.p90,   // L2: top 10%
-                    3: connStats.p50,   // L3: top 50%
-                    4: 0                // L4: all nodes
-                };
-                const minConnForVisibility = minConnByLevel[semanticZoomLevel] || 0;
-
-                // Combine loaded cluster nodes with preloaded top nodes for LOD display
-                let nodesToRender = [...nodes];
-                if (semanticZoomLevel <= 2 && topNodes.length > 0) {
-                    const count = topCounts[`l${semanticZoomLevel}`] || topNodes.length;
-                    const topNodesToShow = topNodes.slice(0, count);
-                    // Add top nodes that aren't already in nodes array
-                    const nodeIds = new Set(nodes.map(n => n.id));
-                    for (const tn of topNodesToShow) {
-                        if (!nodeIds.has(tn.id)) {
-                            nodesToRender.push(tn);
-                        }
-                    }
-                }
-
-                for (const node of nodesToRender) {
-                    // LOD: Skip nodes below connection threshold (unless activated/selected)
+                for (const node of nodes) {
                     const nodeConn = node.conn || 0;
-                    if (nodeConn < minConnForVisibility && !activatedNodes.has(node.id) && node !== selectedNode) {
-                        continue;
-                    }
-
                     const color = getNodeColor(node);
                     // Node size: scale with zoom level
                     const baseSize = Math.max(48, Math.min(192, Math.sqrt(nodeConn || 1) * 32));
@@ -1296,8 +1263,8 @@ GRAPH_HTML = """
 
                     nodeData.push(node.x, node.y, finalColor[0], finalColor[1], finalColor[2], finalColor[3], size);
 
-                    // Collect labels for important nodes at all zoom levels
-                    if (isNodeVisible(node) && (nodeConn >= minConnForVisibility || scale > 0.1)) {
+                    // Collect labels for visible nodes
+                    if (isNodeVisible(node)) {
                         const pos = worldToScreen(node.x, node.y);
                         labelsToRender.push({
                             type: 'node',
@@ -1658,28 +1625,6 @@ GRAPH_HTML = """
             }
 
             interClusterEdges.sort((a, b) => b.count - a.count);
-        }
-
-        function computeConnStats() {
-            // Compute connection percentiles for LOD filtering
-            // L0: top 0.01%, L1: top 1%, L2: top 10%, L3: top 50%, L4: all
-            if (nodes.length === 0) {
-                connStats = { max: 1, p9999: 1, p99: 1, p90: 1, p50: 1 };
-                return;
-            }
-
-            const conns = nodes.map(n => n.conn || 0).sort((a, b) => b - a);
-            const n = conns.length;
-
-            connStats = {
-                max: conns[0] || 1,
-                p9999: conns[Math.floor(n * 0.0001)] || 1, // top 0.01%
-                p99: conns[Math.floor(n * 0.01)] || 1,     // top 1%
-                p90: conns[Math.floor(n * 0.1)] || 1,      // top 10%
-                p50: conns[Math.floor(n * 0.5)] || 1       // top 50%
-            };
-
-            console.log('Connection stats for LOD:', connStats);
         }
 
         function computeHierarchicalCenters() {
@@ -2521,11 +2466,6 @@ GRAPH_HTML = """
             level2Edges = [];
             level3Edges = [];
             level3Centers = {};
-
-            // Store top nodes for LOD display
-            topNodes = data.top_nodes || [];
-            topCounts = data.top_counts || { l0: 3, l1: 10, l2: 50 };
-            console.log(`Loaded ${topNodes.length} top nodes for LOD display`);
         }
 
         async function loadClusterData(level0Id) {
@@ -2596,7 +2536,6 @@ GRAPH_HTML = """
                 computeDetailedCentersForLoadedNodes();
             }
 
-            computeConnStats();
             computeClusterCenters();
             computeInterClusterEdges();
         }
