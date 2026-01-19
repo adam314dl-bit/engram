@@ -83,7 +83,7 @@ def compute_layout_cugraph(nodes, edges, scale=3000):
     return positions
 
 
-def compute_layout_igraph(nodes, edges, scale=5000):
+def compute_layout_igraph(nodes, edges, scale=10000):
     """Fast CPU layout using igraph (5-20x faster than NetworkX).
 
     Parameters tuned to match NetworkX spring_layout output.
@@ -201,6 +201,78 @@ def compute_layout(nodes, edges, scale=3000):
     return compute_layout_networkx(nodes, edges, scale)
 
 
+def separate_clusters(positions, node_clusters, separation_factor=2.0):
+    """Push clusters apart while keeping nodes within clusters close.
+
+    Args:
+        positions: dict of node_id -> (x, y)
+        node_clusters: dict of node_id -> cluster_id
+        separation_factor: how much to push clusters apart (2.0 = double the distance)
+
+    Returns:
+        Updated positions dict
+    """
+    import math
+
+    print(f"Separating clusters with factor {separation_factor}...")
+
+    # Compute cluster centers
+    cluster_sums = {}
+    cluster_counts = {}
+
+    for node_id, (x, y) in positions.items():
+        cluster_id = node_clusters.get(node_id, 0)
+        if cluster_id not in cluster_sums:
+            cluster_sums[cluster_id] = [0.0, 0.0]
+            cluster_counts[cluster_id] = 0
+        cluster_sums[cluster_id][0] += x
+        cluster_sums[cluster_id][1] += y
+        cluster_counts[cluster_id] += 1
+
+    cluster_centers = {}
+    for cluster_id in cluster_sums:
+        count = cluster_counts[cluster_id]
+        cluster_centers[cluster_id] = (
+            cluster_sums[cluster_id][0] / count,
+            cluster_sums[cluster_id][1] / count
+        )
+
+    # Compute global center
+    all_x = [c[0] for c in cluster_centers.values()]
+    all_y = [c[1] for c in cluster_centers.values()]
+    global_cx = sum(all_x) / len(all_x) if all_x else 0
+    global_cy = sum(all_y) / len(all_y) if all_y else 0
+
+    print(f"Found {len(cluster_centers)} clusters, global center: ({global_cx:.1f}, {global_cy:.1f})")
+
+    # Compute new cluster centers (pushed away from global center)
+    new_cluster_centers = {}
+    for cluster_id, (cx, cy) in cluster_centers.items():
+        # Vector from global center to cluster center
+        dx = cx - global_cx
+        dy = cy - global_cy
+
+        # Push cluster center away by separation_factor
+        new_cx = global_cx + dx * separation_factor
+        new_cy = global_cy + dy * separation_factor
+        new_cluster_centers[cluster_id] = (new_cx, new_cy)
+
+    # Move each node by the same offset as its cluster
+    new_positions = {}
+    for node_id, (x, y) in positions.items():
+        cluster_id = node_clusters.get(node_id, 0)
+        old_center = cluster_centers[cluster_id]
+        new_center = new_cluster_centers[cluster_id]
+
+        # Offset = new_center - old_center
+        offset_x = new_center[0] - old_center[0]
+        offset_y = new_center[1] - old_center[1]
+
+        new_positions[node_id] = (x + offset_x, y + offset_y)
+
+    return new_positions
+
+
 def compute_communities(nodes, edges):
     """Detect communities using Louvain algorithm."""
     import networkx as nx
@@ -263,12 +335,16 @@ async def compute_and_store_layout():
 
     # Compute layout (tries GPU -> multi-core -> single-core)
     print("Computing layout...")
-    positions = compute_layout(all_nodes, all_edges, scale=5000)
+    positions = compute_layout(all_nodes, all_edges, scale=10000)
     print("Layout computed.")
 
     # Detect communities
     print("Detecting communities...")
     node_clusters = compute_communities(all_nodes, all_edges)
+
+    # Separate clusters - push clusters apart while keeping nodes within clusters close
+    print("Separating clusters...")
+    positions = separate_clusters(positions, node_clusters, separation_factor=2.5)
 
     print("Storing positions and clusters in Neo4j...")
 
