@@ -1004,6 +1004,17 @@ def compute_hierarchical_communities(nodes, edges, levels=5):
     min_subdivide_size = max(10, n // 300)  # At least 10 nodes, or 0.33% of graph
     print(f"  Min cluster size to subdivide: {min_subdivide_size}")
 
+    # Maximum cluster size - force subdivide if larger (balanced hierarchy)
+    # L0: ~1000 nodes max, L1: ~300 nodes max, L2: ~100 nodes max, L3: ~30 nodes max
+    max_cluster_sizes = {
+        0: max(500, n // 30),    # L0: ~1000 for 30k graph
+        1: max(200, n // 100),   # L1: ~300 for 30k graph
+        2: max(50, n // 300),    # L2: ~100 for 30k graph
+        3: max(20, n // 1000),   # L3: ~30 for 30k graph
+        4: float('inf')          # L4: no limit (individual nodes)
+    }
+    print(f"  Max cluster sizes: L0={max_cluster_sizes[0]}, L1={max_cluster_sizes[1]}, L2={max_cluster_sizes[2]}, L3={max_cluster_sizes[3]}")
+
     def run_leiden_on_subgraph(node_subset, target_clusters=None, use_binary_search=True):
         """Run Leiden on a subset of nodes, return cluster assignments."""
         if len(node_subset) < 3:
@@ -1130,6 +1141,27 @@ def compute_hierarchical_communities(nodes, edges, levels=5):
             half = len(node_ids) // 2
             node_list = list(node_ids)
             sub_clusters = {0: node_list[:half], 1: node_list[half:]}
+
+        # Force split any cluster that exceeds max size for this level
+        max_size = max_cluster_sizes.get(current_level, float('inf'))
+        new_sub_clusters = {}
+        next_id = max(sub_clusters.keys()) + 1 if sub_clusters else 0
+
+        for sub_id, sub_nodes in sub_clusters.items():
+            if len(sub_nodes) <= max_size:
+                new_sub_clusters[sub_id] = sub_nodes
+            else:
+                # Force split into chunks of max_size
+                num_splits = (len(sub_nodes) + max_size - 1) // max_size
+                chunk_size = len(sub_nodes) // num_splits
+                node_list = list(sub_nodes)
+                for i in range(num_splits):
+                    start = i * chunk_size
+                    end = start + chunk_size if i < num_splits - 1 else len(node_list)
+                    new_sub_clusters[next_id] = node_list[start:end]
+                    next_id += 1
+
+        sub_clusters = new_sub_clusters
 
         # Assign global cluster IDs and recurse
         for sub_id, sub_nodes in sub_clusters.items():
