@@ -1244,6 +1244,9 @@ GRAPH_HTML = """
 
             // Draw individual nodes (loaded via lazy loading when cluster is clicked)
             {
+                // Collect visible nodes for label limiting
+                const visibleNodes = [];
+
                 for (const node of nodes) {
                     const nodeConn = node.conn || 0;
                     const color = getNodeColor(node);
@@ -1263,16 +1266,25 @@ GRAPH_HTML = """
 
                     nodeData.push(node.x, node.y, finalColor[0], finalColor[1], finalColor[2], finalColor[3], size);
 
-                    // Collect labels for visible nodes
+                    // Track visible nodes for label selection
                     if (isNodeVisible(node)) {
-                        const pos = worldToScreen(node.x, node.y);
-                        labelsToRender.push({
-                            type: 'node',
-                            node: node,
-                            pos: pos,
-                            size: size
-                        });
+                        visibleNodes.push({ node, size });
                     }
+                }
+
+                // Only show labels for top N most connected visible nodes (avoid clutter)
+                const maxLabels = Math.max(10, Math.min(30, Math.floor(20 / scale)));
+                visibleNodes.sort((a, b) => (b.node.conn || 0) - (a.node.conn || 0));
+                const topNodes = visibleNodes.slice(0, maxLabels);
+
+                for (const { node, size } of topNodes) {
+                    const pos = worldToScreen(node.x, node.y);
+                    labelsToRender.push({
+                        type: 'node',
+                        node: node,
+                        pos: pos,
+                        size: size
+                    });
                 }
             }
 
