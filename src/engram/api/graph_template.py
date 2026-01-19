@@ -2050,16 +2050,16 @@ GRAPH_HTML = """
                 // Check for hierarchical cluster click first (when zoomed out)
                 const clusterHit = findClusterAtPosition(e.clientX, e.clientY);
                 if (clusterHit !== null) {
-                    // Target scales to reach the next zoom level:
-                    // L0 → L1: need scale >= 0.008, target 0.015
-                    // L1 → L2: need scale >= 0.02, target 0.035
-                    // L2 → L3: need scale >= 0.045, target 0.07
-                    // L3 → L4 (nodes): need scale >= 0.09, target 0.12
+                    // Target scales to reach the next zoom level (zoom in extra for better visibility):
+                    // L0 → L1: need scale >= 0.008, target 0.025
+                    // L1 → L2: need scale >= 0.02, target 0.055
+                    // L2 → L3: need scale >= 0.045, target 0.1
+                    // L3 → L4 (nodes): need scale >= 0.09, target 0.2
                     const targetScales = {
-                        level0: 0.015,
-                        level1: 0.035,
-                        level2: 0.07,
-                        level3: 0.12
+                        level0: 0.025,
+                        level1: 0.055,
+                        level2: 0.1,
+                        level3: 0.2
                     };
                     const targetScale = targetScales[clusterHit.type] || 0.2;
                     animateToHierarchicalCluster(clusterHit.center, targetScale);
