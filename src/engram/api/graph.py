@@ -585,6 +585,7 @@ GRAPH_HTML = """
         let showClusters = false, showBundling = false, showConstellation = false;
         let typeFilters = new Set(); // empty = show all
         let clusterCenters = {}; // { clusterId: { x, y, name, nodeCount, topNodes } }
+        let connStats = { max: 1, p90: 1, p75: 1, p50: 1 }; // Connection percentiles for dynamic LOD
 
         let isDragging = false, lastMouseX = 0, lastMouseY = 0, dragStartX = 0, dragStartY = 0;
         let animationFrameId = null;
@@ -756,6 +757,12 @@ GRAPH_HTML = """
                 nodeMap = {};
                 nodes.forEach(n => nodeMap[n.id] = n);
 
+                // Compute connection statistics for dynamic LOD
+                computeConnStats();
+
+                // Always compute cluster centers for zoomed-out labels
+                computeClusterCenters();
+
                 render();
             } catch (e) {
                 console.error('Failed to load:', e);
@@ -861,8 +868,9 @@ GRAPH_HTML = """
                     }
                 }
 
-                // LOD: Hide edges when zoomed out (scale < 0.1), fade in as zoom increases
-                const edgeVisibility = Math.min(1, Math.max(0, (scale - 0.02) / 0.08)); // 0 at scale 0.02, 1 at scale 0.1
+                // LOD: Hide edges when zoomed out, fade in as zoom increases
+                // 0 at scale 0.03, fully visible at scale 0.15
+                const edgeVisibility = Math.min(1, Math.max(0, (scale - 0.03) / 0.12));
 
                 for (const link of links) {
                     const s = nodeMap[link.source];
@@ -932,10 +940,12 @@ GRAPH_HTML = """
                 const labelsToRender = [];
 
                 // LOD: Minimum connections required to be visible at this zoom level
-                // At scale 0.01 (very zoomed out): only show nodes with 10+ connections
-                // At scale 0.05: show nodes with 3+ connections
+                // Uses dynamic thresholds based on actual data distribution
+                // At scale < 0.02: only show top 10% nodes (p90)
+                // At scale 0.02-0.05: show top 25% nodes (p75)
+                // At scale 0.05-0.1: show top 50% nodes (p50)
                 // At scale 0.1+: show all nodes
-                const minConnForVisibility = scale < 0.02 ? 10 : (scale < 0.05 ? 3 : 0);
+                const minConnForVisibility = scale < 0.02 ? connStats.p90 : (scale < 0.05 ? connStats.p75 : (scale < 0.1 ? connStats.p50 : 0));
 
                 for (const node of nodes) {
                     // LOD: Skip low-connection nodes when zoomed out
@@ -962,8 +972,9 @@ GRAPH_HTML = """
 
                     nodeData.push(node.x, node.y, finalColor[0], finalColor[1], finalColor[2], finalColor[3], size);
 
-                    // Collect labels for high-connection nodes
-                    if (isNodeVisible(node) && nodeConn > 5 && scale > 0.03) {
+                    // Collect labels for high-connection nodes (only when zoomed in enough)
+                    // At low zoom, constellation mode shows cluster names instead
+                    if (isNodeVisible(node) && nodeConn > 10 && scale > 0.1) {
                         const pos = worldToScreen(node.x, node.y);
                         labelsToRender.push({ node, pos, size });
                     }
@@ -1001,6 +1012,50 @@ GRAPH_HTML = """
                     labelCtx.fillStyle = 'rgba(255,255,255,0.7)';
                     labelCtx.fillText(label, pos.x, pos.y + screenSize / 2 + 14);
                 }
+                labelCtx.restore();
+            }
+
+            // Draw cluster labels when zoomed out (scale < 0.1) but not in constellation mode
+            // This shows cluster names instead of individual node labels
+            if (!showConstellation && scale < 0.1 && Object.keys(clusterCenters).length > 0) {
+                labelCtx.save();
+                labelCtx.scale(dpr, dpr);
+
+                const centersList = Object.entries(clusterCenters);
+                labelCtx.textAlign = 'center';
+
+                for (const [clusterId, center] of centersList) {
+                    const pos = worldToScreen(center.x, center.y);
+                    if (pos.x < -200 || pos.x > w + 200 || pos.y < -200 || pos.y > h + 200) continue;
+
+                    // Only show clusters with enough nodes
+                    if (center.nodeCount < 10) continue;
+
+                    const color = showClusters
+                        ? clusterPalette[clusterId % clusterPalette.length]
+                        : [0.7, 0.9, 0.85]; // Subtle teal for non-cluster mode
+
+                    // Scale font size based on cluster size and zoom
+                    const baseFontSize = Math.min(24, Math.max(12, 10 + Math.log(center.nodeCount) * 2));
+                    const fontSize = Math.min(28, baseFontSize / scale * 0.015);
+
+                    // Draw cluster name with glow effect
+                    labelCtx.font = `bold ${fontSize}px -apple-system, sans-serif`;
+
+                    // Glow/shadow
+                    labelCtx.shadowColor = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.5)`;
+                    labelCtx.shadowBlur = 8;
+
+                    labelCtx.fillStyle = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.9)`;
+                    labelCtx.fillText(center.name, pos.x, pos.y);
+
+                    // Node count below (smaller)
+                    labelCtx.font = `${Math.max(9, fontSize * 0.6)}px -apple-system, sans-serif`;
+                    labelCtx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+                    labelCtx.shadowBlur = 0;
+                    labelCtx.fillText(`${center.nodeCount} nodes`, pos.x, pos.y + fontSize + 4);
+                }
+
                 labelCtx.restore();
             }
 
@@ -1243,6 +1298,26 @@ GRAPH_HTML = """
                 computeClusterCenters();
             }
             render();
+        }
+
+        function computeConnStats() {
+            // Compute connection percentiles for dynamic LOD
+            if (nodes.length === 0) {
+                connStats = { max: 1, p90: 1, p75: 1, p50: 1 };
+                return;
+            }
+
+            const conns = nodes.map(n => n.conn || 0).sort((a, b) => b - a);
+            const n = conns.length;
+
+            connStats = {
+                max: conns[0] || 1,
+                p90: conns[Math.floor(n * 0.1)] || 1,  // top 10%
+                p75: conns[Math.floor(n * 0.25)] || 1, // top 25%
+                p50: conns[Math.floor(n * 0.5)] || 1   // top 50%
+            };
+
+            console.log('Connection stats:', connStats);
         }
 
         function computeClusterCenters() {
