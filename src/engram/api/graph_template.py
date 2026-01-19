@@ -269,10 +269,8 @@ GRAPH_HTML = """
             <span class="legend-dot" style="background:#f472b6"></span>Episodic<span class="legend-count" id="e-count">0</span>
         </div>
         <div class="control-row">
-            <button class="toggle-btn" id="cluster-btn" onclick="toggleClusters()">Clusters</button>
-            <button class="toggle-btn" id="bundle-btn" onclick="toggleBundling()">Bundle</button>
-            <button class="toggle-btn" id="borders-btn" onclick="toggleBorders()">🗺️ Borders</button>
-            <button class="toggle-btn" id="constellation-btn" onclick="toggleConstellation()">✨ Constellation</button>
+            <button class="toggle-btn" id="borders-btn" onclick="toggleBorders()">Borders</button>
+            <button class="toggle-btn" id="constellation-btn" onclick="toggleConstellation()">Constellation</button>
         </div>
     </div>
 
@@ -326,7 +324,8 @@ GRAPH_HTML = """
         let highlightedNodes = new Set();
         let neighborNodes = new Set();
         let activatedNodes = new Set(); // Nodes activated by chat
-        let showClusters = false, showBundling = false, showConstellation = false, showBorders = false;
+        let showBorders = false;
+        let showConstellation = false;
         let typeFilters = new Set(); // empty = show all
         let clusterCenters = {}; // { clusterId: { x, y, name, nodeCount, topNodes } }
         let interClusterEdges = []; // [{ from: clusterId, to: clusterId, count: n }]
@@ -345,27 +344,6 @@ GRAPH_HTML = """
         // Animation state for smooth zoom
         let zoomAnimation = null;
         let initialView = { x: 0, y: 0, scale: 1 }; // Stored on init
-
-        function animateToCluster(clusterId) {
-            const cluster = clusterCenters[clusterId];
-            if (!cluster) return;
-
-            // Target: center on cluster, zoom to fit cluster radius
-            const targetX = cluster.x;
-            const targetY = cluster.y;
-            // Calculate zoom to fit cluster with some padding
-            const padding = 1.2;
-            const targetScale = Math.max(
-                0.15, // Minimum zoom to ensure we're past cluster label mode
-                Math.min(
-                    window.innerWidth / (cluster.radius * 4 * padding),
-                    window.innerHeight / (cluster.radius * 4 * padding),
-                    1.5 // Max zoom
-                )
-            );
-
-            animateTo(targetX, targetY, targetScale);
-        }
 
         function animateToOverview() {
             // Zoom out to initial view (as it was when page loaded)
@@ -444,27 +422,6 @@ GRAPH_HTML = """
                     const clickRadius = Math.min(400, 80 + Math.sqrt(center.nodeCount) * 20) * 1.5;
                     if (dist < clickRadius) {
                         return { type: 'level1', id: key, center: center };
-                    }
-                }
-            }
-
-            // Fallback to old cluster behavior for constellation mode
-            if (showConstellation && scale < 0.1 && Object.keys(clusterCenters).length > 0) {
-                const w = window.innerWidth;
-                const h = window.innerHeight;
-
-                for (const [clusterId, center] of Object.entries(clusterCenters)) {
-                    if (center.nodeCount < 10) continue;
-
-                    const pos = worldToScreen(center.x, center.y);
-                    if (pos.x < -200 || pos.x > w + 200 || pos.y < -200 || pos.y > h + 200) continue;
-
-                    const labelWidth = center.name.length * 8 + 20;
-                    const labelHeight = 40;
-
-                    if (Math.abs(screenX - pos.x) < labelWidth / 2 &&
-                        Math.abs(screenY - pos.y) < labelHeight) {
-                        return { type: 'cluster', id: clusterId, center: center };
                     }
                 }
             }
@@ -691,13 +648,7 @@ GRAPH_HTML = """
                 return [0.15, 0.15, 0.2, 0.3];
             }
 
-            let color;
-            if (showClusters) {
-                color = clusterPalette[node.cluster % clusterPalette.length];
-            } else {
-                color = typeColors[node.type] || typeColors.concept;
-            }
-
+            const color = typeColors[node.type] || typeColors.concept;
             // Add glow (alpha > 0.95) for important nodes
             const importance = node.conn > 10 ? 1.0 : 0.9;
             return [color[0], color[1], color[2], importance];
@@ -716,16 +667,16 @@ GRAPH_HTML = """
             // Clear label canvas
             labelCtx.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
 
-            // Draw cluster borders (map-like regions)
-            if (showBorders && Object.keys(clusterCenters).length > 0) {
+            // Draw cluster borders (map-like regions) using level0 clusters
+            if (showBorders && Object.keys(level0Centers).length > 0) {
                 labelCtx.save();
                 labelCtx.scale(dpr, dpr);
 
-                for (const [clusterId, center] of Object.entries(clusterCenters)) {
+                for (const [clusterId, center] of Object.entries(level0Centers)) {
                     if (center.nodeCount < 3) continue; // Skip tiny clusters
 
                     const pos = worldToScreen(center.x, center.y);
-                    const screenRadius = center.radius * scale * 2;
+                    const screenRadius = center.radius * scale;
 
                     // Skip if too small or off-screen
                     if (screenRadius < 5) continue;
@@ -749,6 +700,119 @@ GRAPH_HTML = """
                 labelCtx.restore();
             }
 
+            // Draw cluster edges with thickness based on connection count
+            const edgeSemanticLevel = scale < 0.025 ? 0 : (scale < 0.06 ? 1 : 2);
+            if (edgeSemanticLevel <= 1 && (level0Edges.length > 0 || level1Edges.length > 0)) {
+                labelCtx.save();
+                labelCtx.scale(dpr, dpr);
+
+                // Calculate max edge count for scaling line width
+                const maxL0Count = Math.max(1, ...level0Edges.map(e => e.count));
+                const maxL1Count = Math.max(1, ...level1Edges.map(e => e.count));
+
+                // Draw Level 0 edges (between super-clusters)
+                if (edgeSemanticLevel === 0) {
+                    for (const edge of level0Edges) {
+                        const c1 = level0Centers[edge.from];
+                        const c2 = level0Centers[edge.to];
+                        if (!c1 || !c2) continue;
+
+                        const pos1 = worldToScreen(c1.x, c1.y);
+                        const pos2 = worldToScreen(c2.x, c2.y);
+
+                        // Skip if off-screen
+                        if (pos1.x < -100 && pos2.x < -100) continue;
+                        if (pos1.x > w + 100 && pos2.x > w + 100) continue;
+                        if (pos1.y < -100 && pos2.y < -100) continue;
+                        if (pos1.y > h + 100 && pos2.y > h + 100) continue;
+
+                        const color1 = clusterPalette[edge.from % clusterPalette.length];
+                        const color2 = clusterPalette[edge.to % clusterPalette.length];
+
+                        // Line width based on connection count (1px to 8px)
+                        const relativeCount = edge.count / maxL0Count;
+                        const lineWidth = 1 + relativeCount * 7;
+
+                        // Curved line
+                        const mx = (pos1.x + pos2.x) / 2;
+                        const my = (pos1.y + pos2.y) / 2;
+                        const dx = pos2.x - pos1.x, dy = pos2.y - pos1.y;
+                        const dist = Math.sqrt(dx*dx + dy*dy);
+                        const nx = dist > 0 ? -dy / dist : 0;
+                        const ny = dist > 0 ? dx / dist : 0;
+                        const curveAmount = Math.min(dist * 0.15, 80);
+                        const cx = mx + nx * curveAmount;
+                        const cy = my + ny * curveAmount;
+
+                        // Create gradient
+                        const gradient = labelCtx.createLinearGradient(pos1.x, pos1.y, pos2.x, pos2.y);
+                        gradient.addColorStop(0, `rgba(${color1[0]*255}, ${color1[1]*255}, ${color1[2]*255}, 0.6)`);
+                        gradient.addColorStop(1, `rgba(${color2[0]*255}, ${color2[1]*255}, ${color2[2]*255}, 0.6)`);
+
+                        labelCtx.strokeStyle = gradient;
+                        labelCtx.lineWidth = lineWidth;
+                        labelCtx.lineCap = 'round';
+                        labelCtx.beginPath();
+                        labelCtx.moveTo(pos1.x, pos1.y);
+                        labelCtx.quadraticCurveTo(cx, cy, pos2.x, pos2.y);
+                        labelCtx.stroke();
+                    }
+                }
+
+                // Draw Level 1 edges (between sub-clusters)
+                if (edgeSemanticLevel === 1) {
+                    const maxL1Edges = Math.min(level1Edges.length, 150);
+                    for (let i = 0; i < maxL1Edges; i++) {
+                        const edge = level1Edges[i];
+                        const c1 = level1Centers[edge.from];
+                        const c2 = level1Centers[edge.to];
+                        if (!c1 || !c2) continue;
+
+                        const pos1 = worldToScreen(c1.x, c1.y);
+                        const pos2 = worldToScreen(c2.x, c2.y);
+
+                        // Skip if off-screen
+                        if (pos1.x < -50 && pos2.x < -50) continue;
+                        if (pos1.x > w + 50 && pos2.x > w + 50) continue;
+                        if (pos1.y < -50 && pos2.y < -50) continue;
+                        if (pos1.y > h + 50 && pos2.y > h + 50) continue;
+
+                        const color1 = clusterPalette[c1.parentLevel0 % clusterPalette.length];
+                        const color2 = clusterPalette[c2.parentLevel0 % clusterPalette.length];
+
+                        // Line width based on connection count (0.5px to 4px)
+                        const relativeCount = edge.count / maxL1Count;
+                        const lineWidth = 0.5 + relativeCount * 3.5;
+
+                        // Curved line
+                        const mx = (pos1.x + pos2.x) / 2;
+                        const my = (pos1.y + pos2.y) / 2;
+                        const dx = pos2.x - pos1.x, dy = pos2.y - pos1.y;
+                        const dist = Math.sqrt(dx*dx + dy*dy);
+                        const nx = dist > 0 ? -dy / dist : 0;
+                        const ny = dist > 0 ? dx / dist : 0;
+                        const curveAmount = Math.min(dist * 0.12, 40);
+                        const cx = mx + nx * curveAmount;
+                        const cy = my + ny * curveAmount;
+
+                        // Create gradient
+                        const gradient = labelCtx.createLinearGradient(pos1.x, pos1.y, pos2.x, pos2.y);
+                        gradient.addColorStop(0, `rgba(${color1[0]*255}, ${color1[1]*255}, ${color1[2]*255}, 0.4)`);
+                        gradient.addColorStop(1, `rgba(${color2[0]*255}, ${color2[1]*255}, ${color2[2]*255}, 0.4)`);
+
+                        labelCtx.strokeStyle = gradient;
+                        labelCtx.lineWidth = lineWidth;
+                        labelCtx.lineCap = 'round';
+                        labelCtx.beginPath();
+                        labelCtx.moveTo(pos1.x, pos1.y);
+                        labelCtx.quadraticCurveTo(cx, cy, pos2.x, pos2.y);
+                        labelCtx.stroke();
+                    }
+                }
+
+                labelCtx.restore();
+            }
+
             // Draw lines with gradient colors
             if (links.length > 0) {
                 gl.useProgram(lineProgram);
@@ -763,9 +827,6 @@ GRAPH_HTML = """
 
                 // Helper to get node color for edges
                 function getEdgeNodeColor(node) {
-                    if (showClusters) {
-                        return clusterPalette[node.cluster % clusterPalette.length];
-                    }
                     return typeColors[node.type] || typeColors.concept;
                 }
 
@@ -923,62 +984,8 @@ GRAPH_HTML = """
                 const l0ToL1EdgeTransition = scale < 0.02 ? 0 : (scale < 0.03 ? (scale - 0.02) / 0.01 : 1);
                 const l1ToFullEdgeTransition = scale < 0.05 ? 0 : (scale < 0.07 ? (scale - 0.05) / 0.02 : 1);
 
-                // Draw Level 0 edges (between super-clusters)
-                if (edgeSemanticLevel === 0 || (edgeSemanticLevel === 1 && l0ToL1EdgeTransition < 1)) {
-                    const opacity = edgeSemanticLevel === 0 ? 0.6 : (1 - l0ToL1EdgeTransition) * 0.6;
-
-                    for (const edge of level0Edges) {
-                        const c1 = level0Centers[edge.from];
-                        const c2 = level0Centers[edge.to];
-                        if (!c1 || !c2) continue;
-
-                        const color1 = clusterPalette[edge.from % clusterPalette.length];
-                        const color2 = clusterPalette[edge.to % clusterPalette.length];
-
-                        const dx = c2.x - c1.x, dy = c2.y - c1.y;
-                        const dist = Math.sqrt(dx*dx + dy*dy);
-                        if (dist < 0.001) continue;
-
-                        const nx = -dy / dist, ny = dx / dist;
-                        const mx = (c1.x + c2.x) / 2, my = (c1.y + c2.y) / 2;
-                        const curveAmount = Math.min(dist * 0.12, 400);
-                        const cx = mx + nx * curveAmount, cy = my + ny * curveAmount;
-
-                        const s = { x: c1.x, y: c1.y };
-                        const t = { x: c2.x, y: c2.y };
-                        drawBezierSegment(normalLineData, s, t, cx, cy, color1, color2, opacity);
-                    }
-                }
-
-                // Draw Level 1 edges (between sub-clusters)
-                if (edgeSemanticLevel === 1 || (edgeSemanticLevel === 0 && l0ToL1EdgeTransition > 0) || (edgeSemanticLevel === 2 && l1ToFullEdgeTransition < 1)) {
-                    const opacity = edgeSemanticLevel === 1 ? 0.5 : (edgeSemanticLevel === 0 ? l0ToL1EdgeTransition * 0.5 : (1 - l1ToFullEdgeTransition) * 0.5);
-
-                    // Limit to top edges for performance
-                    const maxL1Edges = Math.min(level1Edges.length, 200);
-                    for (let i = 0; i < maxL1Edges; i++) {
-                        const edge = level1Edges[i];
-                        const c1 = level1Centers[edge.from];
-                        const c2 = level1Centers[edge.to];
-                        if (!c1 || !c2) continue;
-
-                        const color1 = clusterPalette[c1.parentLevel0 % clusterPalette.length];
-                        const color2 = clusterPalette[c2.parentLevel0 % clusterPalette.length];
-
-                        const dx = c2.x - c1.x, dy = c2.y - c1.y;
-                        const dist = Math.sqrt(dx*dx + dy*dy);
-                        if (dist < 0.001) continue;
-
-                        const nx = -dy / dist, ny = dx / dist;
-                        const mx = (c1.x + c2.x) / 2, my = (c1.y + c2.y) / 2;
-                        const curveAmount = Math.min(dist * 0.1, 200);
-                        const cx = mx + nx * curveAmount, cy = my + ny * curveAmount;
-
-                        const s = { x: c1.x, y: c1.y };
-                        const t = { x: c2.x, y: c2.y };
-                        drawBezierSegment(normalLineData, s, t, cx, cy, color1, color2, opacity);
-                    }
-                }
+                // Draw Level 0 and Level 1 edges on 2D canvas (for variable line width)
+                // Skip WebGL edge drawing for cluster edges - handled below in canvas section
 
                 // Draw individual edges when zoomed in enough
                 const showIndividualEdges = edgeSemanticLevel === 2 || l1ToFullEdgeTransition > 0;
@@ -1011,8 +1018,8 @@ GRAPH_HTML = """
                         const dist = Math.sqrt(dx*dx + dy*dy);
                         if (dist < 0.001) continue;
 
-                        // Use hierarchical bundling when enabled
-                        if (showBundling && Object.keys(level1Centers).length > 0) {
+                        // Use hierarchical bundling when zoomed out
+                        if (scale < 0.15 && Object.keys(level1Centers).length > 0) {
                             // Bundle strength based on zoom level (stronger when zoomed out)
                             const bundleStrength = Math.min(1, Math.max(0.3, 1.5 - scale * 5));
                             drawHierarchicalBundledEdge(targetArray, s, t, sColor, tColor, opacity, bundleStrength);
@@ -1080,16 +1087,24 @@ GRAPH_HTML = """
             if (showLevel0 || (showLevel1 && l0ToL1Transition < 1)) {
                 const opacity = showLevel0 ? 1.0 : (1 - l0ToL1Transition);
 
-                for (const [l0Id, center] of Object.entries(level0Centers)) {
+                // Calculate max node count for relative sizing
+                const l0Entries = Object.entries(level0Centers);
+                const maxNodeCount = Math.max(1, ...l0Entries.map(([_, c]) => c.nodeCount));
+
+                for (const [l0Id, center] of l0Entries) {
                     if (center.nodeCount < 5) continue;
 
                     const pos = worldToScreen(center.x, center.y);
                     if (pos.x < -300 || pos.x > w + 300 || pos.y < -300 || pos.y > h + 300) continue;
 
                     const color = clusterPalette[l0Id % clusterPalette.length];
-                    // Size based on node count
-                    const baseSize = Math.min(800, 200 + Math.sqrt(center.nodeCount) * 30);
-                    const size = baseSize;
+                    // Size proportional to node count - use sqrt for visual area scaling
+                    // relativeSize ranges from small fraction to 1.0
+                    const relativeSize = Math.sqrt(center.nodeCount / maxNodeCount);
+                    // Minimum screen pixels scales with relative size (20px min, 120px max)
+                    const minScreenPx = 20 + relativeSize * 100;
+                    // Convert to world units for current scale
+                    const size = minScreenPx / scale;
 
                     nodeData.push(center.x, center.y, color[0], color[1], color[2], opacity, size);
 
@@ -1101,7 +1116,7 @@ GRAPH_HTML = """
                             name: center.name,
                             count: center.nodeCount,
                             color: color,
-                            size: baseSize
+                            size: size
                         });
                     }
                 }
@@ -1111,7 +1126,11 @@ GRAPH_HTML = """
             if (showLevel1 || (showLevel0 && l0ToL1Transition > 0) || (showNodes && l1ToNodesTransition < 1)) {
                 const opacity = showLevel1 ? 1.0 : (showLevel0 ? l0ToL1Transition : (1 - l1ToNodesTransition));
 
-                for (const [key, center] of Object.entries(level1Centers)) {
+                // Calculate max node count for relative sizing
+                const l1Entries = Object.entries(level1Centers);
+                const maxNodeCount = Math.max(1, ...l1Entries.map(([_, c]) => c.nodeCount));
+
+                for (const [key, center] of l1Entries) {
                     if (center.nodeCount < 3) continue;
 
                     const pos = worldToScreen(center.x, center.y);
@@ -1125,8 +1144,12 @@ GRAPH_HTML = """
                         Math.min(1, color[2] * 0.9 + 0.1)
                     ];
 
-                    const baseSize = Math.min(400, 80 + Math.sqrt(center.nodeCount) * 20);
-                    const size = baseSize;
+                    // Size proportional to node count - use sqrt for visual area scaling
+                    const relativeSize = Math.sqrt(center.nodeCount / maxNodeCount);
+                    // Minimum screen pixels scales with relative size (15px min, 60px max)
+                    const minScreenPx = 15 + relativeSize * 45;
+                    // Convert to world units for current scale
+                    const size = minScreenPx / scale;
 
                     nodeData.push(center.x, center.y, subColor[0], subColor[1], subColor[2], opacity * 0.9, size);
 
@@ -1138,7 +1161,7 @@ GRAPH_HTML = """
                             name: center.name,
                             count: center.nodeCount,
                             color: subColor,
-                            size: baseSize
+                            size: size
                         });
                     }
                 }
@@ -1272,15 +1295,6 @@ GRAPH_HTML = """
             }
             labelCtx.restore();
 
-            // Show zoom level indicator
-            const zoomIndicator = showLevel0 ? 'L0: Super-clusters' : (showLevel1 ? 'L1: Sub-clusters' : 'L2: Nodes');
-            document.getElementById('mode-indicator').textContent = `WebGL | ${zoomIndicator} | ${scale.toFixed(3)}`;
-
-            // Debug: log what's being rendered
-            if (nodeData.length > 0 && Math.random() < 0.01) { // 1% chance to log
-                console.log(`Rendering: scale=${scale.toFixed(4)}, level=${semanticZoomLevel}, points=${nodeData.length/7}, nodes=${nodes.length}`);
-            }
-
             // Draw constellation mode overlay
             if (showConstellation && Object.keys(clusterCenters).length > 0) {
                 labelCtx.save();
@@ -1359,6 +1373,16 @@ GRAPH_HTML = """
 
                 labelCtx.restore();
             }
+
+            // Show zoom level indicator
+            const zoomIndicator = showLevel0 ? 'L0: Super-clusters' : (showLevel1 ? 'L1: Sub-clusters' : 'L2: Nodes');
+            document.getElementById('mode-indicator').textContent = `WebGL | ${zoomIndicator} | ${scale.toFixed(3)}`;
+
+            // Debug: log what's being rendered
+            if (nodeData.length > 0 && Math.random() < 0.01) { // 1% chance to log
+                console.log(`Rendering: scale=${scale.toFixed(4)}, level=${semanticZoomLevel}, points=${nodeData.length/7}, nodes=${nodes.length}`);
+            }
+
         }
 
         function findNodeAt(sx, sy) {
@@ -1507,15 +1531,9 @@ GRAPH_HTML = """
             render();
         }
 
-        function toggleClusters() {
-            showClusters = !showClusters;
-            document.getElementById('cluster-btn').classList.toggle('active', showClusters);
-            render();
-        }
-
-        function toggleBundling() {
-            showBundling = !showBundling;
-            document.getElementById('bundle-btn').classList.toggle('active', showBundling);
+        function toggleBorders() {
+            showBorders = !showBorders;
+            document.getElementById('borders-btn').classList.toggle('active', showBorders);
             render();
         }
 
@@ -1526,32 +1544,6 @@ GRAPH_HTML = """
                 computeClusterCenters();
             }
             render();
-        }
-
-        function toggleBorders() {
-            showBorders = !showBorders;
-            document.getElementById('borders-btn').classList.toggle('active', showBorders);
-            render();
-        }
-
-        function computeConnStats() {
-            // Compute connection percentiles for dynamic LOD
-            if (nodes.length === 0) {
-                connStats = { max: 1, p90: 1, p75: 1, p50: 1 };
-                return;
-            }
-
-            const conns = nodes.map(n => n.conn || 0).sort((a, b) => b - a);
-            const n = conns.length;
-
-            connStats = {
-                max: conns[0] || 1,
-                p90: conns[Math.floor(n * 0.1)] || 1,  // top 10%
-                p75: conns[Math.floor(n * 0.25)] || 1, // top 25%
-                p50: conns[Math.floor(n * 0.5)] || 1   // top 50%
-            };
-
-            console.log('Connection stats:', connStats);
         }
 
         function computeClusterCenters() {
@@ -1581,7 +1573,7 @@ GRAPH_HTML = """
                     const dist = Math.sqrt(dx*dx + dy*dy);
                     if (dist > maxDist) maxDist = dist;
                 }
-                const radius = maxDist + 100; // Add padding
+                const radius = maxDist + 100;
 
                 // Sort by connections to find top nodes
                 const sorted = [...clusterNodeList].sort((a, b) => (b.conn || 0) - (a.conn || 0));
@@ -1593,22 +1585,14 @@ GRAPH_HTML = """
                     radius: radius,
                     nodeCount: count,
                     topNodes: topNodes,
-                    name: generateClusterName(topNodes)
+                    name: topNodes[0]?.length > 20 ? topNodes[0].substring(0, 20) + '...' : (topNodes[0] || 'Cluster')
                 };
             }
         }
 
-        function generateClusterName(topNodes) {
-            // Simple heuristic: use first top node name, shortened
-            if (topNodes.length === 0) return 'Unknown';
-            const name = topNodes[0];
-            if (name.length > 20) return name.substring(0, 20) + '...';
-            return name;
-        }
-
         function computeInterClusterEdges() {
             // Count edges between different clusters
-            const edgeCounts = {}; // "clusterId1-clusterId2" -> count
+            const edgeCounts = {};
 
             for (const link of links) {
                 const s = nodeMap[link.source];
@@ -1618,25 +1602,39 @@ GRAPH_HTML = """
                 const c1 = s.cluster || 0;
                 const c2 = t.cluster || 0;
 
-                // Only count inter-cluster edges
                 if (c1 === c2) continue;
 
-                // Normalize key so that (1,2) and (2,1) are the same
                 const key = c1 < c2 ? `${c1}-${c2}` : `${c2}-${c1}`;
                 edgeCounts[key] = (edgeCounts[key] || 0) + 1;
             }
 
-            // Convert to array
             interClusterEdges = [];
             for (const [key, count] of Object.entries(edgeCounts)) {
                 const [from, to] = key.split('-').map(Number);
                 interClusterEdges.push({ from, to, count });
             }
 
-            // Sort by count descending
             interClusterEdges.sort((a, b) => b.count - a.count);
+        }
 
-            console.log(`Inter-cluster edges: ${interClusterEdges.length} connections`);
+        function computeConnStats() {
+            // Compute connection percentiles for dynamic LOD
+            if (nodes.length === 0) {
+                connStats = { max: 1, p90: 1, p75: 1, p50: 1 };
+                return;
+            }
+
+            const conns = nodes.map(n => n.conn || 0).sort((a, b) => b - a);
+            const n = conns.length;
+
+            connStats = {
+                max: conns[0] || 1,
+                p90: conns[Math.floor(n * 0.1)] || 1,  // top 10%
+                p75: conns[Math.floor(n * 0.25)] || 1, // top 25%
+                p50: conns[Math.floor(n * 0.5)] || 1   // top 50%
+            };
+
+            console.log('Connection stats:', connStats);
         }
 
         function computeHierarchicalCenters() {
@@ -1888,9 +1886,6 @@ GRAPH_HTML = """
                     } else if (clusterHit.type === 'level1') {
                         // Zoom to show individual nodes within this level1 (need scale > 0.06)
                         animateToHierarchicalCluster(clusterHit.center, 0.2);
-                    } else {
-                        // Old cluster behavior
-                        animateToCluster(clusterHit.id);
                     }
                     isDragging = false;
                     return;

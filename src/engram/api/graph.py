@@ -171,7 +171,8 @@ async def get_graph_data(
         WITH n, count(r) as conn
         RETURN n.id as id, n.name as name, n.type as type,
                n.layout_x as x, n.layout_y as y, n.cluster as cluster,
-               n.level0 as level0, n.level1 as level1, n.level2 as level2, conn
+               n.level0 as level0, n.level1 as level1, n.level2 as level2,
+               n.level3 as level3, n.level4 as level4, conn
         """,
         **params
     )
@@ -182,6 +183,7 @@ async def get_graph_data(
             "x": c["x"], "y": c["y"],
             "cluster": c["cluster"] or 0, "conn": c["conn"] or 0,
             "level0": c["level0"] or 0, "level1": c["level1"] or 0, "level2": c["level2"] or 0,
+            "level3": c["level3"] or 0, "level4": c["level4"] or 0,
         })
 
     memories = await db.execute_query(
@@ -192,7 +194,8 @@ async def get_graph_data(
         WITH n, count(r) as conn
         RETURN n.id as id, n.content as content, n.memory_type as type,
                n.layout_x as x, n.layout_y as y, n.cluster as cluster,
-               n.level0 as level0, n.level1 as level1, n.level2 as level2, conn
+               n.level0 as level0, n.level1 as level1, n.level2 as level2,
+               n.level3 as level3, n.level4 as level4, conn
         """,
         **params
     )
@@ -205,6 +208,7 @@ async def get_graph_data(
             "x": m["x"], "y": m["y"],
             "cluster": m["cluster"] or 0, "conn": m["conn"] or 0,
             "level0": m["level0"] or 0, "level1": m["level1"] or 0, "level2": m["level2"] or 0,
+            "level3": m["level3"] or 0, "level4": m["level4"] or 0,
         })
 
     episodes = await db.execute_query(
@@ -215,7 +219,8 @@ async def get_graph_data(
         WITH n, count(r) as conn
         RETURN n.id as id, n.query as query, n.behavior_name as behavior,
                n.layout_x as x, n.layout_y as y, n.cluster as cluster,
-               n.level0 as level0, n.level1 as level1, n.level2 as level2, conn
+               n.level0 as level0, n.level1 as level1, n.level2 as level2,
+               n.level3 as level3, n.level4 as level4, conn
         """,
         **params
     )
@@ -228,6 +233,7 @@ async def get_graph_data(
             "x": e["x"], "y": e["y"],
             "cluster": e["cluster"] or 0, "conn": e["conn"] or 0,
             "level0": e["level0"] or 0, "level1": e["level1"] or 0, "level2": e["level2"] or 0,
+            "level3": e["level3"] or 0, "level4": e["level4"] or 0,
         })
 
     node_ids = {n["id"] for n in nodes}

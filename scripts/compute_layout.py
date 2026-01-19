@@ -957,12 +957,12 @@ def compute_local_layout(node_list, node_edges, radius):
 
 def compute_communities(nodes, edges):
     """Detect communities using Louvain algorithm (legacy, for backward compatibility)."""
-    hierarchy = compute_hierarchical_communities(nodes, edges, levels=3)
+    hierarchy = compute_hierarchical_communities(nodes, edges, levels=5)
     # Return level 2 (finest level) for backward compatibility
     return {node_id: h['level2'] for node_id, h in hierarchy.items()}
 
 
-def compute_hierarchical_communities(nodes, edges, levels=3):
+def compute_hierarchical_communities(nodes, edges, levels=5):
     """Detect hierarchical communities using Leiden algorithm.
 
     Creates a multi-level hierarchy:
@@ -999,7 +999,8 @@ def compute_hierarchical_communities(nodes, edges, levels=3):
 
     # Detect communities at each level with different resolutions
     # Higher resolution = more communities (finer granularity)
-    resolutions = [0.3, 0.7, 1.5]  # Level 0 (coarse) to Level 2 (fine)
+    # 5 levels: from very coarse (~5-15 clusters) to very fine (many small clusters)
+    resolutions = [0.1, 0.3, 0.6, 1.0, 2.0]  # Level 0 (coarsest) to Level 4 (finest)
 
     for level in range(levels):
         resolution = resolutions[level] if level < len(resolutions) else 1.0
@@ -1402,7 +1403,7 @@ async def compute_and_store_layout():
 
     # Detect hierarchical communities using Leiden
     print("Detecting hierarchical communities...")
-    hierarchy = compute_hierarchical_communities(all_nodes, all_edges, levels=3)
+    hierarchy = compute_hierarchical_communities(all_nodes, all_edges, levels=5)
 
     # Extract level2 clusters for layout (finest level)
     node_clusters = {node_id: h['level2'] for node_id, h in hierarchy.items()}
@@ -1424,7 +1425,7 @@ async def compute_and_store_layout():
         batch = node_list[i : i + batch_size]
 
         for node_id, (x, y) in batch:
-            h = hierarchy.get(node_id, {'level0': 0, 'level1': 0, 'level2': 0})
+            h = hierarchy.get(node_id, {'level0': 0, 'level1': 0, 'level2': 0, 'level3': 0, 'level4': 0})
             await db.execute_query(
                 """
                 MATCH (n) WHERE n.id = $id
@@ -1432,15 +1433,19 @@ async def compute_and_store_layout():
                     n.cluster = $cluster,
                     n.level0 = $level0,
                     n.level1 = $level1,
-                    n.level2 = $level2
+                    n.level2 = $level2,
+                    n.level3 = $level3,
+                    n.level4 = $level4
                 """,
                 id=node_id,
                 x=float(x),
                 y=float(y),
-                cluster=h['level2'],  # Keep 'cluster' as finest level for backward compat
+                cluster=h['level4'],  # Keep 'cluster' as finest level for backward compat
                 level0=h['level0'],
                 level1=h['level1'],
                 level2=h['level2'],
+                level3=h['level3'],
+                level4=h['level4'],
             )
 
         progress = min(i + batch_size, len(node_list))
