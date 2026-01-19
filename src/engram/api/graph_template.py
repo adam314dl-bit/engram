@@ -1218,7 +1218,7 @@ GRAPH_HTML = """
                     nodeData.push(center.x, center.y, color[0], color[1], color[2], opacity, size);
 
                     // Labels for level 0
-                    if (showLevel0 && center.nodeCount >= 20) {
+                    if (showLevel0 && center.nodeCount >= 5) {
                         labelsToRender.push({
                             type: 'level0',
                             x: center.x, y: center.y,
@@ -1249,7 +1249,7 @@ GRAPH_HTML = """
 
                     nodeData.push(center.x, center.y, color[0], color[1], color[2], opacity * 0.95, size);
 
-                    if (showLevel1 && center.nodeCount >= 10) {
+                    if (showLevel1 && center.nodeCount >= 3) {
                         labelsToRender.push({ type: 'level1', x: center.x, y: center.y, name: center.name, count: center.nodeCount, color: color, size: size });
                     }
                 }
@@ -1273,7 +1273,7 @@ GRAPH_HTML = """
 
                     nodeData.push(center.x, center.y, color[0], color[1], color[2], opacity * 0.9, size);
 
-                    if (showLevel2 && center.nodeCount >= 5) {
+                    if (showLevel2 && center.nodeCount >= 2) {
                         labelsToRender.push({ type: 'level2', x: center.x, y: center.y, name: center.name, count: center.nodeCount, color: color, size: size });
                     }
                 }
@@ -1297,7 +1297,7 @@ GRAPH_HTML = """
 
                     nodeData.push(center.x, center.y, color[0], color[1], color[2], opacity * 0.85, size);
 
-                    if (showLevel3 && center.nodeCount >= 3) {
+                    if (showLevel3 && center.nodeCount >= 1) {
                         labelsToRender.push({ type: 'level3', x: center.x, y: center.y, name: center.name, count: center.nodeCount, color: color, size: size });
                     }
                 }
@@ -1336,8 +1336,8 @@ GRAPH_HTML = """
                     const finalOpacity = Math.min(finalColor[3], nodeOpacity);
                     nodeData.push(node.x, node.y, finalColor[0], finalColor[1], finalColor[2], finalOpacity, size);
 
-                    // Collect labels for high-connection nodes
-                    if (isNodeVisible(node) && nodeConn > 10 && scale > 0.1) {
+                    // Collect labels for nodes (show more labels at higher zoom)
+                    if (isNodeVisible(node) && (nodeConn > 2 || scale > 0.15)) {
                         const pos = worldToScreen(node.x, node.y);
                         labelsToRender.push({
                             type: 'node',
