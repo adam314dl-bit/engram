@@ -745,18 +745,28 @@ GRAPH_HTML = """
 
                 if (label.type === 'cluster') {
                     const fontSize = Math.min(20, Math.max(12, 10 + Math.log(label.count || 1) * 2));
-                    // Background
+                    const countFontSize = Math.max(12, fontSize * 0.75);
+
+                    // Measure both texts for background
                     labelCtx.font = `bold ${fontSize}px -apple-system, sans-serif`;
-                    const metrics = labelCtx.measureText(label.name);
-                    labelCtx.fillStyle = 'rgba(10, 10, 18, 0.85)';
-                    labelCtx.fillRect(pos.x - metrics.width/2 - 4, pos.y - fontSize, metrics.width + 8, fontSize + 10);
-                    // Text
+                    const nameMetrics = labelCtx.measureText(label.name);
+                    labelCtx.font = `bold ${countFontSize}px -apple-system, sans-serif`;
+                    const countMetrics = labelCtx.measureText(`${label.count} nodes`);
+                    const maxWidth = Math.max(nameMetrics.width, countMetrics.width);
+
+                    // Background - sized for both lines
+                    labelCtx.fillStyle = 'rgba(10, 10, 18, 0.9)';
+                    labelCtx.fillRect(pos.x - maxWidth/2 - 8, pos.y - fontSize - 2, maxWidth + 16, fontSize + countFontSize + 12);
+
+                    // Cluster name
+                    labelCtx.font = `bold ${fontSize}px -apple-system, sans-serif`;
                     labelCtx.fillStyle = textColor;
-                    labelCtx.fillText(label.name, pos.x, pos.y - 5);
-                    // Count
-                    labelCtx.font = `${fontSize * 0.6}px -apple-system, sans-serif`;
-                    labelCtx.fillStyle = 'rgba(255,255,255,0.6)';
-                    labelCtx.fillText(`${label.count} nodes`, pos.x, pos.y + fontSize - 3);
+                    labelCtx.fillText(label.name, pos.x, pos.y);
+
+                    // Node count - prominent
+                    labelCtx.font = `bold ${countFontSize}px -apple-system, sans-serif`;
+                    labelCtx.fillStyle = '#5eead4';
+                    labelCtx.fillText(`${label.count} nodes`, pos.x, pos.y + countFontSize + 4);
                 } else if (label.type === 'node') {
                     const fontSize = 11;
                     labelCtx.font = `${fontSize}px -apple-system, sans-serif`;
