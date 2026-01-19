@@ -1001,10 +1001,10 @@ def compute_hierarchical_communities(nodes, edges, levels=5):
     print(f"  Target L0 clusters: ~{target_l0_clusters}")
 
     # Minimum cluster size to subdivide (don't subdivide tiny clusters)
-    min_subdivide_size = max(5, n // 500)  # At least 5 nodes, or 0.2% of graph
+    min_subdivide_size = max(10, n // 300)  # At least 10 nodes, or 0.33% of graph
     print(f"  Min cluster size to subdivide: {min_subdivide_size}")
 
-    def run_leiden_on_subgraph(node_subset, target_clusters=None):
+    def run_leiden_on_subgraph(node_subset, target_clusters=None, use_binary_search=True):
         """Run Leiden on a subset of nodes, return cluster assignments."""
         if len(node_subset) < 3:
             return {nid: 0 for nid in node_subset}
@@ -1024,22 +1024,34 @@ def compute_hierarchical_communities(nodes, edges, levels=5):
             return {nid: i for i, nid in enumerate(node_subset)}
 
         G = ig.Graph(n=len(node_subset), edges=sub_edges, directed=False)
-
-        # Binary search for resolution that gives target cluster count
         target = target_clusters or max(2, len(node_subset) // 5)
 
-        # Search for resolution that gives approximately target clusters
+        if not use_binary_search:
+            # Fast path: use formula-based resolution (no search)
+            # Higher resolution = more clusters
+            resolution = max(0.1, target / math.sqrt(len(node_subset)))
+            try:
+                partition = G.community_leiden(
+                    objective_function='modularity',
+                    resolution=resolution,
+                    n_iterations=3
+                )
+                return {idx_to_sub_node[i]: c for i, c in enumerate(partition.membership)}
+            except Exception:
+                return {nid: 0 for nid in node_subset}
+
+        # Binary search for resolution (only for L0)
         lo_res, hi_res = 0.001, 10.0
         best_result = None
         best_diff = float('inf')
 
-        for _ in range(8):  # Binary search iterations
+        for _ in range(4):  # Reduced from 8 to 4 iterations
             mid_res = (lo_res + hi_res) / 2
             try:
                 partition = G.community_leiden(
                     objective_function='modularity',
                     resolution=mid_res,
-                    n_iterations=5
+                    n_iterations=3
                 )
                 num_clusters = len(set(partition.membership))
                 diff = abs(num_clusters - target)
@@ -1049,11 +1061,11 @@ def compute_hierarchical_communities(nodes, edges, levels=5):
                     best_result = partition.membership
 
                 if num_clusters < target:
-                    lo_res = mid_res  # Need more clusters -> higher resolution
+                    lo_res = mid_res
                 elif num_clusters > target:
-                    hi_res = mid_res  # Need fewer clusters -> lower resolution
+                    hi_res = mid_res
                 else:
-                    break  # Found exact target
+                    break
 
             except Exception:
                 hi_res = mid_res
@@ -1088,6 +1100,7 @@ def compute_hierarchical_communities(nodes, edges, levels=5):
         # Determine target subdivision based on level and cluster size
         if current_level == 0:
             target = target_l0_clusters
+            use_search = True  # Only use binary search for L0
         else:
             # Target: subdivide into 2-6 parts depending on size
             # Larger clusters get more subdivisions
@@ -1099,9 +1112,10 @@ def compute_hierarchical_communities(nodes, edges, levels=5):
                 target = min(4, max(2, len(node_ids) // 5))
             else:
                 target = 2
+            use_search = False  # Fast path for L1-L4
 
         # Run Leiden to subdivide
-        sub_assignments = run_leiden_on_subgraph(node_ids, target_clusters=target)
+        sub_assignments = run_leiden_on_subgraph(node_ids, target_clusters=target, use_binary_search=use_search)
 
         # Group nodes by their sub-cluster
         sub_clusters = {}
