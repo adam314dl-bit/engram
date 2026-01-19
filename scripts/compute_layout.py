@@ -995,25 +995,31 @@ def compute_hierarchical_communities(nodes, edges, levels=5):
     # Initialize hierarchy - all nodes start at cluster 0 for all levels
     hierarchy = {node_id: {f'level{i}': 0 for i in range(levels)} for node_id in nodes}
 
-    # Target number of clusters at L0: adaptive based on graph size
-    # sqrt(n) / 3 gives: n=100 -> 3, n=1000 -> 10, n=10000 -> 33, n=30000 -> 58
-    target_l0_clusters = max(3, int(math.sqrt(n) / 3))
-    print(f"  Target L0 clusters: ~{target_l0_clusters}")
+    # Target cluster counts at each level - fully data-dependent
+    # Each level subdivides by factor of ~4-6, so:
+    # L0: sqrt(n)/3, L1: sqrt(n), L2: sqrt(n)*2, L3: sqrt(n)*4, L4: individual
+    sqrt_n = math.sqrt(n)
+    target_clusters_per_level = {
+        0: max(3, int(sqrt_n / 3)),      # ~58 for 30k
+        1: max(10, int(sqrt_n)),          # ~173 for 30k
+        2: max(30, int(sqrt_n * 2)),      # ~346 for 30k
+        3: max(100, int(sqrt_n * 4)),     # ~692 for 30k
+        4: n                               # individual nodes
+    }
+
+    # Max cluster size = total nodes / target clusters (ensures balanced distribution)
+    max_cluster_sizes = {
+        level: max(5, n // target)
+        for level, target in target_clusters_per_level.items()
+    }
+
+    print(f"  Target clusters: L0={target_clusters_per_level[0]}, L1={target_clusters_per_level[1]}, L2={target_clusters_per_level[2]}, L3={target_clusters_per_level[3]}")
+    print(f"  Max cluster sizes: L0={max_cluster_sizes[0]}, L1={max_cluster_sizes[1]}, L2={max_cluster_sizes[2]}, L3={max_cluster_sizes[3]}")
+
+    target_l0_clusters = target_clusters_per_level[0]
 
     # Minimum cluster size to subdivide (don't subdivide tiny clusters)
-    min_subdivide_size = max(10, n // 300)  # At least 10 nodes, or 0.33% of graph
-    print(f"  Min cluster size to subdivide: {min_subdivide_size}")
-
-    # Maximum cluster size - force subdivide if larger (balanced hierarchy)
-    # L0: ~1000 nodes max, L1: ~300 nodes max, L2: ~100 nodes max, L3: ~30 nodes max
-    max_cluster_sizes = {
-        0: max(500, n // 30),    # L0: ~1000 for 30k graph
-        1: max(200, n // 100),   # L1: ~300 for 30k graph
-        2: max(50, n // 300),    # L2: ~100 for 30k graph
-        3: max(20, n // 1000),   # L3: ~30 for 30k graph
-        4: float('inf')          # L4: no limit (individual nodes)
-    }
-    print(f"  Max cluster sizes: L0={max_cluster_sizes[0]}, L1={max_cluster_sizes[1]}, L2={max_cluster_sizes[2]}, L3={max_cluster_sizes[3]}")
+    min_subdivide_size = max(5, n // 500)
 
     def run_leiden_on_subgraph(node_subset, target_clusters=None, use_binary_search=True):
         """Run Leiden on a subset of nodes, return cluster assignments."""
