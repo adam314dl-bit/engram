@@ -821,11 +821,20 @@ def find_tangent_positions(c1, c2, r):
 
 
 def compute_local_layout(node_list, node_edges, radius):
-    """Compute force-directed layout for nodes within a cluster."""
+    """Compute force-directed layout + collision resolution for nodes within a cluster.
+
+    Two phases:
+    1. Force-directed to preserve relationships (connected nodes near each other)
+    2. Collision resolution to guarantee minimum spacing between all nodes
+    """
     import math
     import random
 
     random.seed(42)
+
+    # Calculate minimum node spacing based on cluster size
+    # Ensure nodes don't overlap - minimum distance between node centers
+    min_spacing = max(30, radius / math.sqrt(len(node_list)) * 0.8)
 
     # Initialize random positions
     positions = {}
@@ -836,7 +845,7 @@ def compute_local_layout(node_list, node_edges, radius):
 
     node_set = set(node_list)
 
-    # Simple force-directed iterations
+    # Phase 1: Force-directed iterations (preserve relationships)
     iterations = 50
     k = radius / math.sqrt(len(node_list))  # Optimal distance
 
@@ -898,6 +907,50 @@ def compute_local_layout(node_list, node_edges, radius):
             if d > radius * 0.9:
                 positions[node_id][0] = px / d * radius * 0.9
                 positions[node_id][1] = py / d * radius * 0.9
+
+    # Phase 2: Collision resolution - push overlapping nodes apart
+    collision_iterations = 100
+    for iteration in range(collision_iterations):
+        max_overlap = 0
+
+        for i, n1 in enumerate(node_list):
+            for n2 in node_list[i+1:]:
+                dx = positions[n2][0] - positions[n1][0]
+                dy = positions[n2][1] - positions[n1][1]
+                dist = math.sqrt(dx*dx + dy*dy)
+
+                if dist < min_spacing:
+                    overlap = min_spacing - dist
+                    max_overlap = max(max_overlap, overlap)
+
+                    if dist > 0.01:
+                        # Push apart along the line between them
+                        push = (overlap / 2 + 0.5) / dist
+                        positions[n1][0] -= dx * push
+                        positions[n1][1] -= dy * push
+                        positions[n2][0] += dx * push
+                        positions[n2][1] += dy * push
+                    else:
+                        # Same position - push in random direction
+                        angle = random.uniform(0, 2 * math.pi)
+                        push = min_spacing / 2
+                        positions[n1][0] -= push * math.cos(angle)
+                        positions[n1][1] -= push * math.sin(angle)
+                        positions[n2][0] += push * math.cos(angle)
+                        positions[n2][1] += push * math.sin(angle)
+
+        # Keep within expanded radius (allow some overflow to fit all nodes)
+        max_radius = radius * 1.2
+        for node_id in node_list:
+            px, py = positions[node_id]
+            d = math.sqrt(px*px + py*py)
+            if d > max_radius:
+                positions[node_id][0] = px / d * max_radius
+                positions[node_id][1] = py / d * max_radius
+
+        # Converged if no significant overlaps
+        if max_overlap < 1:
+            break
 
     return {k: tuple(v) for k, v in positions.items()}
 
