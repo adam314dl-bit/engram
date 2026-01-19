@@ -1672,12 +1672,21 @@ async def compute_and_store_layout():
 
     print("Fetching nodes from Neo4j...")
 
-    # Fetch all nodes
+    # Fetch all nodes with their types (needed for indexed writes)
     concepts = await db.execute_query("MATCH (c:Concept) RETURN c.id as id")
     semantic = await db.execute_query("MATCH (s:SemanticMemory) RETURN s.id as id")
     episodic = await db.execute_query("MATCH (e:EpisodicMemory) RETURN e.id as id")
 
-    all_nodes = [n["id"] for n in concepts + semantic + episodic]
+    # Track node types for indexed writes
+    node_types = {}
+    for n in concepts:
+        node_types[n["id"]] = "Concept"
+    for n in semantic:
+        node_types[n["id"]] = "SemanticMemory"
+    for n in episodic:
+        node_types[n["id"]] = "EpisodicMemory"
+
+    all_nodes = list(node_types.keys())
     print(f"Found {len(all_nodes)} nodes")
 
     # Fetch all relationships
@@ -1721,51 +1730,55 @@ async def compute_and_store_layout():
 
     print("Storing positions, hierarchy, and connection counts in Neo4j...")
 
-    # Store positions and all hierarchy levels back to Neo4j in batches
-    # Using UNWIND for bulk updates (much faster than individual queries)
-    batch_size = 1000
-    node_list = list(positions.items())
+    # Group nodes by type for indexed writes (uses per-label indexes)
+    by_type = {"Concept": [], "SemanticMemory": [], "EpisodicMemory": []}
+    for node_id, (x, y) in positions.items():
+        h = hierarchy.get(node_id, {'level0': 0, 'level1': 0, 'level2': 0, 'level3': 0, 'level4': 0})
+        conn = conn_counts.get(node_id, 0)
+        node_type = node_types.get(node_id, "Concept")
+        by_type[node_type].append({
+            "id": node_id,
+            "x": float(x),
+            "y": float(y),
+            "cluster": h['level4'],
+            "level0": h['level0'],
+            "level1": h['level1'],
+            "level2": h['level2'],
+            "level3": h['level3'],
+            "level4": h['level4'],
+            "conn": conn,
+        })
 
-    for i in range(0, len(node_list), batch_size):
-        batch = node_list[i : i + batch_size]
+    # Write each type separately to use per-label indexes (much faster)
+    batch_size = 2000
+    total = len(positions)
+    written = 0
 
-        # Prepare batch data
-        batch_data = []
-        for node_id, (x, y) in batch:
-            h = hierarchy.get(node_id, {'level0': 0, 'level1': 0, 'level2': 0, 'level3': 0, 'level4': 0})
-            conn = conn_counts.get(node_id, 0)
-            batch_data.append({
-                "id": node_id,
-                "x": float(x),
-                "y": float(y),
-                "cluster": h['level4'],
-                "level0": h['level0'],
-                "level1": h['level1'],
-                "level2": h['level2'],
-                "level3": h['level3'],
-                "level4": h['level4'],
-                "conn": conn,
-            })
+    for label, nodes_data in by_type.items():
+        if not nodes_data:
+            continue
 
-        # Single query for entire batch using UNWIND
-        await db.execute_query(
-            """
-            UNWIND $batch AS row
-            MATCH (n) WHERE n.id = row.id
-            SET n.layout_x = row.x, n.layout_y = row.y,
-                n.cluster = row.cluster,
-                n.level0 = row.level0,
-                n.level1 = row.level1,
-                n.level2 = row.level2,
-                n.level3 = row.level3,
-                n.level4 = row.level4,
-                n.conn = row.conn
-            """,
-            batch=batch_data,
-        )
+        for i in range(0, len(nodes_data), batch_size):
+            batch = nodes_data[i : i + batch_size]
 
-        progress = min(i + batch_size, len(node_list))
-        print(f"  Stored {progress}/{len(node_list)} positions...")
+            await db.execute_query(
+                f"""
+                UNWIND $batch AS row
+                MATCH (n:{label}) WHERE n.id = row.id
+                SET n.layout_x = row.x, n.layout_y = row.y,
+                    n.cluster = row.cluster,
+                    n.level0 = row.level0,
+                    n.level1 = row.level1,
+                    n.level2 = row.level2,
+                    n.level3 = row.level3,
+                    n.level4 = row.level4,
+                    n.conn = row.conn
+                """,
+                batch=batch,
+            )
+
+            written += len(batch)
+            print(f"  Stored {written}/{total} positions...")
 
     # Compute bounding box
     if positions:
