@@ -1244,9 +1244,6 @@ GRAPH_HTML = """
 
             // Draw individual nodes (loaded via lazy loading when cluster is clicked)
             {
-                // Collect visible nodes for label limiting
-                const visibleNodes = [];
-
                 for (const node of nodes) {
                     const nodeConn = node.conn || 0;
                     const color = getNodeColor(node);
@@ -1265,27 +1262,8 @@ GRAPH_HTML = """
                     }
 
                     nodeData.push(node.x, node.y, finalColor[0], finalColor[1], finalColor[2], finalColor[3], size);
-
-                    // Track visible nodes for label selection
-                    if (isNodeVisible(node)) {
-                        visibleNodes.push({ node, size });
-                    }
                 }
-
-                // Only show labels for top N most connected visible nodes (avoid clutter)
-                const maxLabels = Math.max(10, Math.min(30, Math.floor(20 / scale)));
-                visibleNodes.sort((a, b) => (b.node.conn || 0) - (a.node.conn || 0));
-                const topNodes = visibleNodes.slice(0, maxLabels);
-
-                for (const { node, size } of topNodes) {
-                    const pos = worldToScreen(node.x, node.y);
-                    labelsToRender.push({
-                        type: 'node',
-                        node: node,
-                        pos: pos,
-                        size: size
-                    });
-                }
+                // Node labels already rendered in green by WebGL - no canvas labels needed
             }
 
             // Render all collected nodes
@@ -1397,16 +1375,6 @@ GRAPH_HTML = """
                     labelCtx.shadowBlur = 0;
                     drawTextWithBg(label.name, pos.x, pos.y, `${fontSize}px -apple-system, sans-serif`, textColor);
 
-                } else if (label.type === 'node') {
-                    const { node, pos, size } = label;
-                    if (pos.x < -100 || pos.x > w + 100 || pos.y < -100 || pos.y > h + 100) continue;
-
-                    const nodeName = node.name.length > 20 ? node.name.slice(0, 20) + '...' : node.name;
-                    const screenSize = size * scale;
-
-                    labelCtx.shadowBlur = 0;
-                    drawTextWithBg(nodeName, pos.x, pos.y + screenSize / 2 + 14, '11px -apple-system, sans-serif', 'rgba(255,255,255,0.9)');
-                }
             }
             labelCtx.restore();
 
