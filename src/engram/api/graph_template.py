@@ -325,7 +325,7 @@ GRAPH_HTML = """
         let typeFilters = new Set(); // empty = show all
         let clusterCenters = {}; // { clusterId: { x, y, name, nodeCount, topNodes } }
         let interClusterEdges = []; // [{ from: clusterId, to: clusterId, count: n }]
-        let connStats = { max: 1, p99: 1, p95: 1, p75: 1, p50: 1 }; // Connection percentiles for LOD
+        let connStats = { max: 1, p999: 1, p99: 1, p90: 1, p50: 1 }; // Connection percentiles for LOD
 
         // Hierarchical cluster data for semantic zoom (5 levels)
         let level0Centers = {}; // { level0Id: { x, y, radius, name, nodeCount } }
@@ -1248,9 +1248,9 @@ GRAPH_HTML = """
             {
                 // LOD: Minimum connections required to be visible at each zoom level
                 const minConnByLevel = {
-                    0: connStats.p99,  // L0: top 1%
-                    1: connStats.p95,  // L1: top 5%
-                    2: connStats.p75,  // L2: top 25%
+                    0: connStats.p999, // L0: top 0.1%
+                    1: connStats.p99,  // L1: top 1%
+                    2: connStats.p90,  // L2: top 10%
                     3: connStats.p50,  // L3: top 50%
                     4: 0               // L4: all nodes
                 };
@@ -1646,9 +1646,9 @@ GRAPH_HTML = """
 
         function computeConnStats() {
             // Compute connection percentiles for LOD filtering
-            // L0: top 1%, L1: top 5%, L2: top 25%, L3: top 50%, L4: all
+            // L0: top 0.1%, L1: top 1%, L2: top 10%, L3: top 50%, L4: all
             if (nodes.length === 0) {
-                connStats = { max: 1, p99: 1, p95: 1, p75: 1, p50: 1 };
+                connStats = { max: 1, p999: 1, p99: 1, p90: 1, p50: 1 };
                 return;
             }
 
@@ -1657,10 +1657,10 @@ GRAPH_HTML = """
 
             connStats = {
                 max: conns[0] || 1,
-                p99: conns[Math.floor(n * 0.01)] || 1,  // top 1%
-                p95: conns[Math.floor(n * 0.05)] || 1,  // top 5%
-                p75: conns[Math.floor(n * 0.25)] || 1,  // top 25%
-                p50: conns[Math.floor(n * 0.5)] || 1    // top 50%
+                p999: conns[Math.floor(n * 0.001)] || 1,  // top 0.1%
+                p99: conns[Math.floor(n * 0.01)] || 1,    // top 1%
+                p90: conns[Math.floor(n * 0.1)] || 1,     // top 10%
+                p50: conns[Math.floor(n * 0.5)] || 1      // top 50%
             };
 
             console.log('Connection stats for LOD:', connStats);
