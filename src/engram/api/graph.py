@@ -149,104 +149,78 @@ async def get_graph_data(
     max_x: Optional[float] = Query(None),
     min_y: Optional[float] = Query(None),
     max_y: Optional[float] = Query(None),
+    limit: int = Query(5000, ge=100, le=50000),
 ) -> dict:
+    """Get graph data with optimized single query."""
     db = get_db(request)
-    nodes = []
-    links = []
 
     viewport_filter = ""
-    params = {}
+    params: dict = {"limit": limit}
     if all(v is not None for v in [min_x, max_x, min_y, max_y]):
         viewport_filter = """
             AND n.layout_x >= $min_x AND n.layout_x <= $max_x
             AND n.layout_y >= $min_y AND n.layout_y <= $max_y
         """
-        params = {"min_x": min_x, "max_x": max_x, "min_y": min_y, "max_y": max_y}
+        params.update({"min_x": min_x, "max_x": max_x, "min_y": min_y, "max_y": max_y})
 
-    concepts = await db.execute_query(
+    # Single optimized query for all node types (removed expensive connection count)
+    all_nodes = await db.execute_query(
         f"""
-        MATCH (n:Concept)
-        WHERE n.layout_x IS NOT NULL {viewport_filter}
-        OPTIONAL MATCH (n)-[r]-()
-        WITH n, count(r) as conn
-        RETURN n.id as id, n.name as name, n.type as type,
-               n.layout_x as x, n.layout_y as y, n.cluster as cluster,
+        MATCH (n)
+        WHERE n.layout_x IS NOT NULL
+          AND (n:Concept OR n:SemanticMemory OR n:EpisodicMemory)
+          {viewport_filter}
+        RETURN n.id as id,
+               COALESCE(n.name, LEFT(n.content, 50), LEFT(n.query, 40)) as name,
+               n.content as fullContent,
+               CASE
+                   WHEN n:Concept THEN 'concept'
+                   WHEN n:SemanticMemory THEN 'semantic'
+                   ELSE 'episodic'
+               END as type,
+               COALESCE(n.type, n.memory_type, n.behavior_name, 'unknown') as subtype,
+               n.layout_x as x, n.layout_y as y,
+               n.cluster as cluster, n.conn as conn,
                n.level0 as level0, n.level1 as level1, n.level2 as level2,
-               n.level3 as level3, n.level4 as level4, conn
+               n.level3 as level3, n.level4 as level4
+        LIMIT $limit
         """,
         **params
     )
-    for c in concepts:
-        nodes.append({
-            "id": c["id"], "name": c["name"], "type": "concept",
-            "subtype": c["type"] or "unknown",
-            "x": c["x"], "y": c["y"],
-            "cluster": c["cluster"] or 0, "conn": c["conn"] or 0,
-            "level0": c["level0"] or 0, "level1": c["level1"] or 0, "level2": c["level2"] or 0,
-            "level3": c["level3"] or 0, "level4": c["level4"] or 0,
-        })
 
-    memories = await db.execute_query(
-        f"""
-        MATCH (n:SemanticMemory)
-        WHERE n.layout_x IS NOT NULL {viewport_filter}
-        OPTIONAL MATCH (n)-[r]-()
-        WITH n, count(r) as conn
-        RETURN n.id as id, n.content as content, n.memory_type as type,
-               n.layout_x as x, n.layout_y as y, n.cluster as cluster,
-               n.level0 as level0, n.level1 as level1, n.level2 as level2,
-               n.level3 as level3, n.level4 as level4, conn
-        """,
-        **params
-    )
-    for m in memories:
-        content = m["content"] or ""
+    nodes = []
+    for n in all_nodes:
+        name = n["name"] or ""
         nodes.append({
-            "id": m["id"], "name": content[:50] + "..." if len(content) > 50 else content,
-            "fullContent": content, "type": "semantic",
-            "subtype": m["type"] or "fact",
-            "x": m["x"], "y": m["y"],
-            "cluster": m["cluster"] or 0, "conn": m["conn"] or 0,
-            "level0": m["level0"] or 0, "level1": m["level1"] or 0, "level2": m["level2"] or 0,
-            "level3": m["level3"] or 0, "level4": m["level4"] or 0,
-        })
-
-    episodes = await db.execute_query(
-        f"""
-        MATCH (n:EpisodicMemory)
-        WHERE n.layout_x IS NOT NULL {viewport_filter}
-        OPTIONAL MATCH (n)-[r]-()
-        WITH n, count(r) as conn
-        RETURN n.id as id, n.query as query, n.behavior_name as behavior,
-               n.layout_x as x, n.layout_y as y, n.cluster as cluster,
-               n.level0 as level0, n.level1 as level1, n.level2 as level2,
-               n.level3 as level3, n.level4 as level4, conn
-        """,
-        **params
-    )
-    for e in episodes:
-        query = e["query"] or ""
-        nodes.append({
-            "id": e["id"], "name": query[:40] + "..." if len(query) > 40 else query,
-            "fullContent": query, "type": "episodic",
-            "subtype": e["behavior"] or "unknown",
-            "x": e["x"], "y": e["y"],
-            "cluster": e["cluster"] or 0, "conn": e["conn"] or 0,
-            "level0": e["level0"] or 0, "level1": e["level1"] or 0, "level2": e["level2"] or 0,
-            "level3": e["level3"] or 0, "level4": e["level4"] or 0,
+            "id": n["id"],
+            "name": name[:50] + "..." if len(name) > 50 else name,
+            "fullContent": n["fullContent"],
+            "type": n["type"],
+            "subtype": n["subtype"] or "unknown",
+            "x": n["x"], "y": n["y"],
+            "cluster": n["cluster"] or 0,
+            "conn": n["conn"] or 0,
+            "level0": n["level0"] or 0, "level1": n["level1"] or 0, "level2": n["level2"] or 0,
+            "level3": n["level3"] or 0, "level4": n["level4"] or 0,
         })
 
     node_ids = {n["id"] for n in nodes}
 
-    for query, rel_type in [
-        ("MATCH (a:Concept)-[r:RELATED_TO]->(b:Concept) RETURN a.id as source, b.id as target", "related"),
-        ("MATCH (a:SemanticMemory)-[:ABOUT]->(b:Concept) RETURN a.id as source, b.id as target", "about"),
-        ("MATCH (a:EpisodicMemory)-[:ACTIVATED]->(b:Concept) RETURN a.id as source, b.id as target", "activated"),
-    ]:
-        rels = await db.execute_query(query)
-        for r in rels:
-            if r["source"] in node_ids and r["target"] in node_ids:
-                links.append({"source": r["source"], "target": r["target"], "type": rel_type})
+    # Single query for all relationships
+    rels = await db.execute_query(
+        """
+        MATCH (a)-[r]->(b)
+        WHERE (a:Concept OR a:SemanticMemory OR a:EpisodicMemory)
+          AND (b:Concept OR b:SemanticMemory OR b:EpisodicMemory)
+        RETURN a.id as source, b.id as target, type(r) as relType
+        """
+    )
+
+    links = []
+    for r in rels:
+        if r["source"] in node_ids and r["target"] in node_ids:
+            rel_type = r["relType"].lower() if r["relType"] else "related"
+            links.append({"source": r["source"], "target": r["target"], "type": rel_type})
 
     return {"nodes": nodes, "links": links}
 

@@ -1573,7 +1573,16 @@ async def compute_and_store_layout():
         base_radius=max(300, 100 * math.sqrt(len(all_nodes) / 1000))
     )
 
-    print("Storing positions and hierarchy in Neo4j...")
+    # Pre-compute connection counts for faster graph loading
+    print("Computing connection counts...")
+    conn_counts = {node_id: 0 for node_id in all_nodes}
+    for src, dst in all_edges:
+        if src in conn_counts:
+            conn_counts[src] += 1
+        if dst in conn_counts:
+            conn_counts[dst] += 1
+
+    print("Storing positions, hierarchy, and connection counts in Neo4j...")
 
     # Store positions and all hierarchy levels back to Neo4j in batches
     batch_size = 500
@@ -1584,6 +1593,7 @@ async def compute_and_store_layout():
 
         for node_id, (x, y) in batch:
             h = hierarchy.get(node_id, {'level0': 0, 'level1': 0, 'level2': 0, 'level3': 0, 'level4': 0})
+            conn = conn_counts.get(node_id, 0)
             await db.execute_query(
                 """
                 MATCH (n) WHERE n.id = $id
@@ -1593,7 +1603,8 @@ async def compute_and_store_layout():
                     n.level1 = $level1,
                     n.level2 = $level2,
                     n.level3 = $level3,
-                    n.level4 = $level4
+                    n.level4 = $level4,
+                    n.conn = $conn
                 """,
                 id=node_id,
                 x=float(x),
@@ -1604,6 +1615,7 @@ async def compute_and_store_layout():
                 level2=h['level2'],
                 level3=h['level3'],
                 level4=h['level4'],
+                conn=conn,
             )
 
         progress = min(i + batch_size, len(node_list))

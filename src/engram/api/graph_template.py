@@ -2099,7 +2099,7 @@ GRAPH_HTML = """
             e.preventDefault();
             const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
             const mouseWorld = screenToWorld(e.clientX, e.clientY);
-            scale = Math.max(0.005, Math.min(10, scale * zoomFactor));
+            scale = Math.max(0.001, Math.min(10, scale * zoomFactor));
             const newMouseWorld = screenToWorld(e.clientX, e.clientY);
             viewX += mouseWorld.x - newMouseWorld.x;
             viewY += mouseWorld.y - newMouseWorld.y;
@@ -2530,7 +2530,7 @@ GRAPH_HTML = """
             // So scale = screenSize * 0.7 / (graphSize * 2) for 70% fit
             const graphWidth = bounds.max_x - bounds.min_x;
             const graphHeight = bounds.max_y - bounds.min_y;
-            scale = Math.max(0.005, Math.min(1, Math.min(
+            scale = Math.max(0.001, Math.min(1, Math.min(
                 window.innerWidth * 0.7 / (graphWidth * 2),
                 window.innerHeight * 0.7 / (graphHeight * 2)
             )));
