@@ -95,6 +95,8 @@ class RetrievalPipeline:
         top_k_memories: int | None = None,
         top_k_episodes: int | None = None,
         include_episodes: bool = True,
+        force_include_nodes: list[str] | None = None,
+        force_exclude_nodes: list[str] | None = None,
     ) -> RetrievalResult:
         """
         Execute the full retrieval pipeline.
@@ -104,12 +106,16 @@ class RetrievalPipeline:
             top_k_memories: Number of memories to return (default from settings)
             top_k_episodes: Number of episodes to return (default 3)
             include_episodes: Whether to include similar episodes
+            force_include_nodes: Node IDs to force include in results
+            force_exclude_nodes: Node IDs to force exclude from results
 
         Returns:
             RetrievalResult with all retrieved information
         """
         top_k_memories = top_k_memories or settings.retrieval_top_k
         top_k_episodes = top_k_episodes or 3
+        force_include_ids = force_include_nodes or []
+        force_exclude_ids = set(force_exclude_nodes or [])
 
         # 1. Embed query
         logger.debug(f"Embedding query: {query[:50]}...")
@@ -185,9 +191,16 @@ class RetrievalPipeline:
             query_embedding=query_embedding,
             graph_memories=graph_memories,
             graph_memory_scores=graph_memory_scores,
+            force_include_ids=force_include_ids,
+            force_exclude_ids=force_exclude_ids,
         )
 
-        # Limit to top_k
+        # Apply exclusions and limit to top_k
+        if force_exclude_ids:
+            scored_memories = [
+                sm for sm in scored_memories
+                if sm.memory.id not in force_exclude_ids
+            ]
         scored_memories = scored_memories[:top_k_memories]
 
         # Count retrieval sources

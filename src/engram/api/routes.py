@@ -9,7 +9,7 @@ Provides:
 import logging
 import time
 import uuid
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -17,6 +17,9 @@ from pydantic import BaseModel, Field
 from engram.learning import FeedbackHandler, FeedbackType
 from engram.reasoning.pipeline import ReasoningPipeline
 from engram.storage.neo4j_client import Neo4jClient
+
+if TYPE_CHECKING:
+    from engram.reasoning.pipeline import ReasoningResult
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +51,11 @@ class ChatCompletionRequest(BaseModel):
     top_k_memories: int = Field(default=10, ge=1, le=50)
     top_k_episodes: int = Field(default=3, ge=0, le=10)
 
+    # Debug options
+    debug: bool = False  # Return detailed retrieval debug info
+    force_include_nodes: list[str] | None = None  # Node IDs to force include
+    force_exclude_nodes: list[str] | None = None  # Node IDs to force exclude
+
 
 class ChatCompletionChoice(BaseModel):
     """Single choice in chat completion response."""
@@ -63,6 +71,36 @@ class ChatCompletionUsage(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+
+
+class DebugMemoryInfo(BaseModel):
+    """Debug info for a retrieved memory."""
+
+    id: str
+    name: str  # First 50 chars of content
+    score: float
+    sources: list[str]  # ["vector", "bm25", "graph", "forced"]
+    included: bool  # Whether it was included in final results
+
+
+class DebugConceptInfo(BaseModel):
+    """Debug info for an activated concept."""
+
+    id: str
+    name: str
+    activation: float
+    hop: int
+    included: bool  # Above activation threshold
+
+
+class DebugInfo(BaseModel):
+    """Debug information for chat response."""
+
+    retrieved_memories: list[DebugMemoryInfo] = []
+    activated_concepts: list[DebugConceptInfo] = []
+    query_concepts: list[str] = []  # Concept names extracted from query
+    thresholds: dict[str, float] = {}  # activation, memory_score thresholds
+    retrieval_sources: dict[str, int] = {}  # source -> count
 
 
 class ChatCompletionResponse(BaseModel):
@@ -81,6 +119,9 @@ class ChatCompletionResponse(BaseModel):
     concepts_activated: list[str] = []  # Concept IDs
     memories_used: list[str] = []  # Memory IDs
     memories_count: int = 0
+
+    # Debug info (only when debug=True in request)
+    debug_info: DebugInfo | None = None
 
 
 # ============================================================================
@@ -181,6 +222,63 @@ def get_db(request: Request) -> Neo4jClient:
 
 
 # ============================================================================
+# Debug Info Builder
+# ============================================================================
+
+
+def _build_debug_info(result: "ReasoningResult") -> DebugInfo:
+    """Build debug info from reasoning result."""
+    from engram.config import settings
+
+    retrieval = result.retrieval
+    synthesis = result.synthesis
+
+    # Get IDs of memories that were actually used
+    used_memory_ids = set(synthesis.memories_used)
+
+    # Build memory debug info - include all retrieved memories
+    retrieved_memories = []
+    for scored_memory in retrieval.memories:
+        mem = scored_memory.memory
+        retrieved_memories.append(
+            DebugMemoryInfo(
+                id=mem.id,
+                name=(mem.content[:50] + "...") if len(mem.content) > 50 else mem.content,
+                score=scored_memory.score,
+                sources=scored_memory.sources,
+                included=mem.id in used_memory_ids,
+            )
+        )
+
+    # Build concept debug info from activation result
+    activated_concepts = []
+    if retrieval.activation_result:
+        for ac in retrieval.activation_result.activated_concepts:
+            activated_concepts.append(
+                DebugConceptInfo(
+                    id=ac.concept.id,
+                    name=ac.concept.name,
+                    activation=ac.activation,
+                    hop=ac.hop,
+                    included=ac.activation >= settings.activation_threshold,
+                )
+            )
+
+    # Query concepts (names of concepts extracted from query)
+    query_concepts = [c.name for c in retrieval.query_concepts]
+
+    return DebugInfo(
+        retrieved_memories=retrieved_memories,
+        activated_concepts=activated_concepts,
+        query_concepts=query_concepts,
+        thresholds={
+            "activation": settings.activation_threshold,
+        },
+        retrieval_sources=retrieval.retrieval_sources,
+    )
+
+
+# ============================================================================
 # Chat Completion Endpoint
 # ============================================================================
 
@@ -219,6 +317,8 @@ async def chat_completions(
             top_k_memories=body.top_k_memories,
             top_k_episodes=body.top_k_episodes,
             temperature=body.temperature,
+            force_include_nodes=body.force_include_nodes,
+            force_exclude_nodes=body.force_exclude_nodes,
         )
 
         # Append confidence to response content for visibility in Open WebUI
@@ -227,6 +327,11 @@ async def chat_completions(
         stats_footer = f"\n\n---\n**Confidence: {confidence_pct}%**"
 
         content_with_stats = result.answer + stats_footer
+
+        # Build debug info if requested
+        debug_info = None
+        if body.debug:
+            debug_info = _build_debug_info(result)
 
         return ChatCompletionResponse(
             id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
@@ -247,6 +352,7 @@ async def chat_completions(
             concepts_activated=result.synthesis.concepts_activated[:50],  # Concept IDs
             memories_used=result.synthesis.memories_used[:50],  # Memory IDs
             memories_count=memories_count,
+            debug_info=debug_info,
         )
 
     except Exception as e:

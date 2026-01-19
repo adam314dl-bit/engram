@@ -102,6 +102,8 @@ class HybridSearch:
         query_embedding: list[float],
         graph_memories: list[SemanticMemory] | None = None,
         graph_memory_scores: dict[str, float] | None = None,
+        force_include_ids: list[str] | None = None,
+        force_exclude_ids: set[str] | None = None,
     ) -> list[ScoredMemory]:
         """
         Search for relevant memories using hybrid approach.
@@ -111,10 +113,14 @@ class HybridSearch:
             query_embedding: Query embedding vector
             graph_memories: Memories from spreading activation (optional)
             graph_memory_scores: Scores from graph traversal (optional)
+            force_include_ids: Memory IDs to force include (with "forced" source)
+            force_exclude_ids: Memory IDs to exclude from results
 
         Returns:
             List of ScoredMemory sorted by final score
         """
+        force_include_ids = force_include_ids or []
+        force_exclude_ids = force_exclude_ids or set()
         # 1. Vector search
         vector_results = await self.db.vector_search_memories(
             embedding=query_embedding, k=self.vector_k
@@ -136,8 +142,19 @@ class HybridSearch:
             ]
             graph_ranked.sort(key=lambda x: x[1], reverse=True)
 
+        # 4. Force-included memories
+        forced_memories: list[SemanticMemory] = []
+        forced_ranked: list[tuple[str, float]] = []
+        if force_include_ids:
+            for mem_id in force_include_ids:
+                mem = await self.db.get_semantic_memory(mem_id)
+                if mem:
+                    forced_memories.append(mem)
+                    # Give forced memories a high score to ensure inclusion
+                    forced_ranked.append((mem.id, 1.0))
+
         # Combine using RRF
-        ranked_lists = [r for r in [vector_ranked, bm25_ranked, graph_ranked] if r]
+        ranked_lists = [r for r in [vector_ranked, bm25_ranked, graph_ranked, forced_ranked] if r]
         fused_scores = reciprocal_rank_fusion(ranked_lists)
 
         # Build memory lookup
@@ -145,17 +162,25 @@ class HybridSearch:
         memory_sources: dict[str, list[str]] = {}
 
         for m, _ in vector_results:
-            all_memories[m.id] = m
-            memory_sources.setdefault(m.id, []).append("vector")
+            if m.id not in force_exclude_ids:
+                all_memories[m.id] = m
+                memory_sources.setdefault(m.id, []).append("vector")
 
         for m, _ in bm25_results:
-            all_memories[m.id] = m
-            memory_sources.setdefault(m.id, []).append("bm25")
+            if m.id not in force_exclude_ids:
+                all_memories[m.id] = m
+                memory_sources.setdefault(m.id, []).append("bm25")
 
         if graph_memories:
             for m in graph_memories:
-                all_memories[m.id] = m
-                memory_sources.setdefault(m.id, []).append("graph")
+                if m.id not in force_exclude_ids:
+                    all_memories[m.id] = m
+                    memory_sources.setdefault(m.id, []).append("graph")
+
+        # Add forced memories
+        for m in forced_memories:
+            all_memories[m.id] = m
+            memory_sources.setdefault(m.id, []).append("forced")
 
         # Rerank with recency + importance + relevance
         scored_memories = self._rerank_memories(

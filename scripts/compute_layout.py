@@ -83,9 +83,13 @@ def compute_layout_cugraph(nodes, edges, scale=3000):
     return positions
 
 
-def compute_layout_igraph(nodes, edges, scale=3000):
-    """Fast CPU layout using igraph (5-20x faster than NetworkX)."""
+def compute_layout_igraph(nodes, edges, scale=1500):
+    """Fast CPU layout using igraph (5-20x faster than NetworkX).
+
+    Parameters tuned to match NetworkX spring_layout output.
+    """
     import igraph as ig
+    import math
 
     print("Using igraph (optimized C backend)...")
 
@@ -110,13 +114,42 @@ def compute_layout_igraph(nodes, edges, scale=3000):
         layout = G.layout_drl()
     else:
         print("Using Fruchterman-Reingold layout...")
+        # Match NetworkX spring_layout parameters: k = 5.0 / sqrt(n)
+        # igraph doesn't support seed like NetworkX, just use niter
         layout = G.layout_fruchterman_reingold(niter=100)
 
-    # Convert to dict and scale
+    # Convert to dict and NORMALIZE to match NetworkX scale (-scale to +scale)
+    # igraph produces unbounded coordinates, we need to rescale
+    coords = layout.coords
+    if coords:
+        xs = [c[0] for c in coords]
+        ys = [c[1] for c in coords]
+
+        # Center and scale to match NetworkX output range
+        cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
+        max_extent = max(max(abs(x - cx) for x in xs), max(abs(y - cy) for y in ys))
+
+        if max_extent > 0:
+            scale_factor = scale / max_extent
+        else:
+            scale_factor = 1.0
+
+        print(f"Scaling: center=({cx:.1f}, {cy:.1f}), max_extent={max_extent:.1f}, scale_factor={scale_factor:.4f}")
+
     positions = {}
     coords = layout.coords
     for i, (x, y) in enumerate(coords):
-        positions[idx_to_node[i]] = (x * scale, y * scale)
+        # Apply centering and scaling to match NetworkX output
+        nx = (x - cx) * scale_factor
+        ny = (y - cy) * scale_factor
+        positions[idx_to_node[i]] = (nx, ny)
+
+    # Add isolated nodes at random positions
+    import random
+    random.seed(42)
+    for node in nodes:
+        if node not in positions:
+            positions[node] = (random.uniform(-scale, scale), random.uniform(-scale, scale))
 
     return positions
 

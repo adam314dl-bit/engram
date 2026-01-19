@@ -265,7 +265,7 @@ GRAPH_HTML = """
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { background: #0a0a12; font-family: -apple-system, sans-serif; overflow: hidden; }
+        body { background: #05060d; font-family: -apple-system, sans-serif; overflow: hidden; }
         #canvas { width: 100vw; height: 100vh; display: block; }
         #label-canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 5; }
 
@@ -377,6 +377,73 @@ GRAPH_HTML = """
         .chat-action-btn:hover { border-color: #5eead4; color: #5eead4; }
         .chat-action-btn.active { background: #5eead420; border-color: #5eead4; color: #5eead4; }
 
+        /* Debug Panel Styles */
+        .debug-section {
+            margin-top: 10px; padding: 10px; background: rgba(15,15,26,0.8);
+            border: 1px solid #2a2a4e; border-radius: 8px; font-size: 11px;
+        }
+        .debug-section.collapsed .debug-content { display: none; }
+        .debug-header {
+            display: flex; align-items: center; justify-content: space-between;
+            cursor: pointer; padding: 4px; color: #8b949e;
+        }
+        .debug-header:hover { color: #5eead4; }
+        .debug-header .toggle-icon { transition: transform 0.2s; }
+        .debug-section:not(.collapsed) .debug-header .toggle-icon { transform: rotate(90deg); }
+        .debug-content { margin-top: 10px; }
+        .debug-tab-bar { display: flex; gap: 4px; margin-bottom: 10px; }
+        .debug-tab-bar button {
+            padding: 4px 12px; background: #0f0f1a; border: 1px solid #2a2a4e;
+            border-radius: 4px; color: #8b949e; cursor: pointer; font-size: 10px;
+        }
+        .debug-tab-bar button:hover { border-color: #5eead4; }
+        .debug-tab-bar button.active { background: #5eead420; border-color: #5eead4; color: #5eead4; }
+        .debug-list { max-height: 250px; overflow-y: auto; }
+        .debug-item {
+            display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+            margin: 4px 0; background: rgba(255,255,255,0.02); border-radius: 4px;
+            position: relative; cursor: pointer;
+        }
+        .debug-item:hover { background: rgba(94,234,212,0.1); }
+        .debug-item.filtered { opacity: 0.5; }
+        .debug-item.filtered:hover { opacity: 0.8; }
+        .debug-item .score-bar {
+            position: absolute; left: 0; top: 0; height: 100%;
+            background: rgba(94,234,212,0.15); border-radius: 4px; z-index: 0;
+        }
+        .debug-item .name {
+            flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            position: relative; z-index: 1; color: #e0e0ff;
+        }
+        .debug-item .score { color: #5eead4; font-weight: 500; position: relative; z-index: 1; min-width: 40px; text-align: right; }
+        .debug-item .sources { display: flex; gap: 3px; position: relative; z-index: 1; }
+        .debug-item .source-badge {
+            padding: 1px 4px; background: #2a2a4e; border-radius: 3px;
+            font-size: 9px; color: #8b949e; text-transform: uppercase;
+        }
+        .debug-item .source-badge.vector { background: #5eead420; color: #5eead4; }
+        .debug-item .source-badge.bm25 { background: #a78bfa20; color: #a78bfa; }
+        .debug-item .source-badge.graph { background: #f472b620; color: #f472b6; }
+        .debug-item .source-badge.forced { background: #fbbf2420; color: #fbbf24; }
+        .debug-item .test-btn {
+            padding: 2px 6px; background: #0f0f1a; border: 1px solid #2a2a4e;
+            border-radius: 3px; color: #8b949e; cursor: pointer; font-size: 12px;
+            position: relative; z-index: 1;
+        }
+        .debug-item .test-btn:hover { border-color: #5eead4; color: #5eead4; }
+        .debug-item .hop-badge {
+            padding: 1px 4px; background: #2a2a4e; border-radius: 3px;
+            font-size: 9px; color: #8b949e;
+        }
+        .sources-legend {
+            margin-top: 8px; padding-top: 8px; border-top: 1px solid #2a2a4e;
+            font-size: 9px; color: #6b6b8a;
+        }
+        .retest-indicator {
+            padding: 8px; margin: 8px 0; background: #fbbf2410; border: 1px solid #fbbf2440;
+            border-radius: 6px; font-size: 11px; color: #fbbf24; text-align: center;
+        }
+
         #chat-messages {
             flex: 1; overflow-y: auto; padding: 16px;
             display: flex; flex-direction: column; gap: 12px;
@@ -473,6 +540,7 @@ GRAPH_HTML = """
         <div id="chat-header">
             <h2>Chat with Memory</h2>
             <div class="chat-actions">
+                <button class="chat-action-btn" id="debug-toggle" onclick="toggleDebugMode()" title="Toggle Debug Mode">🔍 Debug</button>
                 <button class="chat-action-btn" id="show-activation-btn" onclick="showLastActivation()">Show Activation</button>
                 <button class="chat-action-btn" onclick="clearChat()">Clear</button>
             </div>
@@ -545,30 +613,52 @@ GRAPH_HTML = """
                 vec2 coord = gl_PointCoord - vec2(0.5);
                 float dist = length(coord);
                 if (dist > 0.5) discard;
-                // Glow effect for important nodes
-                float glow = v_color.a > 0.95 ? (1.0 - dist * 1.5) * 0.3 : 0.0;
-                float alpha = 1.0 - smoothstep(0.35, 0.5, dist);
-                gl_FragColor = vec4(v_color.rgb + glow, alpha * v_color.a);
+
+                // Outer glow (soft halo around node)
+                float outerGlow = smoothstep(0.5, 0.3, dist) * 0.4;
+
+                // Border/outline effect
+                float borderOuter = 0.42;
+                float borderInner = 0.35;
+                float border = smoothstep(borderInner, borderOuter, dist) * smoothstep(0.5, borderOuter, dist);
+                vec3 borderColor = v_color.rgb * 1.5; // Brighter border
+
+                // Core fill with slight gradient
+                float coreFill = 1.0 - smoothstep(0.0, borderInner, dist) * 0.2;
+
+                // Combine: core + border + glow
+                vec3 finalColor = mix(v_color.rgb * coreFill, borderColor, border * 0.6);
+                finalColor += outerGlow * v_color.rgb;
+
+                // Extra glow for important nodes (alpha > 0.95)
+                float importantGlow = v_color.a > 0.95 ? (1.0 - dist * 1.5) * 0.25 : 0.0;
+                finalColor += importantGlow;
+
+                float alpha = 1.0 - smoothstep(0.4, 0.5, dist);
+                gl_FragColor = vec4(finalColor, alpha * v_color.a);
             }
         `;
 
         const lineVertexShaderSrc = `
             attribute vec2 a_position;
+            attribute vec4 a_color;
             uniform vec2 u_resolution;
             uniform vec2 u_view;
             uniform float u_scale;
+            varying vec4 v_color;
             void main() {
                 vec2 pos = (a_position - u_view) * u_scale;
                 vec2 clipSpace = (pos / u_resolution) * 2.0;
                 gl_Position = vec4(clipSpace, 0, 1);
+                v_color = a_color;
             }
         `;
 
         const lineFragmentShaderSrc = `
             precision mediump float;
-            uniform vec4 u_color;
+            varying vec4 v_color;
             void main() {
-                gl_FragColor = u_color;
+                gl_FragColor = v_color;
             }
         `;
 
@@ -717,7 +807,7 @@ GRAPH_HTML = """
         }
 
         function render() {
-            gl.clearColor(0.039, 0.039, 0.071, 1);
+            gl.clearColor(0.02, 0.024, 0.05, 1); // Darker background for more contrast
             gl.clear(gl.COLOR_BUFFER_BIT);
             gl.enable(gl.BLEND);
             gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -729,7 +819,7 @@ GRAPH_HTML = """
             // Clear label canvas
             labelCtx.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
 
-            // Draw lines
+            // Draw lines with gradient colors
             if (links.length > 0) {
                 gl.useProgram(lineProgram);
                 gl.uniform2f(gl.getUniformLocation(lineProgram, 'u_resolution'), w / 2, h / 2);
@@ -737,65 +827,91 @@ GRAPH_HTML = """
                 gl.uniform1f(gl.getUniformLocation(lineProgram, 'u_scale'), scale);
 
                 const hasSelection = selectedNode || neighborNodes.size > 0;
+                // Line data format: x, y, r, g, b, a (6 floats per vertex)
                 const normalLineData = [];
                 const glowLineData = [];
+
+                // Helper to get node color for edges
+                function getEdgeNodeColor(node) {
+                    if (showClusters) {
+                        return clusterPalette[node.cluster % clusterPalette.length];
+                    }
+                    return typeColors[node.type] || typeColors.concept;
+                }
+
+                // Helper to draw a bezier curve segment
+                function drawBezierSegment(targetArray, s, t, cx, cy, sColor, tColor, opacity) {
+                    const segments = 6;
+                    for (let i = 0; i < segments; i++) {
+                        const t1 = i / segments, t2 = (i + 1) / segments;
+                        const x1 = (1-t1)*(1-t1)*s.x + 2*(1-t1)*t1*cx + t1*t1*t.x;
+                        const y1 = (1-t1)*(1-t1)*s.y + 2*(1-t1)*t1*cy + t1*t1*t.y;
+                        const x2 = (1-t2)*(1-t2)*s.x + 2*(1-t2)*t2*cx + t2*t2*t.x;
+                        const y2 = (1-t2)*(1-t2)*s.y + 2*(1-t2)*t2*cy + t2*t2*t.y;
+                        const r1 = sColor[0] + (tColor[0] - sColor[0]) * t1;
+                        const g1 = sColor[1] + (tColor[1] - sColor[1]) * t1;
+                        const b1 = sColor[2] + (tColor[2] - sColor[2]) * t1;
+                        const r2 = sColor[0] + (tColor[0] - sColor[0]) * t2;
+                        const g2 = sColor[1] + (tColor[1] - sColor[1]) * t2;
+                        const b2 = sColor[2] + (tColor[2] - sColor[2]) * t2;
+                        targetArray.push(x1, y1, r1, g1, b1, opacity);
+                        targetArray.push(x2, y2, r2, g2, b2, opacity);
+                    }
+                }
 
                 for (const link of links) {
                     const s = nodeMap[link.source];
                     const t = nodeMap[link.target];
                     if (s && t && isNodeVisible(s) && isNodeVisible(t)) {
-                        // Check if this link connects selected node to neighbor
                         const isGlowLink = selectedNode && (
                             (s === selectedNode && neighborNodes.has(t.id)) ||
                             (t === selectedNode && neighborNodes.has(s.id))
                         );
 
                         const targetArray = isGlowLink ? glowLineData : normalLineData;
+                        const opacity = isGlowLink ? 0.9 : (hasSelection ? 0.35 : 0.85);
+                        const sColor = getEdgeNodeColor(s);
+                        const tColor = getEdgeNodeColor(t);
 
-                        if (showBundling) {
-                            const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2;
-                            const dx = t.x - s.x, dy = t.y - s.y;
-                            const cx = mx - dy * 0.15, cy = my + dx * 0.15;
-                            for (let i = 0; i < 8; i++) {
-                                const t1 = i / 8, t2 = (i + 1) / 8;
-                                targetArray.push(
-                                    (1-t1)*(1-t1)*s.x + 2*(1-t1)*t1*cx + t1*t1*t.x,
-                                    (1-t1)*(1-t1)*s.y + 2*(1-t1)*t1*cy + t1*t1*t.y,
-                                    (1-t2)*(1-t2)*s.x + 2*(1-t2)*t2*cx + t2*t2*t.x,
-                                    (1-t2)*(1-t2)*s.y + 2*(1-t2)*t2*cy + t2*t2*t.y
-                                );
-                            }
-                        } else {
-                            targetArray.push(s.x, s.y, t.x, t.y);
-                        }
+                        const dx = t.x - s.x, dy = t.y - s.y;
+                        const dist = Math.sqrt(dx*dx + dy*dy);
+                        if (dist < 0.001) continue; // Skip zero-length edges
+
+                        // Simple curved edges with perpendicular offset
+                        const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2;
+                        const curveFactor = showBundling ? 0.35 : 0.2;
+                        const curveAmount = Math.min(dist * curveFactor, 150);
+                        const nx = -dy / dist, ny = dx / dist;
+                        const cx = mx + nx * curveAmount, cy = my + ny * curveAmount;
+
+                        drawBezierSegment(targetArray, s, t, cx, cy, sColor, tColor, opacity);
                     }
                 }
 
                 const posLoc = gl.getAttribLocation(lineProgram, 'a_position');
-                gl.enableVertexAttribArray(posLoc);
+                const colorLoc = gl.getAttribLocation(lineProgram, 'a_color');
+                const stride = 6 * 4; // 6 floats * 4 bytes
 
-                // Draw normal lines (dimmed if selection active)
+                // Draw normal lines with gradients
                 if (normalLineData.length > 0) {
-                    const normalOpacity = hasSelection ? 0.1 : 0.4;
-                    gl.uniform4f(gl.getUniformLocation(lineProgram, 'u_color'), 0.37, 0.92, 0.83, normalOpacity);
                     gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
                     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normalLineData), gl.DYNAMIC_DRAW);
-                    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
-                    gl.drawArrays(gl.LINES, 0, normalLineData.length / 2);
+                    gl.enableVertexAttribArray(posLoc);
+                    gl.enableVertexAttribArray(colorLoc);
+                    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, stride, 0);
+                    gl.vertexAttribPointer(colorLoc, 4, gl.FLOAT, false, stride, 2 * 4);
+                    gl.drawArrays(gl.LINES, 0, normalLineData.length / 6);
                 }
 
                 // Draw glowing lines for selected node connections
                 if (glowLineData.length > 0) {
-                    // Draw glow (wider, more transparent)
-                    gl.uniform4f(gl.getUniformLocation(lineProgram, 'u_color'), 0.37, 0.92, 0.83, 0.6);
                     gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
                     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(glowLineData), gl.DYNAMIC_DRAW);
-                    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
-                    gl.drawArrays(gl.LINES, 0, glowLineData.length / 2);
-
-                    // Draw bright core
-                    gl.uniform4f(gl.getUniformLocation(lineProgram, 'u_color'), 0.6, 1.0, 0.95, 0.9);
-                    gl.drawArrays(gl.LINES, 0, glowLineData.length / 2);
+                    gl.enableVertexAttribArray(posLoc);
+                    gl.enableVertexAttribArray(colorLoc);
+                    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, stride, 0);
+                    gl.vertexAttribPointer(colorLoc, 4, gl.FLOAT, false, stride, 2 * 4);
+                    gl.drawArrays(gl.LINES, 0, glowLineData.length / 6);
                 }
             }
 
@@ -811,8 +927,8 @@ GRAPH_HTML = """
 
                 for (const node of nodes) {
                     const color = getNodeColor(node);
-                    // 4x BIGGER nodes: base 24-96, scaled by connections
-                    const baseSize = Math.max(24, Math.min(96, Math.sqrt(node.conn || 1) * 16));
+                    // EXTRA BIG nodes: base 48-192, scaled by connections
+                    const baseSize = Math.max(48, Math.min(192, Math.sqrt(node.conn || 1) * 32));
                     const size = baseSize * Math.max(1, Math.min(4, scale));
 
                     let finalColor = color;
@@ -879,7 +995,7 @@ GRAPH_HTML = """
                 const dy = node.y - world.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
                 // Match bigger node sizes
-                const baseSize = Math.max(24, Math.min(96, Math.sqrt(node.conn || 1) * 16));
+                const baseSize = Math.max(48, Math.min(192, Math.sqrt(node.conn || 1) * 32));
                 const threshold = (baseSize * 2) / scale + 30;
 
                 if (dist < threshold && dist < closestDist) {
@@ -1154,6 +1270,16 @@ GRAPH_HTML = """
         // ============ CHAT FUNCTIONALITY ============
         let lastActivation = { concepts: [], memories: [] };
         let chatOpen = false;
+        let debugMode = false;
+        let lastDebugInfo = null;
+        let lastQuery = '';
+        let forceIncludeNodes = [];
+        let forceExcludeNodes = [];
+
+        function toggleDebugMode() {
+            debugMode = !debugMode;
+            document.getElementById('debug-toggle').classList.toggle('active', debugMode);
+        }
 
         function toggleChat() {
             chatOpen = !chatOpen;
@@ -1231,22 +1357,40 @@ GRAPH_HTML = """
             render();
         }
 
-        async function sendChat() {
+        async function sendChat(isRetest = false) {
             const input = document.getElementById('chat-input');
             const sendBtn = document.getElementById('chat-send');
             const messages = document.getElementById('chat-messages');
-            const query = input.value.trim();
+            const query = isRetest ? lastQuery : input.value.trim();
 
             if (!query) return;
 
-            // Add user message
-            const userMsg = document.createElement('div');
-            userMsg.className = 'chat-message user';
-            userMsg.textContent = query;
-            messages.appendChild(userMsg);
+            // Store for retest
+            if (!isRetest) {
+                lastQuery = query;
+                forceIncludeNodes = [];
+                forceExcludeNodes = [];
+            }
+
+            // Add user message (only if not a retest)
+            if (!isRetest) {
+                const userMsg = document.createElement('div');
+                userMsg.className = 'chat-message user';
+                userMsg.textContent = query;
+                messages.appendChild(userMsg);
+            } else {
+                // Add retest indicator
+                const retestIndicator = document.createElement('div');
+                retestIndicator.className = 'retest-indicator';
+                const forceInfo = [];
+                if (forceIncludeNodes.length) forceInfo.push(`+${forceIncludeNodes.length} forced`);
+                if (forceExcludeNodes.length) forceInfo.push(`-${forceExcludeNodes.length} excluded`);
+                retestIndicator.textContent = `Re-testing with: ${forceInfo.join(', ')}`;
+                messages.appendChild(retestIndicator);
+            }
 
             // Clear input and disable
-            input.value = '';
+            if (!isRetest) input.value = '';
             sendBtn.disabled = true;
             input.disabled = true;
 
@@ -1258,15 +1402,25 @@ GRAPH_HTML = """
             messages.scrollTop = messages.scrollHeight;
 
             try {
+                const requestBody = {
+                    model: 'engram',
+                    messages: [{ role: 'user', content: query }],
+                    top_k_memories: 20,
+                    top_k_episodes: 5,
+                    debug: debugMode
+                };
+
+                if (forceIncludeNodes.length > 0) {
+                    requestBody.force_include_nodes = forceIncludeNodes;
+                }
+                if (forceExcludeNodes.length > 0) {
+                    requestBody.force_exclude_nodes = forceExcludeNodes;
+                }
+
                 const response = await fetch('/v1/chat/completions', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        model: 'engram',
-                        messages: [{ role: 'user', content: query }],
-                        top_k_memories: 20,
-                        top_k_episodes: 5
-                    })
+                    body: JSON.stringify(requestBody)
                 });
 
                 const data = await response.json();
@@ -1279,6 +1433,11 @@ GRAPH_HTML = """
                 const concepts = data.concepts_activated || [];
                 const memories = data.memories_used || [];
                 const memoriesCount = data.memories_count || 0;
+
+                // Store debug info
+                if (data.debug_info) {
+                    lastDebugInfo = data.debug_info;
+                }
 
                 // Add assistant message
                 const assistantMsg = document.createElement('div');
@@ -1304,6 +1463,12 @@ GRAPH_HTML = """
                     highlightActivation(concepts, memories);
                 }
 
+                // Add debug section if debug mode is on
+                if (debugMode && data.debug_info) {
+                    const debugSection = createDebugSection(data.debug_info);
+                    assistantMsg.appendChild(debugSection);
+                }
+
                 messages.appendChild(assistantMsg);
                 messages.scrollTop = messages.scrollHeight;
 
@@ -1318,6 +1483,142 @@ GRAPH_HTML = """
                 input.disabled = false;
                 input.focus();
             }
+        }
+
+        function createDebugSection(debugInfo) {
+            const section = document.createElement('div');
+            section.className = 'debug-section collapsed';
+
+            const memCount = debugInfo.retrieved_memories?.length || 0;
+            const conceptCount = debugInfo.activated_concepts?.length || 0;
+
+            section.innerHTML = `
+                <div class="debug-header" onclick="toggleDebugSection(this.parentElement)">
+                    <span><span class="toggle-icon">▶</span> Debug: ${conceptCount} concepts, ${memCount} memories</span>
+                </div>
+                <div class="debug-content">
+                    <div class="debug-tab-bar">
+                        <button class="active" onclick="switchDebugTab(this, 'memories')">Memories</button>
+                        <button onclick="switchDebugTab(this, 'concepts')">Concepts</button>
+                    </div>
+                    <div class="debug-list" data-tab="memories">
+                        ${renderMemoryList(debugInfo.retrieved_memories || [])}
+                    </div>
+                    <div class="debug-list" data-tab="concepts" style="display:none">
+                        ${renderConceptList(debugInfo.activated_concepts || [])}
+                    </div>
+                    <div class="sources-legend">
+                        Sources: <span style="color:#5eead4">V</span>=Vector <span style="color:#a78bfa">B</span>=BM25 <span style="color:#f472b6">G</span>=Graph <span style="color:#fbbf24">F</span>=Forced
+                    </div>
+                </div>
+            `;
+
+            return section;
+        }
+
+        function renderMemoryList(memories) {
+            if (!memories.length) return '<div style="color:#6b6b8a;padding:8px;">No memories retrieved</div>';
+
+            return memories.map(m => {
+                const scorePercent = Math.min(100, m.score * 100);
+                const sources = (m.sources || []).map(s => {
+                    const letter = s === 'vector' ? 'V' : s === 'bm25' ? 'B' : s === 'graph' ? 'G' : 'F';
+                    return `<span class="source-badge ${s}">${letter}</span>`;
+                }).join('');
+                const filteredClass = m.included ? '' : 'filtered';
+                const testBtn = m.included
+                    ? `<button class="test-btn" onclick="testExcludeNode('${m.id}')" title="Test without this">−</button>`
+                    : `<button class="test-btn" onclick="testIncludeNode('${m.id}')" title="Test with this">+</button>`;
+
+                return `
+                    <div class="debug-item ${filteredClass}" data-id="${m.id}" onclick="highlightNodeInGraph('${m.id}', event)">
+                        <span class="score-bar" style="width:${scorePercent}%"></span>
+                        <span class="name" title="${escapeHtml(m.name)}">${escapeHtml(m.name)}</span>
+                        <span class="score">${m.score.toFixed(2)}</span>
+                        <span class="sources">${sources}</span>
+                        ${testBtn}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderConceptList(concepts) {
+            if (!concepts.length) return '<div style="color:#6b6b8a;padding:8px;">No concepts activated</div>';
+
+            return concepts.map(c => {
+                const scorePercent = Math.min(100, c.activation * 100);
+                const filteredClass = c.included ? '' : 'filtered';
+                const testBtn = c.included
+                    ? `<button class="test-btn" onclick="testExcludeNode('${c.id}')" title="Test without this">−</button>`
+                    : `<button class="test-btn" onclick="testIncludeNode('${c.id}')" title="Test with this">+</button>`;
+
+                return `
+                    <div class="debug-item ${filteredClass}" data-id="${c.id}" onclick="highlightNodeInGraph('${c.id}', event)">
+                        <span class="score-bar" style="width:${scorePercent}%"></span>
+                        <span class="name" title="${escapeHtml(c.name)}">${escapeHtml(c.name)}</span>
+                        <span class="score">${c.activation.toFixed(2)}</span>
+                        <span class="hop-badge">hop ${c.hop}</span>
+                        ${testBtn}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function toggleDebugSection(section) {
+            section.classList.toggle('collapsed');
+        }
+
+        function switchDebugTab(btn, tab) {
+            const tabBar = btn.parentElement;
+            const content = tabBar.parentElement;
+
+            tabBar.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+
+            content.querySelectorAll('.debug-list').forEach(list => {
+                list.style.display = list.dataset.tab === tab ? 'block' : 'none';
+            });
+        }
+
+        function highlightNodeInGraph(nodeId, event) {
+            if (event && event.target.classList.contains('test-btn')) return;
+
+            const node = nodeMap[nodeId];
+            if (node) {
+                viewX = node.x;
+                viewY = node.y;
+                scale = Math.max(scale, 1.5);
+                selectedNode = node;
+                highlightedNodes.clear();
+                highlightedNodes.add(nodeId);
+                render();
+                scheduleViewportLoad();
+                showNodeInfo(node);
+            }
+        }
+
+        function testIncludeNode(nodeId) {
+            event.stopPropagation();
+            if (!forceIncludeNodes.includes(nodeId)) {
+                forceIncludeNodes.push(nodeId);
+            }
+            forceExcludeNodes = forceExcludeNodes.filter(id => id !== nodeId);
+            sendChat(true);
+        }
+
+        function testExcludeNode(nodeId) {
+            event.stopPropagation();
+            if (!forceExcludeNodes.includes(nodeId)) {
+                forceExcludeNodes.push(nodeId);
+            }
+            forceIncludeNodes = forceIncludeNodes.filter(id => id !== nodeId);
+            sendChat(true);
         }
 
         // Chat input handlers

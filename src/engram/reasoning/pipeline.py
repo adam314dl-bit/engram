@@ -85,6 +85,8 @@ class ReasoningPipeline:
         top_k_memories: int = 10,
         top_k_episodes: int = 3,
         temperature: float = 0.7,
+        force_include_nodes: list[str] | None = None,
+        force_exclude_nodes: list[str] | None = None,
     ) -> ReasoningResult:
         """
         Execute the full reasoning pipeline.
@@ -94,6 +96,8 @@ class ReasoningPipeline:
             top_k_memories: Number of memories to retrieve
             top_k_episodes: Number of similar episodes to retrieve
             temperature: LLM temperature
+            force_include_nodes: Node IDs to force include in results
+            force_exclude_nodes: Node IDs to force exclude from results
 
         Returns:
             ReasoningResult with answer, episode, and metadata
@@ -105,6 +109,8 @@ class ReasoningPipeline:
             query=query,
             top_k_memories=top_k_memories,
             top_k_episodes=top_k_episodes,
+            force_include_nodes=force_include_nodes,
+            force_exclude_nodes=force_exclude_nodes,
         )
 
         logger.debug(
