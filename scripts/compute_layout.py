@@ -1722,38 +1722,47 @@ async def compute_and_store_layout():
     print("Storing positions, hierarchy, and connection counts in Neo4j...")
 
     # Store positions and all hierarchy levels back to Neo4j in batches
-    batch_size = 500
+    # Using UNWIND for bulk updates (much faster than individual queries)
+    batch_size = 1000
     node_list = list(positions.items())
 
     for i in range(0, len(node_list), batch_size):
         batch = node_list[i : i + batch_size]
 
+        # Prepare batch data
+        batch_data = []
         for node_id, (x, y) in batch:
             h = hierarchy.get(node_id, {'level0': 0, 'level1': 0, 'level2': 0, 'level3': 0, 'level4': 0})
             conn = conn_counts.get(node_id, 0)
-            await db.execute_query(
-                """
-                MATCH (n) WHERE n.id = $id
-                SET n.layout_x = $x, n.layout_y = $y,
-                    n.cluster = $cluster,
-                    n.level0 = $level0,
-                    n.level1 = $level1,
-                    n.level2 = $level2,
-                    n.level3 = $level3,
-                    n.level4 = $level4,
-                    n.conn = $conn
-                """,
-                id=node_id,
-                x=float(x),
-                y=float(y),
-                cluster=h['level4'],  # Keep 'cluster' as finest level for backward compat
-                level0=h['level0'],
-                level1=h['level1'],
-                level2=h['level2'],
-                level3=h['level3'],
-                level4=h['level4'],
-                conn=conn,
-            )
+            batch_data.append({
+                "id": node_id,
+                "x": float(x),
+                "y": float(y),
+                "cluster": h['level4'],
+                "level0": h['level0'],
+                "level1": h['level1'],
+                "level2": h['level2'],
+                "level3": h['level3'],
+                "level4": h['level4'],
+                "conn": conn,
+            })
+
+        # Single query for entire batch using UNWIND
+        await db.execute_query(
+            """
+            UNWIND $batch AS row
+            MATCH (n) WHERE n.id = row.id
+            SET n.layout_x = row.x, n.layout_y = row.y,
+                n.cluster = row.cluster,
+                n.level0 = row.level0,
+                n.level1 = row.level1,
+                n.level2 = row.level2,
+                n.level3 = row.level3,
+                n.level4 = row.level4,
+                n.conn = row.conn
+            """,
+            batch=batch_data,
+        )
 
         progress = min(i + batch_size, len(node_list))
         print(f"  Stored {progress}/{len(node_list)} positions...")
