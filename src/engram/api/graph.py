@@ -246,34 +246,7 @@ async def get_cluster_info(request: Request) -> dict:
     """Get hierarchical cluster centers for lazy loading (L0-L3)."""
     db = get_db(request)
 
-    # Get L0 clusters with centers, radius, and top node name
-    l0_data = await db.execute_query(
-        """
-        MATCH (n)
-        WHERE n.layout_x IS NOT NULL AND n.level0 IS NOT NULL
-          AND (n:Concept OR n:SemanticMemory OR n:EpisodicMemory)
-        WITH n.level0 as l0, collect(n) as nodes
-        WITH l0, nodes,
-             avg([nd IN nodes | nd.layout_x][0]) as cx,
-             avg([nd IN nodes | nd.layout_y][0]) as cy,
-             size(nodes) as cnt
-        UNWIND nodes as n
-        WITH l0, cx, cy, cnt, n
-        ORDER BY n.conn DESC
-        WITH l0, cx, cy, cnt, collect(n)[0] as top_node, collect(n) as all_nodes
-        WITH l0, cx, cy, cnt, top_node.name as top_name,
-             [nd IN all_nodes | point.distance(point({x: nd.layout_x, y: nd.layout_y}), point({x: cx, y: cy}))] as dists
-        RETURN l0,
-               avg([nd IN all_nodes | nd.layout_x]) as center_x,
-               avg([nd IN all_nodes | nd.layout_y]) as center_y,
-               cnt as node_count,
-               top_name,
-               max(dists) as radius
-        ORDER BY cnt DESC
-        """
-    )
-
-    # Simpler query that actually works
+    # Get L0 clusters with centers
     l0_clusters = await db.execute_query(
         """
         MATCH (n)
@@ -292,15 +265,17 @@ async def get_cluster_info(request: Request) -> dict:
     # Get top node name and radius for each L0 cluster
     l0_result = []
     for c in l0_clusters:
-        # Get radius and top node name
+        # Get radius and top node name with simpler query
         details = await db.execute_query(
             """
             MATCH (n)
             WHERE n.level0 = $l0 AND n.layout_x IS NOT NULL
               AND (n:Concept OR n:SemanticMemory OR n:EpisodicMemory)
-            WITH n, sqrt((n.layout_x - $cx)^2 + (n.layout_y - $cy)^2) as dist
-            RETURN max(dist) as radius,
-                   head([x IN collect(n) WHERE x.conn = $max_conn | x.name]) as top_name
+            WITH n, sqrt((n.layout_x - $cx) * (n.layout_x - $cx) +
+                         (n.layout_y - $cy) * (n.layout_y - $cy)) as dist
+            WITH max(dist) as radius, collect(n) as nodes
+            WITH radius, [x IN nodes WHERE x.conn = $max_conn | x.name][0] as top_name
+            RETURN radius, top_name
             """,
             l0=c["l0"], cx=c["center_x"], cy=c["center_y"], max_conn=c["max_conn"]
         )
