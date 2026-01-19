@@ -585,6 +585,7 @@ GRAPH_HTML = """
         let showClusters = false, showBundling = false, showConstellation = false;
         let typeFilters = new Set(); // empty = show all
         let clusterCenters = {}; // { clusterId: { x, y, name, nodeCount, topNodes } }
+        let interClusterEdges = []; // [{ from: clusterId, to: clusterId, count: n }]
         let connStats = { max: 1, p90: 1, p75: 1, p50: 1 }; // Connection percentiles for dynamic LOD
 
         let isDragging = false, lastMouseX = 0, lastMouseY = 0, dragStartX = 0, dragStartY = 0;
@@ -763,6 +764,9 @@ GRAPH_HTML = """
                 // Always compute cluster centers for zoomed-out labels
                 computeClusterCenters();
 
+                // Compute inter-cluster edges for zoomed-out view
+                computeInterClusterEdges();
+
                 render();
             } catch (e) {
                 console.error('Failed to load:', e);
@@ -868,30 +872,75 @@ GRAPH_HTML = """
                     }
                 }
 
-                // LOD: Hide edges when zoomed out, fade in as zoom increases
-                // 0 at scale 0.03, fully visible at scale 0.15
-                const edgeVisibility = Math.min(1, Math.max(0, (scale - 0.03) / 0.12));
+                // LOD for edges: transition from inter-cluster to full edges
+                // scale < 0.08: only inter-cluster aggregated edges
+                // scale 0.08-0.15: blend (inter-cluster fading out, intra-cluster fading in)
+                // scale > 0.15: all edges
+                const interClusterOnly = scale < 0.08;
+                const inTransition = scale >= 0.08 && scale < 0.15;
+                const fullEdges = scale >= 0.15;
 
-                for (const link of links) {
-                    const s = nodeMap[link.source];
-                    const t = nodeMap[link.target];
-                    if (s && t && isNodeVisible(s) && isNodeVisible(t) && edgeVisibility > 0.01) {
+                // Draw inter-cluster aggregated edges when zoomed out
+                if ((interClusterOnly || inTransition) && interClusterEdges.length > 0) {
+                    const interOpacity = inTransition ? Math.max(0, 1 - (scale - 0.08) / 0.07) : 0.7;
+                    const maxCount = interClusterEdges[0]?.count || 1;
+
+                    for (const edge of interClusterEdges) {
+                        const c1 = clusterCenters[edge.from];
+                        const c2 = clusterCenters[edge.to];
+                        if (!c1 || !c2) continue;
+
+                        // Line thickness based on connection count
+                        const thickness = 1 + Math.log(edge.count + 1) * 2;
+                        const color1 = clusterPalette[edge.from % clusterPalette.length];
+                        const color2 = clusterPalette[edge.to % clusterPalette.length];
+
+                        // Draw multiple parallel lines for thickness effect
+                        const dx = c2.x - c1.x, dy = c2.y - c1.y;
+                        const dist = Math.sqrt(dx*dx + dy*dy);
+                        if (dist < 0.001) continue;
+
+                        const nx = -dy / dist, ny = dx / dist;
+                        const mx = (c1.x + c2.x) / 2, my = (c1.y + c2.y) / 2;
+                        const curveAmount = Math.min(dist * 0.15, 300);
+                        const cx = mx + nx * curveAmount, cy = my + ny * curveAmount;
+
+                        // Draw as curved line
+                        const s = { x: c1.x, y: c1.y };
+                        const t = { x: c2.x, y: c2.y };
+                        drawBezierSegment(normalLineData, s, t, cx, cy, color1, color2, interOpacity);
+                    }
+                }
+
+                // Draw individual edges when zoomed in enough
+                if (inTransition || fullEdges) {
+                    const edgeOpacity = inTransition ? (scale - 0.08) / 0.07 : 1.0;
+
+                    for (const link of links) {
+                        const s = nodeMap[link.source];
+                        const t = nodeMap[link.target];
+                        if (!s || !t || !isNodeVisible(s) || !isNodeVisible(t)) continue;
+
+                        // During transition, prioritize inter-cluster edges
+                        const sameCluster = (s.cluster || 0) === (t.cluster || 0);
+                        const thisEdgeOpacity = inTransition && sameCluster ? edgeOpacity * 0.5 : edgeOpacity;
+                        if (thisEdgeOpacity < 0.05) continue;
+
                         const isGlowLink = selectedNode && (
                             (s === selectedNode && neighborNodes.has(t.id)) ||
                             (t === selectedNode && neighborNodes.has(s.id))
                         );
 
                         const targetArray = isGlowLink ? glowLineData : normalLineData;
-                        const baseOpacity = isGlowLink ? 0.9 : (hasSelection ? 0.35 : 0.85);
-                        const opacity = baseOpacity * edgeVisibility; // Fade edges based on zoom
+                        const baseOpacity = isGlowLink ? 0.9 : (hasSelection ? 0.35 : 0.7);
+                        const opacity = baseOpacity * thisEdgeOpacity;
                         const sColor = getEdgeNodeColor(s);
                         const tColor = getEdgeNodeColor(t);
 
                         const dx = t.x - s.x, dy = t.y - s.y;
                         const dist = Math.sqrt(dx*dx + dy*dy);
-                        if (dist < 0.001) continue; // Skip zero-length edges
+                        if (dist < 0.001) continue;
 
-                        // Simple curved edges with perpendicular offset
                         const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2;
                         const curveFactor = showBundling ? 0.35 : 0.2;
                         const curveAmount = Math.min(dist * curveFactor, 150);
@@ -1357,6 +1406,39 @@ GRAPH_HTML = """
             const name = topNodes[0];
             if (name.length > 20) return name.substring(0, 20) + '...';
             return name;
+        }
+
+        function computeInterClusterEdges() {
+            // Count edges between different clusters
+            const edgeCounts = {}; // "clusterId1-clusterId2" -> count
+
+            for (const link of links) {
+                const s = nodeMap[link.source];
+                const t = nodeMap[link.target];
+                if (!s || !t) continue;
+
+                const c1 = s.cluster || 0;
+                const c2 = t.cluster || 0;
+
+                // Only count inter-cluster edges
+                if (c1 === c2) continue;
+
+                // Normalize key so that (1,2) and (2,1) are the same
+                const key = c1 < c2 ? `${c1}-${c2}` : `${c2}-${c1}`;
+                edgeCounts[key] = (edgeCounts[key] || 0) + 1;
+            }
+
+            // Convert to array
+            interClusterEdges = [];
+            for (const [key, count] of Object.entries(edgeCounts)) {
+                const [from, to] = key.split('-').map(Number);
+                interClusterEdges.push({ from, to, count });
+            }
+
+            // Sort by count descending
+            interClusterEdges.sort((a, b) => b.count - a.count);
+
+            console.log(`Inter-cluster edges: ${interClusterEdges.length} connections`);
         }
 
         // Search
