@@ -336,6 +336,8 @@ GRAPH_HTML = """
         let level1Edges = []; // Inter-level1 cluster edges
         let level2Edges = []; // Inter-level2 cluster edges
         let level3Edges = []; // Inter-level3 cluster edges
+        let topNodes = []; // Top connected nodes for LOD display
+        let topCounts = { l0: 3, l1: 10, l2: 50 }; // How many top nodes at each level
 
         let isDragging = false, lastMouseX = 0, lastMouseY = 0, dragStartX = 0, dragStartY = 0;
         let animationFrameId = null;
@@ -1244,7 +1246,7 @@ GRAPH_HTML = """
             }
 
             // Draw individual nodes at ALL zoom levels with LOD filtering
-            // L0: top 1%, L1: top 5%, L2: top 25%, L3: top 50%, L4: 100%
+            // L0: top 0.01%, L1: top 1%, L2: top 10%, L3: top 50%, L4: 100%
             {
                 // LOD: Minimum connections required to be visible at each zoom level
                 const minConnByLevel = {
@@ -1256,7 +1258,21 @@ GRAPH_HTML = """
                 };
                 const minConnForVisibility = minConnByLevel[semanticZoomLevel] || 0;
 
-                for (const node of nodes) {
+                // Combine loaded cluster nodes with preloaded top nodes for LOD display
+                let nodesToRender = [...nodes];
+                if (semanticZoomLevel <= 2 && topNodes.length > 0) {
+                    const count = topCounts[`l${semanticZoomLevel}`] || topNodes.length;
+                    const topNodesToShow = topNodes.slice(0, count);
+                    // Add top nodes that aren't already in nodes array
+                    const nodeIds = new Set(nodes.map(n => n.id));
+                    for (const tn of topNodesToShow) {
+                        if (!nodeIds.has(tn.id)) {
+                            nodesToRender.push(tn);
+                        }
+                    }
+                }
+
+                for (const node of nodesToRender) {
                     // LOD: Skip nodes below connection threshold (unless activated/selected)
                     const nodeConn = node.conn || 0;
                     if (nodeConn < minConnForVisibility && !activatedNodes.has(node.id) && node !== selectedNode) {
@@ -2505,6 +2521,11 @@ GRAPH_HTML = """
             level2Edges = [];
             level3Edges = [];
             level3Centers = {};
+
+            // Store top nodes for LOD display
+            topNodes = data.top_nodes || [];
+            topCounts = data.top_counts || { l0: 3, l1: 10, l2: 50 };
+            console.log(`Loaded ${topNodes.length} top nodes for LOD display`);
         }
 
         async function loadClusterData(level0Id) {
