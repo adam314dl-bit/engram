@@ -528,6 +528,7 @@ GRAPH_HTML = """
         <div class="control-row">
             <button class="toggle-btn" id="cluster-btn" onclick="toggleClusters()">Clusters</button>
             <button class="toggle-btn" id="bundle-btn" onclick="toggleBundling()">Bundle</button>
+            <button class="toggle-btn" id="borders-btn" onclick="toggleBorders()">🗺️ Borders</button>
             <button class="toggle-btn" id="constellation-btn" onclick="toggleConstellation()">✨ Constellation</button>
         </div>
     </div>
@@ -582,7 +583,7 @@ GRAPH_HTML = """
         let highlightedNodes = new Set();
         let neighborNodes = new Set();
         let activatedNodes = new Set(); // Nodes activated by chat
-        let showClusters = false, showBundling = false, showConstellation = false;
+        let showClusters = false, showBundling = false, showConstellation = false, showBorders = false;
         let typeFilters = new Set(); // empty = show all
         let clusterCenters = {}; // { clusterId: { x, y, name, nodeCount, topNodes } }
         let interClusterEdges = []; // [{ from: clusterId, to: clusterId, count: n }]
@@ -831,6 +832,39 @@ GRAPH_HTML = """
 
             // Clear label canvas
             labelCtx.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
+
+            // Draw cluster borders (map-like regions)
+            if (showBorders && Object.keys(clusterCenters).length > 0) {
+                labelCtx.save();
+                labelCtx.scale(dpr, dpr);
+
+                for (const [clusterId, center] of Object.entries(clusterCenters)) {
+                    if (center.nodeCount < 3) continue; // Skip tiny clusters
+
+                    const pos = worldToScreen(center.x, center.y);
+                    const screenRadius = center.radius * scale * 2;
+
+                    // Skip if too small or off-screen
+                    if (screenRadius < 5) continue;
+                    if (pos.x + screenRadius < 0 || pos.x - screenRadius > w) continue;
+                    if (pos.y + screenRadius < 0 || pos.y - screenRadius > h) continue;
+
+                    const color = clusterPalette[clusterId % clusterPalette.length];
+
+                    // Filled circle with low opacity
+                    labelCtx.fillStyle = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.08)`;
+                    labelCtx.beginPath();
+                    labelCtx.arc(pos.x, pos.y, screenRadius, 0, Math.PI * 2);
+                    labelCtx.fill();
+
+                    // Border stroke
+                    labelCtx.strokeStyle = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.3)`;
+                    labelCtx.lineWidth = 1.5;
+                    labelCtx.stroke();
+                }
+
+                labelCtx.restore();
+            }
 
             // Draw lines with gradient colors
             if (links.length > 0) {
@@ -1349,6 +1383,12 @@ GRAPH_HTML = """
             render();
         }
 
+        function toggleBorders() {
+            showBorders = !showBorders;
+            document.getElementById('borders-btn').classList.toggle('active', showBorders);
+            render();
+        }
+
         function computeConnStats() {
             // Compute connection percentiles for dynamic LOD
             if (nodes.length === 0) {
@@ -1380,19 +1420,32 @@ GRAPH_HTML = """
                 clusterNodes[c].push(node);
             }
 
-            // Compute centers and gather top nodes
+            // Compute centers, radius, and gather top nodes
             for (const [clusterId, clusterNodeList] of Object.entries(clusterNodes)) {
                 const sumX = clusterNodeList.reduce((s, n) => s + n.x, 0);
                 const sumY = clusterNodeList.reduce((s, n) => s + n.y, 0);
                 const count = clusterNodeList.length;
+                const cx = sumX / count;
+                const cy = sumY / count;
+
+                // Compute radius as max distance from center to any node + padding
+                let maxDist = 0;
+                for (const node of clusterNodeList) {
+                    const dx = node.x - cx;
+                    const dy = node.y - cy;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    if (dist > maxDist) maxDist = dist;
+                }
+                const radius = maxDist + 100; // Add padding
 
                 // Sort by connections to find top nodes
                 const sorted = [...clusterNodeList].sort((a, b) => (b.conn || 0) - (a.conn || 0));
                 const topNodes = sorted.slice(0, 5).map(n => n.name || n.id);
 
                 clusterCenters[clusterId] = {
-                    x: sumX / count,
-                    y: sumY / count,
+                    x: cx,
+                    y: cy,
+                    radius: radius,
                     nodeCount: count,
                     topNodes: topNodes,
                     name: generateClusterName(topNodes)

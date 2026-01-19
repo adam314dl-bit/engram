@@ -356,6 +356,265 @@ def spiral_galaxy_layout(positions, node_clusters, arms=4, spread=10000, rotatio
     return new_positions
 
 
+def circle_packing_layout(nodes, edges, node_clusters, base_radius=500, padding=1.3):
+    """Circle packing layout: each cluster gets a circle proportional to its size.
+
+    Args:
+        nodes: list of node IDs
+        edges: list of (source, target) tuples
+        node_clusters: dict of node_id -> cluster_id
+        base_radius: base radius multiplier
+        padding: space between circles (1.0 = touching, 1.3 = 30% gap)
+
+    Returns:
+        dict of node_id -> (x, y)
+    """
+    import math
+    import random
+
+    print("Computing circle packing layout...")
+
+    # Group nodes by cluster
+    cluster_nodes = {}
+    for node_id in nodes:
+        cluster_id = node_clusters.get(node_id, 0)
+        if cluster_id not in cluster_nodes:
+            cluster_nodes[cluster_id] = []
+        cluster_nodes[cluster_id].append(node_id)
+
+    # Compute radius for each cluster: r = base * sqrt(node_count)
+    cluster_radii = {}
+    for cluster_id, node_list in cluster_nodes.items():
+        cluster_radii[cluster_id] = base_radius * math.sqrt(len(node_list))
+
+    print(f"Clusters: {len(cluster_nodes)}, radius range: {min(cluster_radii.values()):.0f} - {max(cluster_radii.values()):.0f}")
+
+    # Sort clusters by radius descending (pack largest first)
+    sorted_clusters = sorted(cluster_radii.items(), key=lambda x: -x[1])
+
+    # Circle packing using front-chain algorithm
+    # Place circles one by one, each tangent to previous circles
+    cluster_centers = {}
+    placed_circles = []  # [(x, y, radius), ...]
+
+    for i, (cluster_id, radius) in enumerate(sorted_clusters):
+        if i == 0:
+            # First circle at origin
+            cluster_centers[cluster_id] = (0.0, 0.0)
+            placed_circles.append((0.0, 0.0, radius * padding))
+        elif i == 1:
+            # Second circle to the right of first
+            x = placed_circles[0][2] + radius * padding
+            cluster_centers[cluster_id] = (x, 0.0)
+            placed_circles.append((x, 0.0, radius * padding))
+        else:
+            # Find best position tangent to two existing circles
+            best_pos = None
+            best_dist = float('inf')
+
+            # Try all pairs of placed circles
+            for j in range(len(placed_circles)):
+                for k in range(j + 1, len(placed_circles)):
+                    c1 = placed_circles[j]
+                    c2 = placed_circles[k]
+
+                    # Find positions where new circle is tangent to both
+                    positions = find_tangent_positions(c1, c2, radius * padding)
+
+                    for pos in positions:
+                        # Check if position overlaps with any existing circle
+                        valid = True
+                        for existing in placed_circles:
+                            dist = math.sqrt((pos[0] - existing[0])**2 + (pos[1] - existing[1])**2)
+                            if dist < radius * padding + existing[2] - 1:  # Small tolerance
+                                valid = False
+                                break
+
+                        if valid:
+                            # Prefer positions closer to origin (tighter packing)
+                            dist_to_origin = math.sqrt(pos[0]**2 + pos[1]**2)
+                            if dist_to_origin < best_dist:
+                                best_dist = dist_to_origin
+                                best_pos = pos
+
+            if best_pos is None:
+                # Fallback: place on expanding spiral
+                angle = i * 0.5
+                r = sum(c[2] for c in placed_circles) / len(placed_circles) * math.sqrt(i)
+                best_pos = (r * math.cos(angle), r * math.sin(angle))
+
+            cluster_centers[cluster_id] = best_pos
+            placed_circles.append((best_pos[0], best_pos[1], radius * padding))
+
+        if (i + 1) % 100 == 0:
+            print(f"  Placed {i + 1}/{len(sorted_clusters)} clusters...")
+
+    print(f"Circle packing complete. Computing local layouts...")
+
+    # Build edge lookup for local layouts
+    node_edges = {}
+    for src, dst in edges:
+        if src not in node_edges:
+            node_edges[src] = []
+        if dst not in node_edges:
+            node_edges[dst] = []
+        node_edges[src].append(dst)
+        node_edges[dst].append(src)
+
+    # Compute local layout within each cluster
+    positions = {}
+
+    for idx, (cluster_id, node_list) in enumerate(cluster_nodes.items()):
+        center = cluster_centers[cluster_id]
+        radius = cluster_radii[cluster_id]
+
+        if len(node_list) == 1:
+            # Single node: place at center
+            positions[node_list[0]] = center
+        elif len(node_list) <= 10:
+            # Small cluster: arrange in circle
+            for i, node_id in enumerate(node_list):
+                angle = 2 * math.pi * i / len(node_list)
+                r = radius * 0.6
+                positions[node_id] = (
+                    center[0] + r * math.cos(angle),
+                    center[1] + r * math.sin(angle)
+                )
+        else:
+            # Larger cluster: use force-directed layout locally
+            local_positions = compute_local_layout(node_list, node_edges, radius * 0.8)
+            for node_id, (lx, ly) in local_positions.items():
+                positions[node_id] = (center[0] + lx, center[1] + ly)
+
+        if (idx + 1) % 100 == 0:
+            print(f"  Local layout {idx + 1}/{len(cluster_nodes)} clusters...")
+
+    print("Circle packing layout complete.")
+    return positions
+
+
+def find_tangent_positions(c1, c2, r):
+    """Find positions where a circle of radius r is tangent to circles c1 and c2."""
+    import math
+
+    x1, y1, r1 = c1
+    x2, y2, r2 = c2
+
+    # Distance between centers
+    d = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+
+    if d == 0:
+        return []
+
+    # Distances from c1 and c2 to new circle center
+    d1 = r1 + r
+    d2 = r2 + r
+
+    # Check if solution exists
+    if d > d1 + d2 or d < abs(d1 - d2):
+        return []
+
+    # Find intersection points of two circles centered at c1, c2 with radii d1, d2
+    a = (d1**2 - d2**2 + d**2) / (2 * d)
+
+    h_sq = d1**2 - a**2
+    if h_sq < 0:
+        return []
+    h = math.sqrt(h_sq)
+
+    # Point on line between centers
+    px = x1 + a * (x2 - x1) / d
+    py = y1 + a * (y2 - y1) / d
+
+    # Perpendicular offset
+    dx = h * (y2 - y1) / d
+    dy = h * (x1 - x2) / d
+
+    return [(px + dx, py + dy), (px - dx, py - dy)]
+
+
+def compute_local_layout(node_list, node_edges, radius):
+    """Compute force-directed layout for nodes within a cluster."""
+    import math
+    import random
+
+    random.seed(42)
+
+    # Initialize random positions
+    positions = {}
+    for node_id in node_list:
+        angle = random.uniform(0, 2 * math.pi)
+        r = random.uniform(0, radius * 0.5)
+        positions[node_id] = [r * math.cos(angle), r * math.sin(angle)]
+
+    node_set = set(node_list)
+
+    # Simple force-directed iterations
+    iterations = 50
+    k = radius / math.sqrt(len(node_list))  # Optimal distance
+
+    for _ in range(iterations):
+        # Calculate repulsive forces
+        displacements = {node_id: [0.0, 0.0] for node_id in node_list}
+
+        for i, n1 in enumerate(node_list):
+            for n2 in node_list[i+1:]:
+                dx = positions[n1][0] - positions[n2][0]
+                dy = positions[n1][1] - positions[n2][1]
+                dist = max(0.1, math.sqrt(dx*dx + dy*dy))
+
+                # Repulsive force
+                force = k * k / dist
+                fx = dx / dist * force
+                fy = dy / dist * force
+
+                displacements[n1][0] += fx
+                displacements[n1][1] += fy
+                displacements[n2][0] -= fx
+                displacements[n2][1] -= fy
+
+        # Calculate attractive forces (edges)
+        for n1 in node_list:
+            if n1 in node_edges:
+                for n2 in node_edges[n1]:
+                    if n2 in node_set and n2 != n1:
+                        dx = positions[n1][0] - positions[n2][0]
+                        dy = positions[n1][1] - positions[n2][1]
+                        dist = max(0.1, math.sqrt(dx*dx + dy*dy))
+
+                        # Attractive force
+                        force = dist * dist / k
+                        fx = dx / dist * force
+                        fy = dy / dist * force
+
+                        displacements[n1][0] -= fx * 0.5
+                        displacements[n1][1] -= fy * 0.5
+
+        # Apply displacements with cooling
+        cooling = 1.0 - _ / iterations
+        max_disp = radius * 0.1 * cooling
+
+        for node_id in node_list:
+            dx, dy = displacements[node_id]
+            dist = max(0.1, math.sqrt(dx*dx + dy*dy))
+
+            # Limit displacement
+            dx = dx / dist * min(dist, max_disp)
+            dy = dy / dist * min(dist, max_disp)
+
+            positions[node_id][0] += dx
+            positions[node_id][1] += dy
+
+            # Keep within radius
+            px, py = positions[node_id]
+            d = math.sqrt(px*px + py*py)
+            if d > radius * 0.9:
+                positions[node_id][0] = px / d * radius * 0.9
+                positions[node_id][1] = py / d * radius * 0.9
+
+    return {k: tuple(v) for k, v in positions.items()}
+
+
 def compute_communities(nodes, edges):
     """Detect communities using Louvain algorithm."""
     import networkx as nx
@@ -381,6 +640,7 @@ def compute_communities(nodes, edges):
 
 async def compute_and_store_layout():
     """Compute layout and store positions in Neo4j."""
+    import math
 
     # Connect to Neo4j
     db = Neo4jClient(
@@ -416,17 +676,21 @@ async def compute_and_store_layout():
     all_edges = [(r["source"], r["target"]) for r in concept_rels + memory_rels + episode_rels]
     print(f"Found {len(all_edges)} relationships")
 
-    # Compute layout (tries GPU -> multi-core -> single-core)
-    print("Computing layout...")
-    positions = compute_layout(all_nodes, all_edges, scale=10000)
-    print("Layout computed.")
-
-    # Detect communities
+    # Detect communities first (needed for circle packing)
     print("Detecting communities...")
     node_clusters = compute_communities(all_nodes, all_edges)
 
-    # Separate clusters - push clusters apart while keeping nodes within clusters close
-    positions = separate_clusters(positions, node_clusters, separation_factor=2.5)
+    # Compute circle packing layout
+    # base_radius scales with graph size for consistent density
+    num_clusters = len(set(node_clusters.values()))
+    base_radius = max(300, 150 * math.sqrt(len(all_nodes) / 1000))
+    print(f"Using base_radius={base_radius:.0f} for {len(all_nodes)} nodes, {num_clusters} clusters")
+
+    positions = circle_packing_layout(
+        all_nodes, all_edges, node_clusters,
+        base_radius=base_radius,
+        padding=1.4  # 40% gap between clusters
+    )
 
     print("Storing positions and clusters in Neo4j...")
 
