@@ -325,7 +325,7 @@ GRAPH_HTML = """
         let typeFilters = new Set(); // empty = show all
         let clusterCenters = {}; // { clusterId: { x, y, name, nodeCount, topNodes } }
         let interClusterEdges = []; // [{ from: clusterId, to: clusterId, count: n }]
-        let connStats = { max: 1, p90: 1, p75: 1, p50: 1 }; // Connection percentiles for dynamic LOD
+        let connStats = { max: 1, p99: 1, p95: 1, p75: 1, p50: 1 }; // Connection percentiles for LOD
 
         // Hierarchical cluster data for semantic zoom (5 levels)
         let level0Centers = {}; // { level0Id: { x, y, radius, name, nodeCount } }
@@ -1243,24 +1243,30 @@ GRAPH_HTML = """
                 }
             }
 
-            // Draw individual nodes (Level 4)
-            if (showNodes || l3ToNodesTransition > 0) {
-                const nodeOpacity = showNodes ? 1.0 : l3ToNodesTransition;
-
-                // LOD: Minimum connections required to be visible at this zoom level
-                const minConnForVisibility = scale < 0.08 ? connStats.p75 : (scale < 0.15 ? connStats.p50 : 0);
+            // Draw individual nodes at ALL zoom levels with LOD filtering
+            // L0: top 1%, L1: top 5%, L2: top 25%, L3: top 50%, L4: 100%
+            {
+                // LOD: Minimum connections required to be visible at each zoom level
+                const minConnByLevel = {
+                    0: connStats.p99,  // L0: top 1%
+                    1: connStats.p95,  // L1: top 5%
+                    2: connStats.p75,  // L2: top 25%
+                    3: connStats.p50,  // L3: top 50%
+                    4: 0               // L4: all nodes
+                };
+                const minConnForVisibility = minConnByLevel[semanticZoomLevel] || 0;
 
                 for (const node of nodes) {
-                    // LOD: Skip low-connection nodes when zoomed out
+                    // LOD: Skip nodes below connection threshold (unless activated/selected)
                     const nodeConn = node.conn || 0;
                     if (nodeConn < minConnForVisibility && !activatedNodes.has(node.id) && node !== selectedNode) {
                         continue;
                     }
 
                     const color = getNodeColor(node);
-                    // Node size: ensure visible at any zoom level
+                    // Node size: scale with zoom level
                     const baseSize = Math.max(48, Math.min(192, Math.sqrt(nodeConn || 1) * 32));
-                    const minScreenPx = 6;
+                    const minScreenPx = semanticZoomLevel < 2 ? 8 : 6;
                     const size = Math.max(minScreenPx / scale, baseSize * Math.max(1, Math.min(4, scale)));
 
                     let finalColor = color;
@@ -1272,12 +1278,10 @@ GRAPH_HTML = """
                         finalColor = [color[0] * 1.2, color[1] * 1.2, color[2] * 1.2, 1];
                     }
 
-                    // Apply transition opacity
-                    const finalOpacity = Math.min(finalColor[3], nodeOpacity);
-                    nodeData.push(node.x, node.y, finalColor[0], finalColor[1], finalColor[2], finalOpacity, size);
+                    nodeData.push(node.x, node.y, finalColor[0], finalColor[1], finalColor[2], finalColor[3], size);
 
-                    // Collect labels for nodes (show more labels at higher zoom)
-                    if (isNodeVisible(node) && (nodeConn > 2 || scale > 0.15)) {
+                    // Collect labels for important nodes at all zoom levels
+                    if (isNodeVisible(node) && (nodeConn >= minConnForVisibility || scale > 0.1)) {
                         const pos = worldToScreen(node.x, node.y);
                         labelsToRender.push({
                             type: 'node',
@@ -1641,9 +1645,10 @@ GRAPH_HTML = """
         }
 
         function computeConnStats() {
-            // Compute connection percentiles for dynamic LOD
+            // Compute connection percentiles for LOD filtering
+            // L0: top 1%, L1: top 5%, L2: top 25%, L3: top 50%, L4: all
             if (nodes.length === 0) {
-                connStats = { max: 1, p90: 1, p75: 1, p50: 1 };
+                connStats = { max: 1, p99: 1, p95: 1, p75: 1, p50: 1 };
                 return;
             }
 
@@ -1652,12 +1657,13 @@ GRAPH_HTML = """
 
             connStats = {
                 max: conns[0] || 1,
-                p90: conns[Math.floor(n * 0.1)] || 1,  // top 10%
-                p75: conns[Math.floor(n * 0.25)] || 1, // top 25%
-                p50: conns[Math.floor(n * 0.5)] || 1   // top 50%
+                p99: conns[Math.floor(n * 0.01)] || 1,  // top 1%
+                p95: conns[Math.floor(n * 0.05)] || 1,  // top 5%
+                p75: conns[Math.floor(n * 0.25)] || 1,  // top 25%
+                p50: conns[Math.floor(n * 0.5)] || 1    // top 50%
             };
 
-            console.log('Connection stats:', connStats);
+            console.log('Connection stats for LOD:', connStats);
         }
 
         function computeHierarchicalCenters() {
