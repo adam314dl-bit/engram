@@ -861,17 +861,21 @@ GRAPH_HTML = """
                     }
                 }
 
+                // LOD: Hide edges when zoomed out (scale < 0.1), fade in as zoom increases
+                const edgeVisibility = Math.min(1, Math.max(0, (scale - 0.02) / 0.08)); // 0 at scale 0.02, 1 at scale 0.1
+
                 for (const link of links) {
                     const s = nodeMap[link.source];
                     const t = nodeMap[link.target];
-                    if (s && t && isNodeVisible(s) && isNodeVisible(t)) {
+                    if (s && t && isNodeVisible(s) && isNodeVisible(t) && edgeVisibility > 0.01) {
                         const isGlowLink = selectedNode && (
                             (s === selectedNode && neighborNodes.has(t.id)) ||
                             (t === selectedNode && neighborNodes.has(s.id))
                         );
 
                         const targetArray = isGlowLink ? glowLineData : normalLineData;
-                        const opacity = isGlowLink ? 0.9 : (hasSelection ? 0.35 : 0.85);
+                        const baseOpacity = isGlowLink ? 0.9 : (hasSelection ? 0.35 : 0.85);
+                        const opacity = baseOpacity * edgeVisibility; // Fade edges based on zoom
                         const sColor = getEdgeNodeColor(s);
                         const tColor = getEdgeNodeColor(t);
 
@@ -917,7 +921,7 @@ GRAPH_HTML = """
                 }
             }
 
-            // Draw nodes
+            // Draw nodes with LOD (Level of Detail)
             if (nodes.length > 0) {
                 gl.useProgram(nodeProgram);
                 gl.uniform2f(gl.getUniformLocation(nodeProgram, 'u_resolution'), w / 2, h / 2);
@@ -927,11 +931,25 @@ GRAPH_HTML = """
                 const nodeData = [];
                 const labelsToRender = [];
 
+                // LOD: Minimum connections required to be visible at this zoom level
+                // At scale 0.01 (very zoomed out): only show nodes with 10+ connections
+                // At scale 0.05: show nodes with 3+ connections
+                // At scale 0.1+: show all nodes
+                const minConnForVisibility = scale < 0.02 ? 10 : (scale < 0.05 ? 3 : 0);
+
                 for (const node of nodes) {
+                    // LOD: Skip low-connection nodes when zoomed out
+                    const nodeConn = node.conn || 0;
+                    if (nodeConn < minConnForVisibility && !activatedNodes.has(node.id) && node !== selectedNode) {
+                        continue;
+                    }
+
                     const color = getNodeColor(node);
-                    // EXTRA BIG nodes: base 48-192, scaled by connections
-                    const baseSize = Math.max(48, Math.min(192, Math.sqrt(node.conn || 1) * 32));
-                    const size = baseSize * Math.max(1, Math.min(4, scale));
+                    // Node size: ensure visible at any zoom level
+                    const baseSize = Math.max(48, Math.min(192, Math.sqrt(nodeConn || 1) * 32));
+                    // Minimum 6 pixels on screen, scale up when zoomed out
+                    const minScreenPx = 6;
+                    const size = Math.max(minScreenPx / scale, baseSize * Math.max(1, Math.min(4, scale)));
 
                     let finalColor = color;
                     if (node === selectedNode) {
@@ -945,7 +963,7 @@ GRAPH_HTML = """
                     nodeData.push(node.x, node.y, finalColor[0], finalColor[1], finalColor[2], finalColor[3], size);
 
                     // Collect labels for high-connection nodes
-                    if (isNodeVisible(node) && node.conn > 5 && scale > 0.3) {
+                    if (isNodeVisible(node) && nodeConn > 5 && scale > 0.03) {
                         const pos = worldToScreen(node.x, node.y);
                         labelsToRender.push({ node, pos, size });
                     }

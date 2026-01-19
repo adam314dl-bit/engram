@@ -273,6 +273,89 @@ def separate_clusters(positions, node_clusters, separation_factor=2.0):
     return new_positions
 
 
+def spiral_galaxy_layout(positions, node_clusters, arms=4, spread=10000, rotation=2.0):
+    """Transform layout into a spiral galaxy shape like Milky Way.
+
+    Args:
+        positions: dict of node_id -> (x, y)
+        node_clusters: dict of node_id -> cluster_id
+        arms: number of spiral arms (default 4)
+        spread: how far spiral extends (default 10000)
+        rotation: how many times spiral rotates (default 2.0 = 2 full rotations)
+
+    Returns:
+        Updated positions dict
+    """
+    import math
+    import random
+
+    print(f"Creating spiral galaxy layout with {arms} arms...")
+
+    # Compute cluster centers and sizes
+    cluster_sums = {}
+    cluster_counts = {}
+
+    for node_id, (x, y) in positions.items():
+        cluster_id = node_clusters.get(node_id, 0)
+        if cluster_id not in cluster_sums:
+            cluster_sums[cluster_id] = [0.0, 0.0]
+            cluster_counts[cluster_id] = 0
+        cluster_sums[cluster_id][0] += x
+        cluster_sums[cluster_id][1] += y
+        cluster_counts[cluster_id] += 1
+
+    cluster_centers = {}
+    for cluster_id in cluster_sums:
+        count = cluster_counts[cluster_id]
+        cluster_centers[cluster_id] = (
+            cluster_sums[cluster_id][0] / count,
+            cluster_sums[cluster_id][1] / count
+        )
+
+    # Sort clusters by size (larger clusters closer to center)
+    sorted_clusters = sorted(cluster_counts.items(), key=lambda x: -x[1])
+
+    # Assign each cluster to a position along a spiral arm
+    new_cluster_centers = {}
+    random.seed(42)
+
+    for i, (cluster_id, count) in enumerate(sorted_clusters):
+        # Which arm this cluster belongs to
+        arm = i % arms
+        # Position along the arm (0 = center, 1 = outer)
+        t = i / len(sorted_clusters)
+
+        # Spiral equation: r = a * theta
+        # theta increases with t, r increases with t
+        theta = arm * (2 * math.pi / arms) + t * rotation * 2 * math.pi
+        r = t * spread
+
+        # Add some randomness to make it look natural
+        theta += random.uniform(-0.3, 0.3)
+        r += random.uniform(-spread * 0.1, spread * 0.1)
+
+        new_x = r * math.cos(theta)
+        new_y = r * math.sin(theta)
+
+        new_cluster_centers[cluster_id] = (new_x, new_y)
+
+    # Move each node by the same offset as its cluster
+    new_positions = {}
+    for node_id, (x, y) in positions.items():
+        cluster_id = node_clusters.get(node_id, 0)
+        old_center = cluster_centers[cluster_id]
+        new_center = new_cluster_centers[cluster_id]
+
+        # Keep relative position within cluster but scale down
+        rel_x = (x - old_center[0]) * 0.3  # Tighter clusters
+        rel_y = (y - old_center[1]) * 0.3
+
+        new_positions[node_id] = (new_center[0] + rel_x, new_center[1] + rel_y)
+
+    print(f"Spiral galaxy layout complete")
+    return new_positions
+
+
 def compute_communities(nodes, edges):
     """Detect communities using Louvain algorithm."""
     import networkx as nx
@@ -343,7 +426,6 @@ async def compute_and_store_layout():
     node_clusters = compute_communities(all_nodes, all_edges)
 
     # Separate clusters - push clusters apart while keeping nodes within clusters close
-    print("Separating clusters...")
     positions = separate_clusters(positions, node_clusters, separation_factor=2.5)
 
     print("Storing positions and clusters in Neo4j...")
