@@ -1852,15 +1852,12 @@ GRAPH_HTML = """
                 const clusterHit = findClusterAtPosition(e.clientX, e.clientY);
                 if (clusterHit !== null) {
                     // Target scales to reach the next zoom level (zoom in extra for better visibility):
-                    // L0 → L1: need scale >= 0.008, target 0.025
-                    // L1 → L2: need scale >= 0.02, target 0.055
-                    // L2 → L3: need scale >= 0.045, target 0.1
-                    // L3 → L4 (nodes): need scale >= 0.09, target 0.2
+                    // Zoom in enough to show labels at each level
                     const targetScales = {
-                        level0: 0.006,
-                        level1: 0.015,
-                        level2: 0.035,
-                        level3: 0.065
+                        level0: 0.02,   // Show L1 cluster labels
+                        level1: 0.05,   // Show L2 cluster labels
+                        level2: 0.1,    // Show L3 cluster labels
+                        level3: 0.2     // Show individual nodes
                     };
                     const targetScale = targetScales[clusterHit.type] || 0.2;
 
