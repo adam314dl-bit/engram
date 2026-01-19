@@ -1374,6 +1374,28 @@ GRAPH_HTML = """
             labelCtx.scale(dpr, dpr);
             labelCtx.textAlign = 'center';
 
+            // Helper to draw text with background
+            function drawTextWithBg(text, x, y, font, textColor, bgColor = 'rgba(10, 10, 18, 0.75)', padding = 4) {
+                labelCtx.font = font;
+                const metrics = labelCtx.measureText(text);
+                const textWidth = metrics.width;
+                const textHeight = parseInt(font) || 12;
+
+                // Draw background
+                labelCtx.fillStyle = bgColor;
+                const bgX = x - textWidth / 2 - padding;
+                const bgY = y - textHeight + 2;
+                const bgW = textWidth + padding * 2;
+                const bgH = textHeight + padding;
+                labelCtx.beginPath();
+                labelCtx.roundRect(bgX, bgY, bgW, bgH, 3);
+                labelCtx.fill();
+
+                // Draw text
+                labelCtx.fillStyle = textColor;
+                labelCtx.fillText(text, x, y);
+            }
+
             for (const label of labelsToRender) {
                 if (label.type === 'level0') {
                     const pos = worldToScreen(label.x, label.y);
@@ -1381,20 +1403,11 @@ GRAPH_HTML = """
 
                     const color = label.color;
                     const fontSize = Math.min(32, Math.max(14, 12 + Math.log(label.count) * 3));
+                    const textColor = `rgb(${color[0]*255}, ${color[1]*255}, ${color[2]*255})`;
 
-                    // Glow effect
-                    labelCtx.shadowColor = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.6)`;
-                    labelCtx.shadowBlur = 12;
-
-                    labelCtx.font = `bold ${fontSize}px -apple-system, sans-serif`;
-                    labelCtx.fillStyle = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 1)`;
-                    labelCtx.fillText(label.name, pos.x, pos.y - 10);
-
-                    // Node count
                     labelCtx.shadowBlur = 0;
-                    labelCtx.font = `${Math.max(10, fontSize * 0.6)}px -apple-system, sans-serif`;
-                    labelCtx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-                    labelCtx.fillText(`${label.count} nodes`, pos.x, pos.y + fontSize - 5);
+                    drawTextWithBg(label.name, pos.x, pos.y - 10, `bold ${fontSize}px -apple-system, sans-serif`, textColor);
+                    drawTextWithBg(`${label.count} nodes`, pos.x, pos.y + fontSize - 5, `${Math.max(10, fontSize * 0.6)}px -apple-system, sans-serif`, 'rgba(255,255,255,0.7)');
 
                 } else if (label.type === 'level1') {
                     const pos = worldToScreen(label.x, label.y);
@@ -1402,19 +1415,11 @@ GRAPH_HTML = """
 
                     const color = label.color;
                     const fontSize = Math.min(18, Math.max(10, 8 + Math.log(label.count) * 2));
+                    const textColor = `rgb(${color[0]*255}, ${color[1]*255}, ${color[2]*255})`;
 
-                    labelCtx.shadowColor = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.4)`;
-                    labelCtx.shadowBlur = 6;
-
-                    labelCtx.font = `600 ${fontSize}px -apple-system, sans-serif`;
-                    labelCtx.fillStyle = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.9)`;
-                    labelCtx.fillText(label.name, pos.x, pos.y - 5);
-
-                    // Node count
                     labelCtx.shadowBlur = 0;
-                    labelCtx.font = `${Math.max(8, fontSize * 0.6)}px -apple-system, sans-serif`;
-                    labelCtx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-                    labelCtx.fillText(`${label.count}`, pos.x, pos.y + fontSize);
+                    drawTextWithBg(label.name, pos.x, pos.y - 5, `600 ${fontSize}px -apple-system, sans-serif`, textColor);
+                    drawTextWithBg(`${label.count}`, pos.x, pos.y + fontSize, `${Math.max(8, fontSize * 0.6)}px -apple-system, sans-serif`, 'rgba(255,255,255,0.6)');
 
                 } else if (label.type === 'level2') {
                     const pos = worldToScreen(label.x, label.y);
@@ -1422,19 +1427,10 @@ GRAPH_HTML = """
 
                     const color = label.color;
                     const fontSize = Math.min(14, Math.max(9, 7 + Math.log(label.count) * 1.5));
+                    const textColor = `rgb(${color[0]*255}, ${color[1]*255}, ${color[2]*255})`;
 
-                    labelCtx.shadowColor = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.3)`;
-                    labelCtx.shadowBlur = 4;
-
-                    labelCtx.font = `500 ${fontSize}px -apple-system, sans-serif`;
-                    labelCtx.fillStyle = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.85)`;
-                    labelCtx.fillText(label.name, pos.x, pos.y - 3);
-
-                    // Node count
                     labelCtx.shadowBlur = 0;
-                    labelCtx.font = `${Math.max(7, fontSize * 0.6)}px -apple-system, sans-serif`;
-                    labelCtx.fillStyle = 'rgba(255, 255, 255, 0.35)';
-                    labelCtx.fillText(`${label.count}`, pos.x, pos.y + fontSize - 2);
+                    drawTextWithBg(label.name, pos.x, pos.y - 3, `500 ${fontSize}px -apple-system, sans-serif`, textColor);
 
                 } else if (label.type === 'level3') {
                     const pos = worldToScreen(label.x, label.y);
@@ -1442,11 +1438,10 @@ GRAPH_HTML = """
 
                     const color = label.color;
                     const fontSize = Math.min(12, Math.max(8, 6 + Math.log(label.count) * 1.2));
+                    const textColor = `rgb(${color[0]*255}, ${color[1]*255}, ${color[2]*255})`;
 
                     labelCtx.shadowBlur = 0;
-                    labelCtx.font = `${fontSize}px -apple-system, sans-serif`;
-                    labelCtx.fillStyle = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.75)`;
-                    labelCtx.fillText(label.name, pos.x, pos.y);
+                    drawTextWithBg(label.name, pos.x, pos.y, `${fontSize}px -apple-system, sans-serif`, textColor);
 
                 } else if (label.type === 'node') {
                     const { node, pos, size } = label;
@@ -1456,9 +1451,7 @@ GRAPH_HTML = """
                     const screenSize = size * scale;
 
                     labelCtx.shadowBlur = 0;
-                    labelCtx.font = '11px -apple-system, sans-serif';
-                    labelCtx.fillStyle = 'rgba(255,255,255,0.7)';
-                    labelCtx.fillText(nodeName, pos.x, pos.y + screenSize / 2 + 14);
+                    drawTextWithBg(nodeName, pos.x, pos.y + screenSize / 2 + 14, '11px -apple-system, sans-serif', 'rgba(255,255,255,0.9)');
                 }
             }
             labelCtx.restore();
