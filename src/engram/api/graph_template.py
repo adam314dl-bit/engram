@@ -404,7 +404,7 @@ GRAPH_HTML = """
                     const dx = world.x - center.x;
                     const dy = world.y - center.y;
                     const dist = Math.sqrt(dx*dx + dy*dy);
-                    const clickRadius = center.radius * 1.2;
+                    const clickRadius = Math.max(center.radius * 1.5, 50 / scale);
                     if (dist < clickRadius) {
                         return { id: key, center: center };
                     }
@@ -2041,10 +2041,10 @@ GRAPH_HTML = """
                     // L2 → L3: need scale >= 0.045, target 0.1
                     // L3 → L4 (nodes): need scale >= 0.09, target 0.2
                     const targetScales = {
-                        level0: 0.025,
-                        level1: 0.055,
-                        level2: 0.1,
-                        level3: 0.2
+                        level0: 0.015,
+                        level1: 0.035,
+                        level2: 0.07,
+                        level3: 0.12
                     };
                     const targetScale = targetScales[clusterHit.type] || 0.2;
 
@@ -2601,7 +2601,7 @@ GRAPH_HTML = """
                     radius: 150,
                     nodeCount: c.node_count,
                     parent: c.level0,
-                    name: `Sub-cluster ${c.level1}`
+                    name: c.name || `Group ${c.level1}`
                 };
             }
 
@@ -2615,7 +2615,7 @@ GRAPH_HTML = """
                     radius: 100,
                     nodeCount: c.node_count,
                     parent: c.level0,
-                    name: `Group ${c.level2}`
+                    name: c.name || `Set ${c.level2}`
                 };
             }
 

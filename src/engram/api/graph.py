@@ -289,7 +289,7 @@ async def get_cluster_info(request: Request) -> dict:
             "name": (d["top_name"] or "Cluster")[:30]
         })
 
-    # Get L1 clusters (sub-clusters within L0)
+    # Get L1 clusters with top node name
     l1_clusters = await db.execute_query(
         """
         MATCH (n)
@@ -298,16 +298,18 @@ async def get_cluster_info(request: Request) -> dict:
         WITH n.level0 as l0, n.level1 as l1,
              avg(n.layout_x) as center_x,
              avg(n.layout_y) as center_y,
-             count(n) as node_count
-        RETURN l0, l1, center_x, center_y, node_count
+             count(n) as node_count,
+             collect(n.name)[0] as top_name
+        RETURN l0, l1, center_x, center_y, node_count, top_name
         ORDER BY node_count DESC
         """
     )
 
     l1_result = [{"level0": c["l0"], "level1": c["l1"], "center_x": c["center_x"],
-                  "center_y": c["center_y"], "node_count": c["node_count"]} for c in l1_clusters]
+                  "center_y": c["center_y"], "node_count": c["node_count"],
+                  "name": (c["top_name"] or "Group")[:25]} for c in l1_clusters]
 
-    # Get L2 clusters
+    # Get L2 clusters with top node name
     l2_clusters = await db.execute_query(
         """
         MATCH (n)
@@ -316,15 +318,17 @@ async def get_cluster_info(request: Request) -> dict:
         WITH n.level0 as l0, n.level1 as l1, n.level2 as l2,
              avg(n.layout_x) as center_x,
              avg(n.layout_y) as center_y,
-             count(n) as node_count
-        RETURN l0, l1, l2, center_x, center_y, node_count
+             count(n) as node_count,
+             collect(n.name)[0] as top_name
+        RETURN l0, l1, l2, center_x, center_y, node_count, top_name
         ORDER BY node_count DESC
         """
     )
 
     l2_result = [{"level0": c["l0"], "level1": c["l1"], "level2": c["l2"],
                   "center_x": c["center_x"], "center_y": c["center_y"],
-                  "node_count": c["node_count"]} for c in l2_clusters]
+                  "node_count": c["node_count"],
+                  "name": (c["top_name"] or "Set")[:20]} for c in l2_clusters]
 
     # Get inter-cluster edges (L0 level)
     l0_edges = await db.execute_query(
