@@ -199,7 +199,8 @@ Engram includes an interactive WebGL graph visualization of the memory network, 
 - **WebGL Rendering**: Hardware-accelerated graphics for smooth performance
 - **Pre-computed Layout**: Server-side layout using igraph/cuGraph, stored in Neo4j
 - **Viewport Culling**: Only loads nodes visible in current view
-- **Louvain Clustering**: Community detection for visual grouping
+- **5-Level Semantic Zoom**: Hierarchical clustering with drill-down navigation
+- **Recursive Subdivision**: Adaptive clustering that scales with graph size
 
 **Node Types:**
 - **Concepts** (teal `#5eead4`): Atomic ideas from ingested documents
@@ -209,23 +210,27 @@ Engram includes an interactive WebGL graph visualization of the memory network, 
 **Features:**
 - **Integrated Chat**: Chat panel with memory activation visualization
 - **Live Activation**: See which nodes are used when answering questions (golden glow)
+- **5-Level Semantic Zoom**: Drill down from super-clusters (L0) to individual nodes (L4)
 - **Cluster Coloring**: Toggle to color nodes by community
 - **Edge Bundling**: Curved edges for cleaner visualization
 - **Search**: Find and focus on specific nodes by name or content
 - **Type Filtering**: Click legend items to filter by node type
 - **Neighbor Highlighting**: Click node to see its connections highlighted
 - **Connected Nodes Panel**: View and navigate to connected nodes
+- **Debug Mode**: View retrieved nodes with scores and sources (🔍 button)
 
 **Controls:**
 - **💬 Button**: Toggle chat panel
+- **🔍 Button**: Toggle debug mode (in chat)
+- **Click cluster**: Drill down to next level (L0→L1→L2→L3→L4)
 - **Click node**: Select and show info panel with connections
 - **Click legend item**: Filter by type (click again to clear)
 - **"Clusters" button**: Toggle cluster-based coloring
 - **"Bundle" button**: Toggle edge bundling
 - **"Show Activation" button**: Re-highlight last chat response nodes
 - **Search box**: Type 2+ characters to search, click result to focus
-- **Escape**: Clear all selections, filters, and highlights
-- **Mouse wheel**: Zoom in/out
+- **Escape**: Zoom out to overview, clear selections/filters
+- **Mouse wheel**: Zoom in/out (changes semantic zoom level)
 - **Drag**: Pan the view
 
 **Chat Integration:**
@@ -236,12 +241,18 @@ Engram includes an interactive WebGL graph visualization of the memory network, 
 
 **Setup for Large Graphs:**
 ```bash
-# Compute layout (required after ingestion)
+# Compute layout and hierarchical clusters (required after ingestion)
 uv run python scripts/compute_layout.py
 
 # For GPU acceleration (100-1000x faster):
 uv sync --extra gpu
 ```
+
+**Adaptive Clustering (scales automatically):**
+- 100 nodes → ~3 L0 super-clusters
+- 1,000 nodes → ~10 L0 super-clusters
+- 10,000 nodes → ~33 L0 super-clusters
+- 31,000 nodes → ~58 L0 super-clusters
 
 ## Interactive Chat CLI
 
@@ -316,16 +327,20 @@ uv run ruff check src/engram
 - [x] **Pre-computed layout** — Server-side layout using igraph (CPU) or cuGraph (GPU)
 - [x] **Viewport culling** — Client requests nodes by viewport bounds
 - [x] **WebGL rendering** — Hardware-accelerated for 30k+ nodes
-- [x] **Louvain clustering** — Community detection stored in Neo4j
 - [x] **Integrated chat** — Chat with memory activation visualization
+- [x] **5-Level semantic zoom** — L0 super-clusters → L4 individual nodes
+- [x] **Recursive subdivision clustering** — Adaptive hierarchical clustering for any graph size
+- [x] **Drill-down navigation** — Click clusters to zoom into next level
+- [x] **Debug mode** — View retrieved nodes with scores and sources
+- [x] **Temporary node inclusion** — Test queries with/without specific nodes
 
 ### Planned
 
-- [ ] **Hierarchical clustering** — Level 0 (cluster reps), Level 1 (sub-clusters), Level 2 (nodes)
 - [ ] **Spatial indexing** — Neo4j point indexes for faster viewport queries
 - [ ] **Feedback in chat** — 👍/👎 buttons to strengthen/weaken memories
 - [ ] **Path finder** — Find shortest path between two nodes
 - [ ] **Export subgraph** — Export selected nodes to markdown
+- [ ] **Permanent graph fixes** — Add edges, boost weights, aliases
 
 ## License
 

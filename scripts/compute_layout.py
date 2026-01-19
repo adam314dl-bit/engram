@@ -963,73 +963,217 @@ def compute_communities(nodes, edges):
 
 
 def compute_hierarchical_communities(nodes, edges, levels=5):
-    """Detect hierarchical communities using Leiden algorithm.
+    """Detect hierarchical communities using recursive subdivision.
 
-    Creates a multi-level hierarchy:
-    - Level 0: Super-clusters (coarsest, ~10-30 groups)
-    - Level 1: Sub-clusters (medium, ~100-500 groups)
-    - Level 2: Fine clusters (finest, current granularity)
+    Instead of running Leiden independently at each level, we:
+    1. Run Leiden to get L0 super-clusters
+    2. For each L0 cluster, run Leiden on just those nodes to get L1 sub-clusters
+    3. Continue recursively until level 4 or clusters are too small
+
+    This guarantees proper nesting - all nodes in same L2 cluster are in same L1 and L0.
 
     Args:
         nodes: list of node IDs
         edges: list of (source, target) tuples
-        levels: number of hierarchy levels (default 3)
+        levels: number of hierarchy levels (default 5)
 
     Returns:
-        dict of node_id -> {'level0': int, 'level1': int, 'level2': int}
+        dict of node_id -> {'level0': int, 'level1': int, 'level2': int, 'level3': int, 'level4': int}
     """
     import igraph as ig
+    import math
 
-    print(f"Computing {levels}-level hierarchical communities using Leiden...")
+    print(f"Computing {levels}-level hierarchical communities using recursive subdivision...")
 
-    # Create igraph graph
-    node_to_idx = {node: i for i, node in enumerate(nodes)}
-    idx_to_node = {i: node for i, node in enumerate(nodes)}
+    n = len(nodes)
+    print(f"Total nodes: {n}")
 
-    edge_indices = []
-    for src, dst in edges:
-        if src in node_to_idx and dst in node_to_idx:
-            edge_indices.append((node_to_idx[src], node_to_idx[dst]))
+    # Build edge lookup for subgraph extraction
+    node_set = set(nodes)
+    edge_list = [(s, t) for s, t in edges if s in node_set and t in node_set]
 
-    G = ig.Graph(n=len(nodes), edges=edge_indices, directed=False)
-    print(f"Graph: {G.vcount()} vertices, {G.ecount()} edges")
+    # Initialize hierarchy - all nodes start at cluster 0 for all levels
+    hierarchy = {node_id: {f'level{i}': 0 for i in range(levels)} for node_id in nodes}
 
-    # Initialize hierarchy storage
-    hierarchy = {node_id: {} for node_id in nodes}
+    # Target number of clusters at L0: adaptive based on graph size
+    # sqrt(n) / 3 gives: n=100 -> 3, n=1000 -> 10, n=10000 -> 33, n=30000 -> 58
+    target_l0_clusters = max(3, int(math.sqrt(n) / 3))
+    print(f"  Target L0 clusters: ~{target_l0_clusters}")
 
-    # Detect communities at each level with different resolutions
-    # Higher resolution = more communities (finer granularity)
-    # 5 levels: from very coarse (~5-15 clusters) to very fine (many small clusters)
-    resolutions = [0.1, 0.3, 0.6, 1.0, 2.0]  # Level 0 (coarsest) to Level 4 (finest)
+    # Minimum cluster size to subdivide (don't subdivide tiny clusters)
+    min_subdivide_size = max(5, n // 500)  # At least 5 nodes, or 0.2% of graph
+    print(f"  Min cluster size to subdivide: {min_subdivide_size}")
 
+    def run_leiden_on_subgraph(node_subset, target_clusters=None):
+        """Run Leiden on a subset of nodes, return cluster assignments."""
+        if len(node_subset) < 3:
+            return {nid: 0 for nid in node_subset}
+
+        # Build subgraph
+        subset_set = set(node_subset)
+        sub_node_to_idx = {node: i for i, node in enumerate(node_subset)}
+        idx_to_sub_node = {i: node for i, node in enumerate(node_subset)}
+
+        sub_edges = []
+        for s, t in edge_list:
+            if s in subset_set and t in subset_set:
+                sub_edges.append((sub_node_to_idx[s], sub_node_to_idx[t]))
+
+        if len(sub_edges) == 0:
+            # No edges - each node is its own cluster
+            return {nid: i for i, nid in enumerate(node_subset)}
+
+        G = ig.Graph(n=len(node_subset), edges=sub_edges, directed=False)
+
+        # Binary search for resolution that gives target cluster count
+        target = target_clusters or max(2, len(node_subset) // 5)
+
+        # Search for resolution that gives approximately target clusters
+        lo_res, hi_res = 0.001, 10.0
+        best_result = None
+        best_diff = float('inf')
+
+        for _ in range(8):  # Binary search iterations
+            mid_res = (lo_res + hi_res) / 2
+            try:
+                partition = G.community_leiden(
+                    objective_function='modularity',
+                    resolution=mid_res,
+                    n_iterations=5
+                )
+                num_clusters = len(set(partition.membership))
+                diff = abs(num_clusters - target)
+
+                if diff < best_diff:
+                    best_diff = diff
+                    best_result = partition.membership
+
+                if num_clusters < target:
+                    lo_res = mid_res  # Need more clusters -> higher resolution
+                elif num_clusters > target:
+                    hi_res = mid_res  # Need fewer clusters -> lower resolution
+                else:
+                    break  # Found exact target
+
+            except Exception:
+                hi_res = mid_res
+
+        if best_result is None:
+            return {nid: 0 for nid in node_subset}
+
+        return {idx_to_sub_node[i]: c for i, c in enumerate(best_result)}
+
+    def subdivide_clusters(node_ids, current_level, parent_cluster_id, global_cluster_counter):
+        """Recursively subdivide a set of nodes into sub-clusters."""
+        if current_level >= levels:
+            return global_cluster_counter
+
+        # Minimum size to subdivide decreases at deeper levels
+        level_min_size = max(3, min_subdivide_size // (2 ** current_level))
+
+        if len(node_ids) < level_min_size:
+            # Too small to subdivide - assign all to same cluster
+            cluster_id = global_cluster_counter[current_level]
+            global_cluster_counter[current_level] += 1
+            for nid in node_ids:
+                hierarchy[nid][f'level{current_level}'] = cluster_id
+            # Also fill in remaining levels with same cluster ID (leaf node)
+            for remaining_level in range(current_level + 1, levels):
+                remaining_cluster_id = global_cluster_counter[remaining_level]
+                global_cluster_counter[remaining_level] += 1
+                for nid in node_ids:
+                    hierarchy[nid][f'level{remaining_level}'] = remaining_cluster_id
+            return global_cluster_counter
+
+        # Determine target subdivision based on level and cluster size
+        if current_level == 0:
+            target = target_l0_clusters
+        else:
+            # Target: subdivide into 2-6 parts depending on size
+            # Larger clusters get more subdivisions
+            if len(node_ids) > 100:
+                target = min(6, max(3, len(node_ids) // 30))
+            elif len(node_ids) > 30:
+                target = min(5, max(2, len(node_ids) // 10))
+            elif len(node_ids) > 10:
+                target = min(4, max(2, len(node_ids) // 5))
+            else:
+                target = 2
+
+        # Run Leiden to subdivide
+        sub_assignments = run_leiden_on_subgraph(node_ids, target_clusters=target)
+
+        # Group nodes by their sub-cluster
+        sub_clusters = {}
+        for nid, sub_id in sub_assignments.items():
+            if sub_id not in sub_clusters:
+                sub_clusters[sub_id] = []
+            sub_clusters[sub_id].append(nid)
+
+        # If Leiden returned only 1 cluster but we have enough nodes, force split
+        if len(sub_clusters) == 1 and len(node_ids) >= level_min_size * 2:
+            # Force split into 2 by node order
+            half = len(node_ids) // 2
+            node_list = list(node_ids)
+            sub_clusters = {0: node_list[:half], 1: node_list[half:]}
+
+        # Assign global cluster IDs and recurse
+        for sub_id, sub_nodes in sub_clusters.items():
+            cluster_id = global_cluster_counter[current_level]
+            global_cluster_counter[current_level] += 1
+
+            for nid in sub_nodes:
+                hierarchy[nid][f'level{current_level}'] = cluster_id
+
+            # Recurse to next level
+            subdivide_clusters(sub_nodes, current_level + 1, cluster_id, global_cluster_counter)
+
+        return global_cluster_counter
+
+    # Start recursive subdivision from level 0
+    global_cluster_counter = {i: 0 for i in range(levels)}
+    subdivide_clusters(nodes, 0, 0, global_cluster_counter)
+
+    # Post-process: merge small L0 clusters if we have too many
+    l0_clusters = {}
+    for nid in nodes:
+        l0 = hierarchy[nid]['level0']
+        if l0 not in l0_clusters:
+            l0_clusters[l0] = []
+        l0_clusters[l0].append(nid)
+
+    num_l0 = len(l0_clusters)
+    if num_l0 > target_l0_clusters * 2:
+        print(f"  Merging L0 clusters: {num_l0} -> ~{target_l0_clusters}")
+
+        # Sort clusters by size
+        sorted_clusters = sorted(l0_clusters.items(), key=lambda x: len(x[1]), reverse=True)
+
+        # Keep top clusters, merge rest into nearest large cluster
+        # Use simple approach: assign small clusters to buckets round-robin
+        large_clusters = sorted_clusters[:target_l0_clusters]
+        small_clusters = sorted_clusters[target_l0_clusters:]
+
+        # Build new L0 mapping
+        new_l0_map = {}
+        for new_id, (old_id, node_list) in enumerate(large_clusters):
+            for nid in node_list:
+                new_l0_map[nid] = new_id
+
+        # Distribute small clusters among large ones (round-robin)
+        for i, (old_id, node_list) in enumerate(small_clusters):
+            target_l0 = i % target_l0_clusters
+            for nid in node_list:
+                new_l0_map[nid] = target_l0
+
+        # Apply new L0 assignments
+        for nid in nodes:
+            hierarchy[nid]['level0'] = new_l0_map[nid]
+
+    # Print summary
     for level in range(levels):
-        resolution = resolutions[level] if level < len(resolutions) else 1.0
-
-        try:
-            # Use Leiden algorithm
-            partition = G.community_leiden(
-                objective_function='modularity',
-                resolution=resolution,
-                n_iterations=10
-            )
-
-            # Assign cluster IDs to nodes
-            membership = partition.membership
-            num_communities = len(set(membership))
-
-            for idx, cluster_id in enumerate(membership):
-                node_id = idx_to_node[idx]
-                hierarchy[node_id][f'level{level}'] = cluster_id
-
-            print(f"  Level {level} (resolution={resolution}): {num_communities} communities")
-
-        except Exception as e:
-            print(f"  Level {level} Leiden failed: {e}, using single community")
-            for node_id in nodes:
-                hierarchy[node_id][f'level{level}'] = 0
-
-    # Ensure hierarchical consistency: nodes in same fine cluster should be in same coarse cluster
-    hierarchy = make_hierarchy_consistent(hierarchy, levels)
+        cluster_ids = set(hierarchy[nid][f'level{level}'] for nid in nodes)
+        print(f"  Level {level}: {len(cluster_ids)} clusters")
 
     return hierarchy
 
