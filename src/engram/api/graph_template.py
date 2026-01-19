@@ -580,46 +580,19 @@ GRAPH_HTML = """
         }
 
         async function loadViewportData() {
-            if (loadingViewport) return;
-            const vp = getViewportBounds();
-            if (!viewportChanged(vp, lastViewport)) return;
-
-            loadingViewport = true;
-            lastViewport = vp;
-
-            try {
-                const url = `/admin/graph/data?min_x=${vp.min_x}&max_x=${vp.max_x}&min_y=${vp.min_y}&max_y=${vp.max_y}`;
-                const data = await (await fetch(url)).json();
-
-                nodes = data.nodes;
-                links = data.links;
-                nodeMap = {};
-                nodes.forEach(n => nodeMap[n.id] = n);
-                console.log(`Loaded ${nodes.length} nodes, ${links.length} links at scale=${scale.toFixed(4)}`);
-
-                // Compute connection statistics for dynamic LOD
-                computeConnStats();
-
-                // Compute cluster centers for constellation mode (uses viewport nodes)
-                computeClusterCenters();
-
-                // Note: Hierarchical centers (level0Centers, level1Centers) are computed
-                // once from ALL nodes at init, not from viewport data
-
-                // Compute inter-cluster edges for zoomed-out view
-                computeInterClusterEdges();
-
-                render();
-            } catch (e) {
-                console.error('Failed to load:', e);
-            } finally {
-                loadingViewport = false;
-            }
+            // With lazy loading, we don't fetch from server on viewport change
+            // Nodes are loaded on-demand when user clicks into clusters
+            // Just re-render with currently loaded data
+            render();
         }
 
         function scheduleViewportLoad() {
             if (viewportDebounceTimer) clearTimeout(viewportDebounceTimer);
-            viewportDebounceTimer = setTimeout(loadViewportData, 100);
+            viewportDebounceTimer = setTimeout(() => {
+                // Auto-load clusters that are in view (optional enhancement)
+                // For now, just re-render
+                render();
+            }, 100);
         }
 
         function isNodeVisible(node) {
@@ -1202,6 +1175,7 @@ GRAPH_HTML = """
                     const pos = worldToScreen(center.x, center.y);
                     if (pos.x < -300 || pos.x > w + 300 || pos.y < -300 || pos.y > h + 300) continue;
 
+                    const isLoaded = loadedClusters.has(parseInt(l0Id));
                     const color = clusterPalette[l0Id % clusterPalette.length];
                     // Size proportional to node count - use sqrt for visual area scaling
                     const relativeSize = Math.sqrt(center.nodeCount / maxNodeCount);
@@ -1215,7 +1189,9 @@ GRAPH_HTML = """
                     // Convert to world units for current scale
                     const size = minScreenPx / scale;
 
-                    nodeData.push(center.x, center.y, color[0], color[1], color[2], opacity, size);
+                    // Unloaded clusters are dimmer/more transparent
+                    const clusterOpacity = isLoaded ? opacity : opacity * 0.6;
+                    nodeData.push(center.x, center.y, color[0], color[1], color[2], clusterOpacity, size);
 
                     // Labels for level 0
                     if (showLevel0 && center.nodeCount >= 5) {
@@ -1225,7 +1201,8 @@ GRAPH_HTML = """
                             name: center.name,
                             count: center.nodeCount,
                             color: color,
-                            size: size
+                            size: size,
+                            loaded: isLoaded
                         });
                     }
                 }
@@ -1407,11 +1384,22 @@ GRAPH_HTML = """
 
                     const color = label.color;
                     const fontSize = Math.min(32, Math.max(14, 12 + Math.log(label.count) * 3));
-                    const textColor = `rgb(${color[0]*255}, ${color[1]*255}, ${color[2]*255})`;
+                    const isLoaded = label.loaded;
+
+                    // Loaded clusters are bright, unloaded are dimmer with indicator
+                    const textColor = isLoaded
+                        ? `rgb(${color[0]*255}, ${color[1]*255}, ${color[2]*255})`
+                        : `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.6)`;
 
                     labelCtx.shadowBlur = 0;
                     drawTextWithBg(label.name, pos.x, pos.y - 10, `bold ${fontSize}px -apple-system, sans-serif`, textColor);
-                    drawTextWithBg(`${label.count} nodes`, pos.x, pos.y + fontSize - 5, `${Math.max(10, fontSize * 0.6)}px -apple-system, sans-serif`, 'rgba(255,255,255,0.7)');
+
+                    // Show different indicator for loaded vs unloaded
+                    if (isLoaded) {
+                        drawTextWithBg(`${label.count} nodes`, pos.x, pos.y + fontSize - 5, `${Math.max(10, fontSize * 0.6)}px -apple-system, sans-serif`, 'rgba(255,255,255,0.7)');
+                    } else {
+                        drawTextWithBg(`${label.count} nodes · click to load`, pos.x, pos.y + fontSize - 5, `${Math.max(10, fontSize * 0.6)}px -apple-system, sans-serif`, 'rgba(200,200,255,0.5)');
+                    }
 
                 } else if (label.type === 'level1') {
                     const pos = worldToScreen(label.x, label.y);
@@ -2042,7 +2030,7 @@ GRAPH_HTML = """
             }
         });
 
-        canvas.addEventListener('mouseup', (e) => {
+        canvas.addEventListener('mouseup', async (e) => {
             if (Math.abs(e.clientX - dragStartX) < 5 && Math.abs(e.clientY - dragStartY) < 5) {
                 // Check for hierarchical cluster click first (when zoomed out)
                 const clusterHit = findClusterAtPosition(e.clientX, e.clientY);
@@ -2059,7 +2047,12 @@ GRAPH_HTML = """
                         level3: 0.2
                     };
                     const targetScale = targetScales[clusterHit.type] || 0.2;
-                    animateToHierarchicalCluster(clusterHit.center, targetScale);
+
+                    // Extract L0 cluster ID for lazy loading
+                    const l0Id = clusterHit.type === 'level0' ? parseInt(clusterHit.id) :
+                                 parseInt(clusterHit.id.split('-')[0]);
+
+                    await animateToHierarchicalCluster(clusterHit.center, targetScale, l0Id);
                     isDragging = false;
                     return;
                 }
@@ -2078,7 +2071,7 @@ GRAPH_HTML = """
             isDragging = false;
         });
 
-        function animateToHierarchicalCluster(center, targetScale) {
+        async function animateToHierarchicalCluster(center, targetScale, clusterId = null) {
             // Animate to center of hierarchical cluster with appropriate zoom
             const padding = 1.1;
             const fitScale = Math.min(
@@ -2087,7 +2080,18 @@ GRAPH_HTML = """
             );
             const finalScale = Math.max(targetScale, fitScale);
             console.log(`Zooming to cluster: ${center.name}, x=${center.x.toFixed(0)}, y=${center.y.toFixed(0)}, radius=${center.radius.toFixed(0)}, nodes=${center.nodeCount}, finalScale=${finalScale.toFixed(4)}`);
-            console.log(`Graph bounds: x=[${bounds.min_x?.toFixed(0)}, ${bounds.max_x?.toFixed(0)}], y=[${bounds.min_y?.toFixed(0)}, ${bounds.max_y?.toFixed(0)}]`);
+
+            // Lazy load: If this is an L0 cluster and not yet loaded, load it
+            if (clusterId !== null && !loadedClusters.has(clusterId)) {
+                console.log(`Lazy loading cluster ${clusterId}...`);
+                await loadClusterData(clusterId);
+
+                // Also load cross-cluster links if this is the first cluster
+                if (loadedClusters.size === 1) {
+                    loadCrossClusterLinks();  // Fire and forget
+                }
+            }
+
             animateTo(center.x, center.y, finalScale);
         }
 
@@ -2510,6 +2514,14 @@ GRAPH_HTML = """
             this.style.height = Math.min(this.scrollHeight, 100) + 'px';
         });
 
+        // Lazy loading state
+        let loadedClusters = new Set();  // L0 cluster IDs that have been loaded
+        let clusterNodes = {};  // L0 ID -> array of nodes
+        let clusterLinks = {};  // L0 ID -> array of internal links
+        let crossClusterLinks = [];  // Links between clusters
+        let clusterCentersData = null;  // Cached cluster centers from API
+        let isLoadingCluster = false;
+
         async function init() {
             resize();
             window.addEventListener('resize', resize);
@@ -2523,8 +2535,6 @@ GRAPH_HTML = """
             bounds = boundsData;
             viewX = (bounds.min_x + bounds.max_x) / 2;
             viewY = (bounds.min_y + bounds.max_y) / 2;
-            // Fit graph on screen: graphSize * scale * 4 / screenSize = 2 (full clipspace)
-            // So scale = screenSize * 0.7 / (graphSize * 2) for 70% fit
             const graphWidth = bounds.max_x - bounds.min_x;
             const graphHeight = bounds.max_y - bounds.min_y;
             scale = Math.max(0.001, Math.min(1, Math.min(
@@ -2532,7 +2542,6 @@ GRAPH_HTML = """
                 window.innerHeight * 0.7 / (graphHeight * 2)
             )));
 
-            // Store initial view for ESC reset
             initialView = { x: viewX, y: viewY, scale: scale };
 
             const stats = await (await fetch('/admin/graph/stats')).json();
@@ -2541,131 +2550,253 @@ GRAPH_HTML = """
             document.getElementById('e-count').textContent = stats.episodic;
             document.getElementById('stats').innerHTML = `<div>Total: <strong style="color:#5eead4">${stats.total}</strong></div><div>Clusters: <strong style="color:#a78bfa">${stats.clusters}</strong></div>`;
 
+            // Lazy load: Only load cluster centers initially (very fast)
+            await loadClusterCentersOnly();
+
             document.getElementById('loading').style.display = 'none';
 
-            // Load ALL nodes first to compute correct hierarchical centers
-            await loadAllNodesForCenters();
+            // Start with overview (no nodes loaded yet, just cluster bubbles)
+            render();
 
-            // Then load viewport data for rendering
-            await loadViewportData();
-
-            // Start continuous animation for cluster pulsing and particles
             startContinuousAnimation();
         }
 
-        async function loadAllNodesForCenters() {
-            // Load all nodes without viewport filter to compute correct cluster centers
+        async function loadClusterCentersOnly() {
+            const loadingEl = document.getElementById('loading');
+            loadingEl.innerHTML = 'Loading cluster map...';
+
             try {
-                const url = `/admin/graph/data`;  // No viewport params = all nodes
-                const data = await (await fetch(url)).json();
+                clusterCentersData = await (await fetch('/admin/graph/clusters')).json();
 
-                // Temporarily use all nodes to compute hierarchical centers
-                const allNodes = data.nodes;
-                const allLinks = data.links;
+                // Build hierarchical centers from API data (no nodes loaded yet)
+                buildCentersFromClusterData(clusterCentersData);
 
-                // Build node map for all nodes
-                const allNodeMap = {};
-                allNodes.forEach(n => allNodeMap[n.id] = n);
-
-                // Compute hierarchical centers from ALL nodes
-                computeHierarchicalCentersFromNodes(allNodes, allLinks, allNodeMap);
-
-                console.log(`Computed hierarchical centers from ${allNodes.length} total nodes`);
+                console.log(`Loaded ${clusterCentersData.l0.length} L0 clusters, ${clusterCentersData.l1.length} L1, ${clusterCentersData.l2.length} L2 (${clusterCentersData.total_nodes} total nodes available)`);
             } catch (e) {
-                console.error('Failed to load all nodes for centers:', e);
+                console.error('Failed to load cluster centers:', e);
             }
         }
 
-        function computeHierarchicalCentersFromNodes(allNodes, allLinks, allNodeMap) {
-            // Compute centers for all 4 hierarchical cluster levels from full node set
+        function buildCentersFromClusterData(data) {
+            // Build level0Centers from API data
             level0Centers = {};
+            for (const c of data.l0) {
+                level0Centers[c.level0] = {
+                    x: c.center_x,
+                    y: c.center_y,
+                    radius: c.radius || 200,
+                    nodeCount: c.node_count,
+                    name: c.name || 'Cluster',
+                    loaded: loadedClusters.has(c.level0)
+                };
+            }
+
+            // Build level1Centers
             level1Centers = {};
+            for (const c of data.l1) {
+                const key = `${c.level0}-${c.level1}`;
+                level1Centers[key] = {
+                    x: c.center_x,
+                    y: c.center_y,
+                    radius: 150,
+                    nodeCount: c.node_count,
+                    parent: c.level0,
+                    name: `Sub-cluster ${c.level1}`
+                };
+            }
+
+            // Build level2Centers
             level2Centers = {};
-            level3Centers = {};
-            level0Edges = [];
+            for (const c of data.l2) {
+                const key = `${c.level0}-${c.level1}-${c.level2}`;
+                level2Centers[key] = {
+                    x: c.center_x,
+                    y: c.center_y,
+                    radius: 100,
+                    nodeCount: c.node_count,
+                    parent: c.level0,
+                    name: `Group ${c.level2}`
+                };
+            }
+
+            // Build L0 edges
+            level0Edges = data.edges.map(e => ({
+                from: String(e.from),
+                to: String(e.to),
+                count: e.weight
+            }));
+
             level1Edges = [];
             level2Edges = [];
             level3Edges = [];
+            level3Centers = {};
+        }
 
-            // Helper to compute centers for a level
-            function computeLevelCenters(levelKeys, radiusPadding) {
-                const grouped = {};
-                for (const node of allNodes) {
-                    const key = levelKeys.map(k => node[k] || 0).join('-');
-                    if (!grouped[key]) grouped[key] = [];
-                    grouped[key].push(node);
+        async function loadClusterData(level0Id) {
+            if (loadedClusters.has(level0Id) || isLoadingCluster) return;
+
+            isLoadingCluster = true;
+            console.log(`Loading cluster ${level0Id}...`);
+
+            try {
+                const data = await (await fetch(`/admin/graph/data/cluster/${level0Id}`)).json();
+
+                clusterNodes[level0Id] = data.nodes;
+                clusterLinks[level0Id] = data.links;
+                loadedClusters.add(level0Id);
+
+                // Mark cluster as loaded in centers
+                if (level0Centers[level0Id]) {
+                    level0Centers[level0Id].loaded = true;
                 }
 
-                const centers = {};
-                for (const [key, nodeList] of Object.entries(grouped)) {
-                    if (nodeList.length === 0) continue;
+                // Rebuild nodes/links arrays from all loaded clusters
+                rebuildNodesFromLoadedClusters();
 
-                    const sumX = nodeList.reduce((s, n) => s + n.x, 0);
-                    const sumY = nodeList.reduce((s, n) => s + n.y, 0);
-                    const count = nodeList.length;
-                    const cx = sumX / count;
-                    const cy = sumY / count;
+                console.log(`Loaded cluster ${level0Id}: ${data.nodes.length} nodes, ${data.links.length} links`);
+                render();
+            } catch (e) {
+                console.error(`Failed to load cluster ${level0Id}:`, e);
+            } finally {
+                isLoadingCluster = false;
+            }
+        }
 
-                    let maxDist = 0;
-                    for (const node of nodeList) {
-                        const dx = node.x - cx;
-                        const dy = node.y - cy;
-                        const dist = Math.sqrt(dx*dx + dy*dy);
-                        if (dist > maxDist) maxDist = dist;
+        function rebuildNodesFromLoadedClusters() {
+            // Combine all loaded cluster data into nodes/links arrays
+            nodes = [];
+            nodeMap = {};
+
+            for (const l0Id of loadedClusters) {
+                const clusterNodeList = clusterNodes[l0Id] || [];
+                for (const n of clusterNodeList) {
+                    if (!nodeMap[n.id]) {
+                        nodes.push(n);
+                        nodeMap[n.id] = n;
                     }
-
-                    const sorted = [...nodeList].sort((a, b) => (b.conn || 0) - (a.conn || 0));
-                    const topName = sorted[0]?.name || 'Cluster';
-                    const parent = parseInt(key.split('-')[0]) || 0;
-
-                    centers[key] = {
-                        x: cx, y: cy,
-                        radius: maxDist + radiusPadding,
-                        nodeCount: count,
-                        parent: parent,
-                        name: topName.length > 25 ? topName.substring(0, 25) + '...' : topName
-                    };
                 }
-                return centers;
             }
 
-            // Compute centers for each level
-            level0Centers = computeLevelCenters(['level0'], 200);
-            level1Centers = computeLevelCenters(['level0', 'level1'], 150);
-            level2Centers = computeLevelCenters(['level0', 'level1', 'level2'], 100);
-            level3Centers = computeLevelCenters(['level0', 'level1', 'level2', 'level3'], 50);
-
-            // Helper to compute inter-cluster edges
-            function computeLevelEdges(levelKeys) {
-                const edgeCounts = {};
-                for (const link of allLinks) {
-                    const s = allNodeMap[link.source];
-                    const t = allNodeMap[link.target];
-                    if (!s || !t) continue;
-
-                    const keyS = levelKeys.map(k => s[k] || 0).join('-');
-                    const keyT = levelKeys.map(k => t[k] || 0).join('-');
-                    if (keyS === keyT) continue;
-
-                    const edgeKey = keyS < keyT ? `${keyS}|${keyT}` : `${keyT}|${keyS}`;
-                    edgeCounts[edgeKey] = (edgeCounts[edgeKey] || 0) + 1;
+            // Combine internal links from loaded clusters
+            links = [];
+            for (const l0Id of loadedClusters) {
+                const clusterLinkList = clusterLinks[l0Id] || [];
+                for (const link of clusterLinkList) {
+                    if (nodeMap[link.source] && nodeMap[link.target]) {
+                        links.push(link);
+                    }
                 }
-
-                const edges = [];
-                for (const [key, count] of Object.entries(edgeCounts)) {
-                    const [from, to] = key.split('|');
-                    edges.push({ from, to, count });
-                }
-                edges.sort((a, b) => b.count - a.count);
-                return edges;
             }
 
-            level0Edges = computeLevelEdges(['level0']);
-            level1Edges = computeLevelEdges(['level0', 'level1']);
-            level2Edges = computeLevelEdges(['level0', 'level1', 'level2']);
-            level3Edges = computeLevelEdges(['level0', 'level1', 'level2', 'level3']);
+            // Add cross-cluster links between loaded clusters
+            for (const link of crossClusterLinks) {
+                if (nodeMap[link.source] && nodeMap[link.target]) {
+                    links.push(link);
+                }
+            }
 
-            console.log(`Hierarchical centers: ${Object.keys(level0Centers).length} L0, ${Object.keys(level1Centers).length} L1, ${Object.keys(level2Centers).length} L2, ${Object.keys(level3Centers).length} L3`);
+            // Recompute centers for loaded data
+            if (nodes.length > 0) {
+                computeDetailedCentersForLoadedNodes();
+            }
+
+            computeConnStats();
+            computeClusterCenters();
+            computeInterClusterEdges();
+        }
+
+        function computeDetailedCentersForLoadedNodes() {
+            // Update level1-3 centers with actual loaded node data
+            const tempLevel1 = {};
+            const tempLevel2 = {};
+            const tempLevel3 = {};
+
+            for (const node of nodes) {
+                // L1
+                const l1Key = `${node.level0}-${node.level1}`;
+                if (!tempLevel1[l1Key]) tempLevel1[l1Key] = [];
+                tempLevel1[l1Key].push(node);
+
+                // L2
+                const l2Key = `${node.level0}-${node.level1}-${node.level2}`;
+                if (!tempLevel2[l2Key]) tempLevel2[l2Key] = [];
+                tempLevel2[l2Key].push(node);
+
+                // L3
+                const l3Key = `${node.level0}-${node.level1}-${node.level2}-${node.level3}`;
+                if (!tempLevel3[l3Key]) tempLevel3[l3Key] = [];
+                tempLevel3[l3Key].push(node);
+            }
+
+            // Compute L1 centers from actual nodes
+            for (const [key, nodeList] of Object.entries(tempLevel1)) {
+                const cx = nodeList.reduce((s, n) => s + n.x, 0) / nodeList.length;
+                const cy = nodeList.reduce((s, n) => s + n.y, 0) / nodeList.length;
+                let maxDist = 0;
+                for (const n of nodeList) {
+                    const d = Math.sqrt((n.x - cx)**2 + (n.y - cy)**2);
+                    if (d > maxDist) maxDist = d;
+                }
+                const sorted = [...nodeList].sort((a, b) => (b.conn || 0) - (a.conn || 0));
+                level1Centers[key] = {
+                    x: cx, y: cy,
+                    radius: maxDist + 100,
+                    nodeCount: nodeList.length,
+                    parent: parseInt(key.split('-')[0]) || 0,
+                    name: (sorted[0]?.name || 'Cluster').substring(0, 25)
+                };
+            }
+
+            // Compute L2 centers
+            for (const [key, nodeList] of Object.entries(tempLevel2)) {
+                const cx = nodeList.reduce((s, n) => s + n.x, 0) / nodeList.length;
+                const cy = nodeList.reduce((s, n) => s + n.y, 0) / nodeList.length;
+                let maxDist = 0;
+                for (const n of nodeList) {
+                    const d = Math.sqrt((n.x - cx)**2 + (n.y - cy)**2);
+                    if (d > maxDist) maxDist = d;
+                }
+                const sorted = [...nodeList].sort((a, b) => (b.conn || 0) - (a.conn || 0));
+                level2Centers[key] = {
+                    x: cx, y: cy,
+                    radius: maxDist + 50,
+                    nodeCount: nodeList.length,
+                    parent: parseInt(key.split('-')[0]) || 0,
+                    name: (sorted[0]?.name || 'Group').substring(0, 25)
+                };
+            }
+
+            // Compute L3 centers
+            for (const [key, nodeList] of Object.entries(tempLevel3)) {
+                const cx = nodeList.reduce((s, n) => s + n.x, 0) / nodeList.length;
+                const cy = nodeList.reduce((s, n) => s + n.y, 0) / nodeList.length;
+                let maxDist = 0;
+                for (const n of nodeList) {
+                    const d = Math.sqrt((n.x - cx)**2 + (n.y - cy)**2);
+                    if (d > maxDist) maxDist = d;
+                }
+                const sorted = [...nodeList].sort((a, b) => (b.conn || 0) - (a.conn || 0));
+                level3Centers[key] = {
+                    x: cx, y: cy,
+                    radius: maxDist + 30,
+                    nodeCount: nodeList.length,
+                    parent: parseInt(key.split('-')[0]) || 0,
+                    name: (sorted[0]?.name || 'Set').substring(0, 25)
+                };
+            }
+        }
+
+        async function loadCrossClusterLinks() {
+            if (crossClusterLinks.length > 0) return;
+
+            try {
+                const data = await (await fetch('/admin/graph/links/cross')).json();
+                crossClusterLinks = data.links;
+                console.log(`Loaded ${crossClusterLinks.length} cross-cluster links`);
+                rebuildNodesFromLoadedClusters();
+            } catch (e) {
+                console.error('Failed to load cross-cluster links:', e);
+            }
         }
 
         init();
