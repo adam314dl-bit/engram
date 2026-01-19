@@ -1375,20 +1375,24 @@ GRAPH_HTML = """
             labelCtx.textAlign = 'center';
 
             // Helper to draw text with background
-            function drawTextWithBg(text, x, y, font, textColor, bgColor = 'rgba(10, 10, 18, 0.75)', padding = 4) {
+            function drawTextWithBg(text, x, y, font, textColor, bgColor = 'rgba(10, 10, 18, 0.8)', padding = 3) {
                 labelCtx.font = font;
                 const metrics = labelCtx.measureText(text);
                 const textWidth = metrics.width;
-                const textHeight = parseInt(font) || 12;
+                // Extract font size from font string (e.g., "bold 14px ..." -> 14)
+                const fontSizeMatch = font.match(/(\d+)px/);
+                const fontSize = fontSizeMatch ? parseInt(fontSizeMatch[1]) : 12;
+
+                // Background positioned around text (text baseline is at y)
+                const bgX = x - textWidth / 2 - padding;
+                const bgY = y - fontSize + 1;
+                const bgW = textWidth + padding * 2;
+                const bgH = fontSize + padding + 2;
 
                 // Draw background
                 labelCtx.fillStyle = bgColor;
-                const bgX = x - textWidth / 2 - padding;
-                const bgY = y - textHeight + 2;
-                const bgW = textWidth + padding * 2;
-                const bgH = textHeight + padding;
                 labelCtx.beginPath();
-                labelCtx.roundRect(bgX, bgY, bgW, bgH, 3);
+                labelCtx.roundRect(bgX, bgY, bgW, bgH, 2);
                 labelCtx.fill();
 
                 // Draw text
