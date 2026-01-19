@@ -528,6 +528,7 @@ GRAPH_HTML = """
         <div class="control-row">
             <button class="toggle-btn" id="cluster-btn" onclick="toggleClusters()">Clusters</button>
             <button class="toggle-btn" id="bundle-btn" onclick="toggleBundling()">Bundle</button>
+            <button class="toggle-btn" id="constellation-btn" onclick="toggleConstellation()">✨ Constellation</button>
         </div>
     </div>
 
@@ -581,8 +582,9 @@ GRAPH_HTML = """
         let highlightedNodes = new Set();
         let neighborNodes = new Set();
         let activatedNodes = new Set(); // Nodes activated by chat
-        let showClusters = false, showBundling = false;
+        let showClusters = false, showBundling = false, showConstellation = false;
         let typeFilters = new Set(); // empty = show all
+        let clusterCenters = {}; // { clusterId: { x, y, name, nodeCount, topNodes } }
 
         let isDragging = false, lastMouseX = 0, lastMouseY = 0, dragStartX = 0, dragStartY = 0;
         let animationFrameId = null;
@@ -983,6 +985,85 @@ GRAPH_HTML = """
                 }
                 labelCtx.restore();
             }
+
+            // Draw constellation mode overlay
+            if (showConstellation && Object.keys(clusterCenters).length > 0) {
+                labelCtx.save();
+                labelCtx.scale(dpr, dpr);
+
+                const centersList = Object.entries(clusterCenters);
+
+                // Draw constellation lines between nearby clusters
+                labelCtx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+                labelCtx.lineWidth = 1;
+                labelCtx.setLineDash([5, 10]);
+
+                for (let i = 0; i < centersList.length; i++) {
+                    const [id1, c1] = centersList[i];
+                    const pos1 = worldToScreen(c1.x, c1.y);
+
+                    // Connect to 2-3 nearest clusters
+                    const distances = [];
+                    for (let j = 0; j < centersList.length; j++) {
+                        if (i === j) continue;
+                        const [id2, c2] = centersList[j];
+                        const dx = c2.x - c1.x, dy = c2.y - c1.y;
+                        distances.push({ j, dist: Math.sqrt(dx*dx + dy*dy) });
+                    }
+                    distances.sort((a, b) => a.dist - b.dist);
+
+                    // Draw lines to nearest 2 clusters
+                    for (let k = 0; k < Math.min(2, distances.length); k++) {
+                        const [id2, c2] = centersList[distances[k].j];
+                        const pos2 = worldToScreen(c2.x, c2.y);
+
+                        labelCtx.beginPath();
+                        labelCtx.moveTo(pos1.x, pos1.y);
+                        labelCtx.lineTo(pos2.x, pos2.y);
+                        labelCtx.stroke();
+                    }
+                }
+
+                labelCtx.setLineDash([]);
+
+                // Draw cluster centers as stars and labels
+                for (const [clusterId, center] of centersList) {
+                    const pos = worldToScreen(center.x, center.y);
+                    if (pos.x < -100 || pos.x > w + 100 || pos.y < -100 || pos.y > h + 100) continue;
+
+                    // Draw star shape at cluster center
+                    const starSize = Math.min(20, 8 + Math.log(center.nodeCount) * 3);
+                    const color = clusterPalette[clusterId % clusterPalette.length];
+
+                    // Glow
+                    const gradient = labelCtx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, starSize * 2);
+                    gradient.addColorStop(0, `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.6)`);
+                    gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+                    labelCtx.fillStyle = gradient;
+                    labelCtx.beginPath();
+                    labelCtx.arc(pos.x, pos.y, starSize * 2, 0, Math.PI * 2);
+                    labelCtx.fill();
+
+                    // Star center
+                    labelCtx.fillStyle = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 1)`;
+                    labelCtx.beginPath();
+                    labelCtx.arc(pos.x, pos.y, starSize / 2, 0, Math.PI * 2);
+                    labelCtx.fill();
+
+                    // Cluster name
+                    labelCtx.font = 'bold 12px -apple-system, sans-serif';
+                    labelCtx.fillStyle = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.9)`;
+                    labelCtx.textAlign = 'center';
+                    labelCtx.fillText(center.name, pos.x, pos.y - starSize - 8);
+
+                    // Node count
+                    labelCtx.font = '10px -apple-system, sans-serif';
+                    labelCtx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                    labelCtx.fillText(`${center.nodeCount} nodes`, pos.x, pos.y + starSize + 16);
+                }
+
+                labelCtx.restore();
+            }
         }
 
         function findNodeAt(sx, sy) {
@@ -1137,6 +1218,54 @@ GRAPH_HTML = """
             render();
         }
 
+        function toggleConstellation() {
+            showConstellation = !showConstellation;
+            document.getElementById('constellation-btn').classList.toggle('active', showConstellation);
+            if (showConstellation) {
+                computeClusterCenters();
+            }
+            render();
+        }
+
+        function computeClusterCenters() {
+            clusterCenters = {};
+            const clusterNodes = {};
+
+            // Group nodes by cluster
+            for (const node of nodes) {
+                const c = node.cluster || 0;
+                if (!clusterNodes[c]) clusterNodes[c] = [];
+                clusterNodes[c].push(node);
+            }
+
+            // Compute centers and gather top nodes
+            for (const [clusterId, clusterNodeList] of Object.entries(clusterNodes)) {
+                const sumX = clusterNodeList.reduce((s, n) => s + n.x, 0);
+                const sumY = clusterNodeList.reduce((s, n) => s + n.y, 0);
+                const count = clusterNodeList.length;
+
+                // Sort by connections to find top nodes
+                const sorted = [...clusterNodeList].sort((a, b) => (b.conn || 0) - (a.conn || 0));
+                const topNodes = sorted.slice(0, 5).map(n => n.name || n.id);
+
+                clusterCenters[clusterId] = {
+                    x: sumX / count,
+                    y: sumY / count,
+                    nodeCount: count,
+                    topNodes: topNodes,
+                    name: generateClusterName(topNodes)
+                };
+            }
+        }
+
+        function generateClusterName(topNodes) {
+            // Simple heuristic: use first top node name, shortened
+            if (topNodes.length === 0) return 'Unknown';
+            const name = topNodes[0];
+            if (name.length > 20) return name.substring(0, 20) + '...';
+            return name;
+        }
+
         // Search
         const searchInput = document.getElementById('search-input');
         const searchResults = document.getElementById('search-results');
@@ -1241,6 +1370,7 @@ GRAPH_HTML = """
             }
             isDragging = false;
         });
+
 
         canvas.addEventListener('wheel', (e) => {
             e.preventDefault();

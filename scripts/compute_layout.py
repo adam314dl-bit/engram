@@ -83,7 +83,7 @@ def compute_layout_cugraph(nodes, edges, scale=3000):
     return positions
 
 
-def compute_layout_igraph(nodes, edges, scale=1500):
+def compute_layout_igraph(nodes, edges, scale=5000):
     """Fast CPU layout using igraph (5-20x faster than NetworkX).
 
     Parameters tuned to match NetworkX spring_layout output.
@@ -263,7 +263,7 @@ async def compute_and_store_layout():
 
     # Compute layout (tries GPU -> multi-core -> single-core)
     print("Computing layout...")
-    positions = compute_layout(all_nodes, all_edges, scale=3000)
+    positions = compute_layout(all_nodes, all_edges, scale=5000)
     print("Layout computed.")
 
     # Detect communities
