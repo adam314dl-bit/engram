@@ -199,7 +199,7 @@ Engram includes an interactive WebGL graph visualization of the memory network, 
 - **WebGL Rendering**: Hardware-accelerated graphics for smooth performance
 - **Pre-computed Layout**: Server-side layout using igraph/cuGraph, stored in Neo4j
 - **Viewport Culling**: Only loads nodes visible in current view
-- **5-Level Semantic Zoom**: Hierarchical clustering with drill-down navigation
+- **Level-Based Lazy Loading**: Click clusters to drill down (L0→L1→L2→nodes), ESC to go back
 - **Recursive Subdivision**: Adaptive clustering that scales with graph size
 
 **Node Types:**
@@ -210,7 +210,7 @@ Engram includes an interactive WebGL graph visualization of the memory network, 
 **Features:**
 - **Integrated Chat**: Chat panel with memory activation visualization
 - **Live Activation**: See which nodes are used when answering questions (golden glow)
-- **5-Level Semantic Zoom**: Drill down from super-clusters (L0) to individual nodes (L4)
+- **Level-Based Navigation**: Drill down from L0 clusters → L1 → L2 → individual nodes (ESC to go back)
 - **Cluster Coloring**: Toggle to color nodes by community
 - **Edge Bundling**: Curved edges for cleaner visualization
 - **Search**: Find and focus on specific nodes by name or content
@@ -222,15 +222,13 @@ Engram includes an interactive WebGL graph visualization of the memory network, 
 **Controls:**
 - **💬 Button**: Toggle chat panel
 - **🔍 Button**: Toggle debug mode (in chat)
-- **Click cluster**: Drill down to next level (L0→L1→L2→L3→L4)
+- **Click cluster**: Drill down to next level (L0→L1→L2→nodes)
 - **Click node**: Select and show info panel with connections
 - **Click legend item**: Filter by type (click again to clear)
-- **"Clusters" button**: Toggle cluster-based coloring
-- **"Bundle" button**: Toggle edge bundling
 - **"Show Activation" button**: Re-highlight last chat response nodes
 - **Search box**: Type 2+ characters to search, click result to focus
-- **Escape**: Zoom out to overview, clear selections/filters
-- **Mouse wheel**: Zoom in/out (changes semantic zoom level)
+- **Escape**: Go back one level (or clear selections at top level)
+- **Mouse wheel**: Zoom in/out
 - **Drag**: Pan the view
 
 **Chat Integration:**
@@ -328,9 +326,9 @@ uv run ruff check src/engram
 - [x] **Viewport culling** — Client requests nodes by viewport bounds
 - [x] **WebGL rendering** — Hardware-accelerated for 30k+ nodes
 - [x] **Integrated chat** — Chat with memory activation visualization
-- [x] **5-Level semantic zoom** — L0 super-clusters → L4 individual nodes
+- [x] **Level-based lazy loading** — L0→L1→L2→nodes, never loads more than ~30 items
 - [x] **Recursive subdivision clustering** — Adaptive hierarchical clustering for any graph size
-- [x] **Drill-down navigation** — Click clusters to zoom into next level
+- [x] **Drill-down navigation** — Click clusters to zoom in, ESC to go back
 - [x] **Debug mode** — View retrieved nodes with scores and sources
 - [x] **Temporary node inclusion** — Test queries with/without specific nodes
 
