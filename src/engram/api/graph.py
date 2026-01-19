@@ -1376,7 +1376,7 @@ GRAPH_HTML = """
             e.preventDefault();
             const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
             const mouseWorld = screenToWorld(e.clientX, e.clientY);
-            scale = Math.max(0.05, Math.min(10, scale * zoomFactor));
+            scale = Math.max(0.005, Math.min(10, scale * zoomFactor));
             const newMouseWorld = screenToWorld(e.clientX, e.clientY);
             viewX += mouseWorld.x - newMouseWorld.x;
             viewY += mouseWorld.y - newMouseWorld.y;
@@ -1778,9 +1778,13 @@ GRAPH_HTML = """
             bounds = boundsData;
             viewX = (bounds.min_x + bounds.max_x) / 2;
             viewY = (bounds.min_y + bounds.max_y) / 2;
-            scale = Math.max(0.05, Math.min(1, Math.min(
-                window.innerWidth / (bounds.max_x - bounds.min_x) * 0.8,
-                window.innerHeight / (bounds.max_y - bounds.min_y) * 0.8
+            // Fit graph on screen: graphSize * scale * 4 / screenSize = 2 (full clipspace)
+            // So scale = screenSize * 0.7 / (graphSize * 2) for 70% fit
+            const graphWidth = bounds.max_x - bounds.min_x;
+            const graphHeight = bounds.max_y - bounds.min_y;
+            scale = Math.max(0.005, Math.min(1, Math.min(
+                window.innerWidth * 0.7 / (graphWidth * 2),
+                window.innerHeight * 0.7 / (graphHeight * 2)
             )));
 
             const stats = await (await fetch('/admin/graph/stats')).json();
