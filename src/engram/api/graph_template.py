@@ -1569,8 +1569,6 @@ GRAPH_HTML = """
             render();
         }
 
-        }
-
         function computeClusterCenters() {
             clusterCenters = {};
             const clusterNodes = {};
