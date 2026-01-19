@@ -243,7 +243,7 @@ async def get_graph_stats(request: Request) -> dict:
 
 @router.get("/admin/graph/clusters")
 async def get_cluster_info(request: Request) -> dict:
-    """Get hierarchical cluster centers for lazy loading (L0-L3)."""
+    """Get L0 clusters + inter-L0 edges (initial view)."""
     db = get_db(request)
 
     # Get L0 clusters with centers
@@ -256,206 +256,205 @@ async def get_cluster_info(request: Request) -> dict:
              avg(n.layout_x) as center_x,
              avg(n.layout_y) as center_y,
              count(n) as node_count,
-             max(n.conn) as max_conn
-        RETURN l0, center_x, center_y, node_count, max_conn
-        ORDER BY node_count DESC
-        """
-    )
-
-    # Get top node name and radius for each L0 cluster
-    l0_result = []
-    for c in l0_clusters:
-        # Get radius and top node name with simpler query
-        details = await db.execute_query(
-            """
-            MATCH (n)
-            WHERE n.level0 = $l0 AND n.layout_x IS NOT NULL
-              AND (n:Concept OR n:SemanticMemory OR n:EpisodicMemory)
-            WITH n, sqrt((n.layout_x - $cx) * (n.layout_x - $cx) +
-                         (n.layout_y - $cy) * (n.layout_y - $cy)) as dist
-            WITH max(dist) as radius, collect(n) as nodes
-            WITH radius, [x IN nodes WHERE x.conn = $max_conn | x.name][0] as top_name
-            RETURN radius, top_name
-            """,
-            l0=c["l0"], cx=c["center_x"], cy=c["center_y"], max_conn=c["max_conn"]
-        )
-        d = details[0] if details else {"radius": 100, "top_name": "Cluster"}
-        l0_result.append({
-            "level0": c["l0"],
-            "center_x": c["center_x"],
-            "center_y": c["center_y"],
-            "node_count": c["node_count"],
-            "radius": (d["radius"] or 100) + 50,
-            "name": (d["top_name"] or "Cluster")[:30]
-        })
-
-    # Get L1 clusters with top node name
-    l1_clusters = await db.execute_query(
-        """
-        MATCH (n)
-        WHERE n.layout_x IS NOT NULL AND n.level0 IS NOT NULL AND n.level1 IS NOT NULL
-          AND (n:Concept OR n:SemanticMemory OR n:EpisodicMemory)
-        WITH n.level0 as l0, n.level1 as l1,
-             avg(n.layout_x) as center_x,
-             avg(n.layout_y) as center_y,
-             count(n) as node_count,
              collect(n.name)[0] as top_name
-        RETURN l0, l1, center_x, center_y, node_count, top_name
+        RETURN l0, center_x, center_y, node_count, top_name
         ORDER BY node_count DESC
         """
     )
 
-    l1_result = [{"level0": c["l0"], "level1": c["l1"], "center_x": c["center_x"],
-                  "center_y": c["center_y"], "node_count": c["node_count"],
-                  "name": (c["top_name"] or "Group")[:25]} for c in l1_clusters]
+    clusters = [{
+        "id": c["l0"],
+        "x": c["center_x"],
+        "y": c["center_y"],
+        "count": c["node_count"],
+        "name": (c["top_name"] or "Cluster")[:30]
+    } for c in l0_clusters]
 
-    # Get L2 clusters with top node name
-    l2_clusters = await db.execute_query(
-        """
-        MATCH (n)
-        WHERE n.layout_x IS NOT NULL AND n.level0 IS NOT NULL AND n.level2 IS NOT NULL
-          AND (n:Concept OR n:SemanticMemory OR n:EpisodicMemory)
-        WITH n.level0 as l0, n.level1 as l1, n.level2 as l2,
-             avg(n.layout_x) as center_x,
-             avg(n.layout_y) as center_y,
-             count(n) as node_count,
-             collect(n.name)[0] as top_name
-        RETURN l0, l1, l2, center_x, center_y, node_count, top_name
-        ORDER BY node_count DESC
-        """
-    )
-
-    l2_result = [{"level0": c["l0"], "level1": c["l1"], "level2": c["l2"],
-                  "center_x": c["center_x"], "center_y": c["center_y"],
-                  "node_count": c["node_count"],
-                  "name": (c["top_name"] or "Set")[:20]} for c in l2_clusters]
-
-    # Get inter-cluster edges (L0 level)
-    l0_edges = await db.execute_query(
+    # Get inter-L0 edges
+    edges = await db.execute_query(
         """
         MATCH (a)-[r]->(b)
         WHERE a.level0 IS NOT NULL AND b.level0 IS NOT NULL AND a.level0 <> b.level0
           AND (a:Concept OR a:SemanticMemory OR a:EpisodicMemory)
           AND (b:Concept OR b:SemanticMemory OR b:EpisodicMemory)
-        WITH a.level0 as from_l0, b.level0 as to_l0, count(r) as weight
-        RETURN from_l0, to_l0, weight
+        WITH a.level0 as from_id, b.level0 as to_id, count(r) as weight
+        RETURN from_id, to_id, weight
         ORDER BY weight DESC
-        LIMIT 500
+        LIMIT 200
         """
     )
 
-    edges = [{"from": e["from_l0"], "to": e["to_l0"], "weight": e["weight"]} for e in l0_edges]
-    total_nodes = sum(c["node_count"] for c in l0_result)
-
     return {
-        "l0": l0_result,
-        "l1": l1_result,
-        "l2": l2_result,
-        "edges": edges,
-        "total_nodes": total_nodes
+        "clusters": clusters,
+        "edges": [{"from": e["from_id"], "to": e["to_id"], "weight": e["weight"]} for e in edges],
+        "total_nodes": sum(c["count"] for c in clusters)
     }
 
 
-@router.get("/admin/graph/data/cluster/{level0_id}")
-async def get_cluster_data(
-    request: Request,
-    level0_id: int,
-) -> dict:
-    """Get nodes and links for a specific L0 cluster."""
+@router.get("/admin/graph/clusters/l1/{l0_id}")
+async def get_l1_clusters(request: Request, l0_id: int) -> dict:
+    """Get L1 clusters within an L0 + inter-L1 edges."""
     db = get_db(request)
 
-    # Get nodes for this L0 cluster
+    # Get L1 clusters within this L0
+    l1_clusters = await db.execute_query(
+        """
+        MATCH (n)
+        WHERE n.layout_x IS NOT NULL AND n.level0 = $l0 AND n.level1 IS NOT NULL
+          AND (n:Concept OR n:SemanticMemory OR n:EpisodicMemory)
+        WITH n.level1 as l1,
+             avg(n.layout_x) as center_x,
+             avg(n.layout_y) as center_y,
+             count(n) as node_count,
+             collect(n.name)[0] as top_name
+        RETURN l1, center_x, center_y, node_count, top_name
+        ORDER BY node_count DESC
+        """,
+        l0=l0_id
+    )
+
+    clusters = [{
+        "id": c["l1"],
+        "x": c["center_x"],
+        "y": c["center_y"],
+        "count": c["node_count"],
+        "name": (c["top_name"] or "Group")[:25]
+    } for c in l1_clusters]
+
+    # Get inter-L1 edges within this L0
+    edges = await db.execute_query(
+        """
+        MATCH (a)-[r]->(b)
+        WHERE a.level0 = $l0 AND b.level0 = $l0
+          AND a.level1 IS NOT NULL AND b.level1 IS NOT NULL AND a.level1 <> b.level1
+          AND (a:Concept OR a:SemanticMemory OR a:EpisodicMemory)
+          AND (b:Concept OR b:SemanticMemory OR b:EpisodicMemory)
+        WITH a.level1 as from_id, b.level1 as to_id, count(r) as weight
+        RETURN from_id, to_id, weight
+        ORDER BY weight DESC
+        LIMIT 200
+        """,
+        l0=l0_id
+    )
+
+    return {
+        "clusters": clusters,
+        "edges": [{"from": e["from_id"], "to": e["to_id"], "weight": e["weight"]} for e in edges],
+        "parent": {"l0": l0_id}
+    }
+
+
+@router.get("/admin/graph/clusters/l2/{l0_id}/{l1_id}")
+async def get_l2_clusters(request: Request, l0_id: int, l1_id: int) -> dict:
+    """Get L2 clusters within an L1 + inter-L2 edges."""
+    db = get_db(request)
+
+    # Get L2 clusters within this L1
+    l2_clusters = await db.execute_query(
+        """
+        MATCH (n)
+        WHERE n.layout_x IS NOT NULL AND n.level0 = $l0 AND n.level1 = $l1 AND n.level2 IS NOT NULL
+          AND (n:Concept OR n:SemanticMemory OR n:EpisodicMemory)
+        WITH n.level2 as l2,
+             avg(n.layout_x) as center_x,
+             avg(n.layout_y) as center_y,
+             count(n) as node_count,
+             collect(n.name)[0] as top_name
+        RETURN l2, center_x, center_y, node_count, top_name
+        ORDER BY node_count DESC
+        """,
+        l0=l0_id, l1=l1_id
+    )
+
+    clusters = [{
+        "id": c["l2"],
+        "x": c["center_x"],
+        "y": c["center_y"],
+        "count": c["node_count"],
+        "name": (c["top_name"] or "Set")[:20]
+    } for c in l2_clusters]
+
+    # Get inter-L2 edges within this L1
+    edges = await db.execute_query(
+        """
+        MATCH (a)-[r]->(b)
+        WHERE a.level0 = $l0 AND b.level0 = $l0
+          AND a.level1 = $l1 AND b.level1 = $l1
+          AND a.level2 IS NOT NULL AND b.level2 IS NOT NULL AND a.level2 <> b.level2
+          AND (a:Concept OR a:SemanticMemory OR a:EpisodicMemory)
+          AND (b:Concept OR b:SemanticMemory OR b:EpisodicMemory)
+        WITH a.level2 as from_id, b.level2 as to_id, count(r) as weight
+        RETURN from_id, to_id, weight
+        ORDER BY weight DESC
+        LIMIT 200
+        """,
+        l0=l0_id, l1=l1_id
+    )
+
+    return {
+        "clusters": clusters,
+        "edges": [{"from": e["from_id"], "to": e["to_id"], "weight": e["weight"]} for e in edges],
+        "parent": {"l0": l0_id, "l1": l1_id}
+    }
+
+
+@router.get("/admin/graph/clusters/nodes/{l0_id}/{l1_id}/{l2_id}")
+async def get_cluster_nodes(request: Request, l0_id: int, l1_id: int, l2_id: int) -> dict:
+    """Get actual nodes within an L2 cluster + their edges."""
+    db = get_db(request)
+
+    # Get nodes in this L2 cluster
     all_nodes = await db.execute_query(
         """
         MATCH (n)
         WHERE n.layout_x IS NOT NULL
+          AND n.level0 = $l0 AND n.level1 = $l1 AND n.level2 = $l2
           AND (n:Concept OR n:SemanticMemory OR n:EpisodicMemory)
-          AND n.level0 = $level0
         RETURN n.id as id,
                COALESCE(n.name, LEFT(n.content, 50), LEFT(n.query, 40)) as name,
-               n.content as fullContent,
                CASE
                    WHEN n:Concept THEN 'concept'
                    WHEN n:SemanticMemory THEN 'semantic'
                    ELSE 'episodic'
                END as type,
-               COALESCE(n.type, n.memory_type, n.behavior_name, 'unknown') as subtype,
                n.layout_x as x, n.layout_y as y,
-               n.cluster as cluster, n.conn as conn,
-               n.level0 as level0, n.level1 as level1, n.level2 as level2,
-               n.level3 as level3, n.level4 as level4
+               n.conn as conn
         """,
-        level0=level0_id
+        l0=l0_id, l1=l1_id, l2=l2_id
     )
 
-    nodes = []
-    for n in all_nodes:
-        name = n["name"] or ""
-        nodes.append({
-            "id": n["id"],
-            "name": name[:50] + "..." if len(name) > 50 else name,
-            "fullContent": n["fullContent"],
-            "type": n["type"],
-            "subtype": n["subtype"] or "unknown",
-            "x": n["x"], "y": n["y"],
-            "cluster": n["cluster"] or 0,
-            "conn": n["conn"] or 0,
-            "level0": n["level0"] or 0, "level1": n["level1"] or 0, "level2": n["level2"] or 0,
-            "level3": n["level3"] or 0, "level4": n["level4"] or 0,
-        })
+    nodes = [{
+        "id": n["id"],
+        "name": (n["name"] or "")[:40],
+        "type": n["type"],
+        "x": n["x"],
+        "y": n["y"],
+        "conn": n["conn"] or 0
+    } for n in all_nodes]
 
     node_ids = {n["id"] for n in nodes}
 
-    # Get internal links within this cluster
+    # Get edges between these nodes
     rels = await db.execute_query(
         """
         MATCH (a)-[r]->(b)
-        WHERE a.level0 = $level0 AND b.level0 = $level0
+        WHERE a.level0 = $l0 AND a.level1 = $l1 AND a.level2 = $l2
+          AND b.level0 = $l0 AND b.level1 = $l1 AND b.level2 = $l2
           AND (a:Concept OR a:SemanticMemory OR a:EpisodicMemory)
           AND (b:Concept OR b:SemanticMemory OR b:EpisodicMemory)
-        RETURN a.id as source, b.id as target, type(r) as relType
+        RETURN a.id as source, b.id as target
         """,
-        level0=level0_id
+        l0=l0_id, l1=l1_id, l2=l2_id
     )
 
-    links = []
-    for r in rels:
-        if r["source"] in node_ids and r["target"] in node_ids:
-            rel_type = r["relType"].lower() if r["relType"] else "related"
-            links.append({"source": r["source"], "target": r["target"], "type": rel_type})
+    edges = [{"from": r["source"], "to": r["target"]}
+             for r in rels if r["source"] in node_ids and r["target"] in node_ids]
 
-    return {"nodes": nodes, "links": links, "level0": level0_id}
-
-
-@router.get("/admin/graph/links/cross")
-async def get_cross_cluster_links(request: Request) -> dict:
-    """Get links that cross L0 cluster boundaries."""
-    db = get_db(request)
-
-    rels = await db.execute_query(
-        """
-        MATCH (a)-[r]->(b)
-        WHERE a.level0 IS NOT NULL AND b.level0 IS NOT NULL
-          AND a.level0 <> b.level0
-          AND (a:Concept OR a:SemanticMemory OR a:EpisodicMemory)
-          AND (b:Concept OR b:SemanticMemory OR b:EpisodicMemory)
-        RETURN a.id as source, b.id as target, type(r) as relType,
-               a.level0 as source_l0, b.level0 as target_l0
-        """
-    )
-
-    links = []
-    for r in rels:
-        rel_type = r["relType"].lower() if r["relType"] else "related"
-        links.append({
-            "source": r["source"],
-            "target": r["target"],
-            "type": rel_type,
-            "source_l0": r["source_l0"],
-            "target_l0": r["target_l0"]
-        })
-
-    return {"links": links, "total": len(links)}
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "parent": {"l0": l0_id, "l1": l1_id, "l2": l2_id}
+    }
 
 
 

@@ -315,50 +315,33 @@ GRAPH_HTML = """
             [0.13, 0.83, 0.93], [0.75, 0.52, 0.99], [0.98, 0.45, 0.09], [0.18, 0.83, 0.75]
         ];
 
-        let nodes = [], links = [], nodeMap = {};
+        // LEVEL-BASED NAVIGATION STATE
+        // Level 0: L0 clusters, Level 1: L1 clusters, Level 2: L2 clusters, Level 3: actual nodes
+        let currentLevel = 0;
+        let parentPath = { l0: null, l1: null, l2: null };
+        let currentItems = [];  // clusters or nodes at current level
+        let currentEdges = [];  // edges between items at current level
         let bounds = { min_x: -1000, max_x: 1000, min_y: -1000, max_y: 1000 };
         let viewX = 0, viewY = 0, scale = 1;
+
+        // Node-level state (only used at level 3)
+        let nodes = [], nodeMap = {};
         let selectedNode = null, hoveredNode = null;
         let highlightedNodes = new Set();
         let neighborNodes = new Set();
-        let activatedNodes = new Set(); // Nodes activated by chat
-        let typeFilters = new Set(); // empty = show all
-        let clusterCenters = {}; // { clusterId: { x, y, name, nodeCount } }
-        let interClusterEdges = []; // [{ from: clusterId, to: clusterId, count: n }]
-
-        // Hierarchical cluster data for semantic zoom (5 levels)
-        let level0Centers = {}; // { level0Id: { x, y, radius, name, nodeCount } }
-        let level1Centers = {}; // { "level0-level1": { x, y, radius, name, nodeCount, parent } }
-        let level2Centers = {}; // { "l0-l1-l2": { x, y, radius, name, nodeCount, parent } }
-        let level3Centers = {}; // { "l0-l1-l2-l3": { x, y, radius, name, nodeCount, parent } }
-        let level0Edges = []; // Inter-level0 cluster edges
-        let level1Edges = []; // Inter-level1 cluster edges
-        let level2Edges = []; // Inter-level2 cluster edges
-        let level3Edges = []; // Inter-level3 cluster edges
+        let activatedNodes = new Set();
+        let typeFilters = new Set();
 
         let isDragging = false, lastMouseX = 0, lastMouseY = 0, dragStartX = 0, dragStartY = 0;
         let animationFrameId = null;
-        let loadingViewport = false, lastViewport = null, viewportDebounceTimer = null;
-
-        // Animation state for smooth zoom
         let zoomAnimation = null;
-        let initialView = { x: 0, y: 0, scale: 1 }; // Stored on init
+        let initialView = { x: 0, y: 0, scale: 1 };
+        let viewportDebounceTimer = null;
 
+        function animateTo(targetX, targetY, targetScale, duration = 600) {
+            if (zoomAnimation) cancelAnimationFrame(zoomAnimation.frameId);
 
-        function animateToOverview() {
-            // Zoom out to initial view (as it was when page loaded)
-            animateTo(initialView.x, initialView.y, initialView.scale);
-        }
-
-        function animateTo(targetX, targetY, targetScale, duration = 800) {
-            // Cancel any existing animation
-            if (zoomAnimation) {
-                cancelAnimationFrame(zoomAnimation.frameId);
-            }
-
-            const startX = viewX;
-            const startY = viewY;
-            const startScale = scale;
+            const startX = viewX, startY = viewY, startScale = scale;
             const startTime = performance.now();
 
             function easeInOutCubic(t) {
@@ -380,48 +363,39 @@ GRAPH_HTML = """
                     zoomAnimation = { frameId: requestAnimationFrame(step) };
                 } else {
                     zoomAnimation = null;
-                    scheduleViewportLoad();
                 }
             }
 
             zoomAnimation = { frameId: requestAnimationFrame(step) };
         }
 
-        function findClusterAtPosition(screenX, screenY) {
-            // Check if click is near a hierarchical cluster (when zoomed out)
-            const semanticZoomLevel = scale < 0.008 ? 0 : (scale < 0.02 ? 1 : (scale < 0.045 ? 2 : (scale < 0.09 ? 3 : 4)));
+        function findItemAtPosition(screenX, screenY) {
             const world = screenToWorld(screenX, screenY);
 
-            // Helper to find cluster hit
-            function checkCenters(centers, minCount) {
-                for (const [key, center] of Object.entries(centers)) {
-                    if (center.nodeCount < minCount) continue;
-                    const dx = world.x - center.x;
-                    const dy = world.y - center.y;
+            // At node level, find nodes
+            if (currentLevel === 3) {
+                let closest = null, closestDist = Infinity;
+                for (const node of nodes) {
+                    const dx = node.x - world.x, dy = node.y - world.y;
                     const dist = Math.sqrt(dx*dx + dy*dy);
-                    const clickRadius = Math.max(center.radius * 1.5, 50 / scale);
-                    if (dist < clickRadius) {
-                        return { id: key, center: center };
+                    const threshold = 50 / scale + 30;
+                    if (dist < threshold && dist < closestDist) {
+                        closest = node;
+                        closestDist = dist;
                     }
                 }
-                return null;
+                return closest ? { type: 'node', item: closest } : null;
             }
 
-            // Check appropriate level
-            if (semanticZoomLevel === 0) {
-                const hit = checkCenters(level0Centers, 3);
-                if (hit) return { type: 'level0', ...hit };
-            } else if (semanticZoomLevel === 1) {
-                const hit = checkCenters(level1Centers, 2);
-                if (hit) return { type: 'level1', ...hit };
-            } else if (semanticZoomLevel === 2) {
-                const hit = checkCenters(level2Centers, 2);
-                if (hit) return { type: 'level2', ...hit };
-            } else if (semanticZoomLevel === 3) {
-                const hit = checkCenters(level3Centers, 2);
-                if (hit) return { type: 'level3', ...hit };
+            // At cluster levels, find clusters
+            for (const item of currentItems) {
+                const dx = world.x - item.x, dy = world.y - item.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                const clickRadius = Math.max(50, 60 / scale);
+                if (dist < clickRadius) {
+                    return { type: 'cluster', item: item };
+                }
             }
-
             return null;
         }
 
@@ -450,27 +424,13 @@ GRAPH_HTML = """
                 vec2 coord = gl_PointCoord - vec2(0.5);
                 float dist = length(coord);
                 if (dist > 0.5) discard;
-
-                // Outer glow (soft halo around node)
                 float outerGlow = smoothstep(0.5, 0.3, dist) * 0.4;
-
-                // Border/outline effect
-                float borderOuter = 0.42;
-                float borderInner = 0.35;
+                float borderOuter = 0.42, borderInner = 0.35;
                 float border = smoothstep(borderInner, borderOuter, dist) * smoothstep(0.5, borderOuter, dist);
-                vec3 borderColor = v_color.rgb * 1.5; // Brighter border
-
-                // Core fill with slight gradient
+                vec3 borderColor = v_color.rgb * 1.5;
                 float coreFill = 1.0 - smoothstep(0.0, borderInner, dist) * 0.2;
-
-                // Combine: core + border + glow
                 vec3 finalColor = mix(v_color.rgb * coreFill, borderColor, border * 0.6);
                 finalColor += outerGlow * v_color.rgb;
-
-                // Extra glow for important nodes (alpha > 0.95)
-                float importantGlow = v_color.a > 0.95 ? (1.0 - dist * 1.5) * 0.25 : 0.0;
-                finalColor += importantGlow;
-
                 float alpha = 1.0 - smoothstep(0.4, 0.5, dist);
                 gl_FragColor = vec4(finalColor, alpha * v_color.a);
             }
@@ -624,7 +584,7 @@ GRAPH_HTML = """
         }
 
         function render() {
-            gl.clearColor(0.02, 0.024, 0.05, 1); // Darker background for more contrast
+            gl.clearColor(0.02, 0.024, 0.05, 1);
             gl.clear(gl.COLOR_BUFFER_BIT);
             gl.enable(gl.BLEND);
             gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -632,489 +592,84 @@ GRAPH_HTML = """
             const w = canvas.width / window.devicePixelRatio;
             const h = canvas.height / window.devicePixelRatio;
             const dpr = window.devicePixelRatio;
-
-            // Clear label canvas
             labelCtx.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
 
-            // Draw cluster edges with thickness and glow based on connection count
-            // Use the same 5-level thresholds as semantic zoom
-            const edgeSemanticLevel = scale < 0.008 ? 0 : (scale < 0.02 ? 1 : (scale < 0.045 ? 2 : (scale < 0.09 ? 3 : 4)));
-            if (edgeSemanticLevel <= 3 && (level0Edges.length > 0 || level1Edges.length > 0 || level2Edges.length > 0 || level3Edges.length > 0)) {
-                labelCtx.save();
-                labelCtx.scale(dpr, dpr);
-
-                // Calculate max edge count for scaling line width
-                const maxL0Count = Math.max(1, ...level0Edges.map(e => e.count));
-                const maxL1Count = Math.max(1, ...level1Edges.map(e => e.count));
-                const maxL2Count = level2Edges.length > 0 ? Math.max(1, ...level2Edges.map(e => e.count)) : 1;
-                const maxL3Count = level3Edges.length > 0 ? Math.max(1, ...level3Edges.map(e => e.count)) : 1;
-
-                // Draw Level 0 edges (between super-clusters)
-                if (edgeSemanticLevel === 0) {
-                    for (const edge of level0Edges) {
-                        const c1 = level0Centers[edge.from];
-                        const c2 = level0Centers[edge.to];
-                        if (!c1 || !c2) continue;
-
-                        const pos1 = worldToScreen(c1.x, c1.y);
-                        const pos2 = worldToScreen(c2.x, c2.y);
-
-                        // Skip if off-screen
-                        if (pos1.x < -100 && pos2.x < -100) continue;
-                        if (pos1.x > w + 100 && pos2.x > w + 100) continue;
-                        if (pos1.y < -100 && pos2.y < -100) continue;
-                        if (pos1.y > h + 100 && pos2.y > h + 100) continue;
-
-                        const color1 = clusterPalette[edge.from % clusterPalette.length];
-                        const color2 = clusterPalette[edge.to % clusterPalette.length];
-
-                        // Line width based on connection count (2px to 10px)
-                        const relativeCount = edge.count / maxL0Count;
-                        const lineWidth = 2 + relativeCount * 8;
-
-                        // Curved line
-                        const mx = (pos1.x + pos2.x) / 2;
-                        const my = (pos1.y + pos2.y) / 2;
-                        const dx = pos2.x - pos1.x, dy = pos2.y - pos1.y;
-                        const dist = Math.sqrt(dx*dx + dy*dy);
-                        const nx = dist > 0 ? -dy / dist : 0;
-                        const ny = dist > 0 ? dx / dist : 0;
-                        const curveAmount = Math.min(dist * 0.15, 80);
-                        const cx = mx + nx * curveAmount;
-                        const cy = my + ny * curveAmount;
-
-                        // Create gradient
-                        const gradient = labelCtx.createLinearGradient(pos1.x, pos1.y, pos2.x, pos2.y);
-                        gradient.addColorStop(0, `rgba(${color1[0]*255}, ${color1[1]*255}, ${color1[2]*255}, 0.7)`);
-                        gradient.addColorStop(1, `rgba(${color2[0]*255}, ${color2[1]*255}, ${color2[2]*255}, 0.7)`);
-
-                        // Subtle edge glow - stronger for shorter edges
-                        const glowIntensity = Math.max(0, 1 - dist / 500) * relativeCount;
-                        const mixedColor = [
-                            (color1[0] + color2[0]) / 2,
-                            (color1[1] + color2[1]) / 2,
-                            (color1[2] + color2[2]) / 2
-                        ];
-                        labelCtx.shadowColor = `rgba(${mixedColor[0]*255}, ${mixedColor[1]*255}, ${mixedColor[2]*255}, ${0.3 * glowIntensity})`;
-                        labelCtx.shadowBlur = 8 + glowIntensity * 10;
-
-                        labelCtx.strokeStyle = gradient;
-                        labelCtx.lineWidth = lineWidth;
-                        labelCtx.lineCap = 'round';
-                        labelCtx.beginPath();
-                        labelCtx.moveTo(pos1.x, pos1.y);
-                        labelCtx.quadraticCurveTo(cx, cy, pos2.x, pos2.y);
-                        labelCtx.stroke();
-                    }
-                    labelCtx.shadowBlur = 0;
-                }
-
-                // Draw Level 1 edges (between sub-clusters)
-                if (edgeSemanticLevel === 1) {
-                    const maxL1Edges = Math.min(level1Edges.length, 150);
-                    for (let i = 0; i < maxL1Edges; i++) {
-                        const edge = level1Edges[i];
-                        const c1 = level1Centers[edge.from];
-                        const c2 = level1Centers[edge.to];
-                        if (!c1 || !c2) continue;
-
-                        const pos1 = worldToScreen(c1.x, c1.y);
-                        const pos2 = worldToScreen(c2.x, c2.y);
-
-                        // Skip if off-screen
-                        if (pos1.x < -50 && pos2.x < -50) continue;
-                        if (pos1.x > w + 50 && pos2.x > w + 50) continue;
-                        if (pos1.y < -50 && pos2.y < -50) continue;
-                        if (pos1.y > h + 50 && pos2.y > h + 50) continue;
-
-                        const color1 = clusterPalette[(c1.parent || 0) % clusterPalette.length];
-                        const color2 = clusterPalette[(c2.parent || 0) % clusterPalette.length];
-
-                        // Line width based on connection count (1px to 5px)
-                        const relativeCount = edge.count / maxL1Count;
-                        const lineWidth = 1 + relativeCount * 4;
-
-                        // Curved line
-                        const mx = (pos1.x + pos2.x) / 2;
-                        const my = (pos1.y + pos2.y) / 2;
-                        const dx = pos2.x - pos1.x, dy = pos2.y - pos1.y;
-                        const dist = Math.sqrt(dx*dx + dy*dy);
-                        const nx = dist > 0 ? -dy / dist : 0;
-                        const ny = dist > 0 ? dx / dist : 0;
-                        const curveAmount = Math.min(dist * 0.12, 40);
-                        const cx = mx + nx * curveAmount;
-                        const cy = my + ny * curveAmount;
-
-                        // Create gradient
-                        const gradient = labelCtx.createLinearGradient(pos1.x, pos1.y, pos2.x, pos2.y);
-                        gradient.addColorStop(0, `rgba(${color1[0]*255}, ${color1[1]*255}, ${color1[2]*255}, 0.5)`);
-                        gradient.addColorStop(1, `rgba(${color2[0]*255}, ${color2[1]*255}, ${color2[2]*255}, 0.5)`);
-
-                        // Very subtle glow for L1 edges
-                        const glowIntensity = Math.max(0, 1 - dist / 300) * relativeCount;
-                        const mixedColor = [
-                            (color1[0] + color2[0]) / 2,
-                            (color1[1] + color2[1]) / 2,
-                            (color1[2] + color2[2]) / 2
-                        ];
-                        labelCtx.shadowColor = `rgba(${mixedColor[0]*255}, ${mixedColor[1]*255}, ${mixedColor[2]*255}, ${0.2 * glowIntensity})`;
-                        labelCtx.shadowBlur = 4 + glowIntensity * 6;
-
-                        labelCtx.strokeStyle = gradient;
-                        labelCtx.lineWidth = lineWidth;
-                        labelCtx.lineCap = 'round';
-                        labelCtx.beginPath();
-                        labelCtx.moveTo(pos1.x, pos1.y);
-                        labelCtx.quadraticCurveTo(cx, cy, pos2.x, pos2.y);
-                        labelCtx.stroke();
-                    }
-                    labelCtx.shadowBlur = 0;
-                }
-
-                // Draw Level 2 edges (between L2 sub-clusters)
-                if (edgeSemanticLevel === 2 && level2Edges.length > 0) {
-                    const maxL2Edges = Math.min(level2Edges.length, 200);
-                    for (let i = 0; i < maxL2Edges; i++) {
-                        const edge = level2Edges[i];
-                        const c1 = level2Centers[edge.from];
-                        const c2 = level2Centers[edge.to];
-                        if (!c1 || !c2) continue;
-
-                        const pos1 = worldToScreen(c1.x, c1.y);
-                        const pos2 = worldToScreen(c2.x, c2.y);
-
-                        // Skip if off-screen
-                        if (pos1.x < -50 && pos2.x < -50) continue;
-                        if (pos1.x > w + 50 && pos2.x > w + 50) continue;
-                        if (pos1.y < -50 && pos2.y < -50) continue;
-                        if (pos1.y > h + 50 && pos2.y > h + 50) continue;
-
-                        const parentL0 = c1.parent || 0;
-                        const color = clusterPalette[parentL0 % clusterPalette.length];
-
-                        // Line width based on connection count (1px to 3px)
-                        const relativeCount = edge.count / maxL2Count;
-                        const lineWidth = 0.5 + relativeCount * 2.5;
-
-                        // Straight lines for L2 (simpler, faster)
-                        labelCtx.strokeStyle = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.4)`;
-                        labelCtx.lineWidth = lineWidth;
-                        labelCtx.beginPath();
-                        labelCtx.moveTo(pos1.x, pos1.y);
-                        labelCtx.lineTo(pos2.x, pos2.y);
-                        labelCtx.stroke();
-                    }
-                }
-
-                // Draw Level 3 edges (between L3 groups)
-                if (edgeSemanticLevel === 3 && level3Edges.length > 0) {
-                    const maxL3Edges = Math.min(level3Edges.length, 300);
-                    for (let i = 0; i < maxL3Edges; i++) {
-                        const edge = level3Edges[i];
-                        const c1 = level3Centers[edge.from];
-                        const c2 = level3Centers[edge.to];
-                        if (!c1 || !c2) continue;
-
-                        const pos1 = worldToScreen(c1.x, c1.y);
-                        const pos2 = worldToScreen(c2.x, c2.y);
-
-                        // Skip if off-screen
-                        if (pos1.x < -50 && pos2.x < -50) continue;
-                        if (pos1.x > w + 50 && pos2.x > w + 50) continue;
-                        if (pos1.y < -50 && pos2.y < -50) continue;
-                        if (pos1.y > h + 50 && pos2.y > h + 50) continue;
-
-                        const parentL0 = c1.parent || 0;
-                        const color = clusterPalette[parentL0 % clusterPalette.length];
-
-                        // Line width based on connection count (0.5px to 2px)
-                        const relativeCount = edge.count / maxL3Count;
-                        const lineWidth = 0.5 + relativeCount * 1.5;
-
-                        // Straight lines for L3 (simpler, faster)
-                        labelCtx.strokeStyle = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.3)`;
-                        labelCtx.lineWidth = lineWidth;
-                        labelCtx.beginPath();
-                        labelCtx.moveTo(pos1.x, pos1.y);
-                        labelCtx.lineTo(pos2.x, pos2.y);
-                        labelCtx.stroke();
-                    }
-                }
-
-                labelCtx.restore();
+            // Build cluster lookup for edges (at cluster levels 0-2)
+            const itemMap = {};
+            for (const item of currentItems) {
+                itemMap[item.id] = item;
             }
 
-            // Draw lines with gradient colors
-            if (links.length > 0) {
-                gl.useProgram(lineProgram);
-                gl.uniform2f(gl.getUniformLocation(lineProgram, 'u_resolution'), w / 2, h / 2);
-                gl.uniform2f(gl.getUniformLocation(lineProgram, 'u_view'), viewX, viewY);
-                gl.uniform1f(gl.getUniformLocation(lineProgram, 'u_scale'), scale);
+            // Draw edges on 2D canvas
+            labelCtx.save();
+            labelCtx.scale(dpr, dpr);
 
-                const hasSelection = selectedNode || neighborNodes.size > 0;
-                // Line data format: x, y, r, g, b, a (6 floats per vertex)
-                const normalLineData = [];
-                const glowLineData = [];
+            if (currentLevel < 3 && currentEdges.length > 0) {
+                const maxWeight = Math.max(1, ...currentEdges.map(e => e.weight || 1));
+                for (const edge of currentEdges) {
+                    const c1 = itemMap[edge.from];
+                    const c2 = itemMap[edge.to];
+                    if (!c1 || !c2) continue;
 
-                // Helper to get node color for edges
-                function getEdgeNodeColor(node) {
-                    return typeColors[node.type] || typeColors.concept;
-                }
+                    const pos1 = worldToScreen(c1.x, c1.y);
+                    const pos2 = worldToScreen(c2.x, c2.y);
+                    if (pos1.x < -100 && pos2.x < -100) continue;
+                    if (pos1.x > w + 100 && pos2.x > w + 100) continue;
 
-                // Helper to draw a bezier curve segment (quadratic)
-                function drawBezierSegment(targetArray, s, t, cx, cy, sColor, tColor, opacity) {
-                    const segments = 6;
-                    for (let i = 0; i < segments; i++) {
-                        const t1 = i / segments, t2 = (i + 1) / segments;
-                        const x1 = (1-t1)*(1-t1)*s.x + 2*(1-t1)*t1*cx + t1*t1*t.x;
-                        const y1 = (1-t1)*(1-t1)*s.y + 2*(1-t1)*t1*cy + t1*t1*t.y;
-                        const x2 = (1-t2)*(1-t2)*s.x + 2*(1-t2)*t2*cx + t2*t2*t.x;
-                        const y2 = (1-t2)*(1-t2)*s.y + 2*(1-t2)*t2*cy + t2*t2*t.y;
-                        const r1 = sColor[0] + (tColor[0] - sColor[0]) * t1;
-                        const g1 = sColor[1] + (tColor[1] - sColor[1]) * t1;
-                        const b1 = sColor[2] + (tColor[2] - sColor[2]) * t1;
-                        const r2 = sColor[0] + (tColor[0] - sColor[0]) * t2;
-                        const g2 = sColor[1] + (tColor[1] - sColor[1]) * t2;
-                        const b2 = sColor[2] + (tColor[2] - sColor[2]) * t2;
-                        targetArray.push(x1, y1, r1, g1, b1, opacity);
-                        targetArray.push(x2, y2, r2, g2, b2, opacity);
-                    }
-                }
+                    const color1 = clusterPalette[edge.from % clusterPalette.length];
+                    const color2 = clusterPalette[edge.to % clusterPalette.length];
+                    const relWeight = (edge.weight || 1) / maxWeight;
+                    const lineWidth = 2 + relWeight * 6;
 
-                // Helper for hierarchical edge bundling with multiple control points
-                function drawHierarchicalBundledEdge(targetArray, s, t, sColor, tColor, opacity, bundleStrength) {
-                    // Find lowest common ancestor (LCA) level
-                    const sL0 = s.level0 || 0, sL1 = s.level1 || 0;
-                    const tL0 = t.level0 || 0, tL1 = t.level1 || 0;
+                    // Curved line
+                    const mx = (pos1.x + pos2.x) / 2, my = (pos1.y + pos2.y) / 2;
+                    const dx = pos2.x - pos1.x, dy = pos2.y - pos1.y;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    const nx = dist > 0 ? -dy / dist : 0, ny = dist > 0 ? dx / dist : 0;
+                    const cx = mx + nx * Math.min(dist * 0.15, 60);
+                    const cy = my + ny * Math.min(dist * 0.15, 60);
 
-                    // Determine LCA level: 0=same L0, 1=same L1, 2=same node
-                    let lcaLevel = 0;
-                    if (sL0 === tL0) {
-                        lcaLevel = 1;
-                        if (sL1 === tL1) {
-                            lcaLevel = 2;
-                        }
-                    }
+                    const gradient = labelCtx.createLinearGradient(pos1.x, pos1.y, pos2.x, pos2.y);
+                    gradient.addColorStop(0, `rgba(${color1[0]*255}, ${color1[1]*255}, ${color1[2]*255}, 0.6)`);
+                    gradient.addColorStop(1, `rgba(${color2[0]*255}, ${color2[1]*255}, ${color2[2]*255}, 0.6)`);
 
-                    // If same L2 cluster or bundling disabled, use simple curve
-                    if (lcaLevel === 2 || bundleStrength < 0.1) {
-                        const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2;
-                        const dx = t.x - s.x, dy = t.y - s.y;
-                        const dist = Math.sqrt(dx*dx + dy*dy);
-                        const nx = dist > 0 ? -dy / dist : 0;
-                        const ny = dist > 0 ? dx / dist : 0;
-                        const curveAmount = Math.min(dist * 0.15, 80);
-                        drawBezierSegment(targetArray, s, t, mx + nx * curveAmount, my + ny * curveAmount, sColor, tColor, opacity);
-                        return;
-                    }
-
-                    // Get cluster centers for routing
-                    const sL1Key = `${sL0}-${sL1}`;
-                    const tL1Key = `${tL0}-${tL1}`;
-                    const sL1Center = level1Centers[sL1Key];
-                    const tL1Center = level1Centers[tL1Key];
-                    const sL0Center = level0Centers[sL0];
-                    const tL0Center = level0Centers[tL0];
-
-                    // Build control points path based on LCA level
-                    let controlPoints = [];
-
-                    if (lcaLevel === 0) {
-                        // Different L0: route through both L0 centers
-                        if (sL1Center) controlPoints.push({ x: sL1Center.x, y: sL1Center.y });
-                        if (sL0Center) controlPoints.push({ x: sL0Center.x, y: sL0Center.y });
-                        if (tL0Center) controlPoints.push({ x: tL0Center.x, y: tL0Center.y });
-                        if (tL1Center) controlPoints.push({ x: tL1Center.x, y: tL1Center.y });
-                    } else if (lcaLevel === 1) {
-                        // Same L0, different L1: route through L1 centers
-                        if (sL1Center) controlPoints.push({ x: sL1Center.x, y: sL1Center.y });
-                        if (tL1Center) controlPoints.push({ x: tL1Center.x, y: tL1Center.y });
-                    }
-
-                    // If no valid control points, fall back to simple curve
-                    if (controlPoints.length === 0) {
-                        const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2;
-                        const dx = t.x - s.x, dy = t.y - s.y;
-                        const dist = Math.sqrt(dx*dx + dy*dy);
-                        const nx = dist > 0 ? -dy / dist : 0;
-                        const ny = dist > 0 ? dx / dist : 0;
-                        drawBezierSegment(targetArray, s, t, mx + nx * dist * 0.15, my + ny * dist * 0.15, sColor, tColor, opacity);
-                        return;
-                    }
-
-                    // Blend control points toward direct path based on bundleStrength
-                    const directMx = (s.x + t.x) / 2, directMy = (s.y + t.y) / 2;
-                    controlPoints = controlPoints.map(cp => ({
-                        x: cp.x * bundleStrength + directMx * (1 - bundleStrength),
-                        y: cp.y * bundleStrength + directMy * (1 - bundleStrength)
-                    }));
-
-                    // Draw through all control points using Catmull-Rom spline
-                    const allPoints = [s, ...controlPoints, t];
-                    const segments = 4 * (allPoints.length - 1);
-
-                    for (let i = 0; i < segments; i++) {
-                        const tParam1 = i / segments;
-                        const tParam2 = (i + 1) / segments;
-
-                        const pos1 = catmullRomPoint(allPoints, tParam1);
-                        const pos2 = catmullRomPoint(allPoints, tParam2);
-
-                        const r1 = sColor[0] + (tColor[0] - sColor[0]) * tParam1;
-                        const g1 = sColor[1] + (tColor[1] - sColor[1]) * tParam1;
-                        const b1 = sColor[2] + (tColor[2] - sColor[2]) * tParam1;
-                        const r2 = sColor[0] + (tColor[0] - sColor[0]) * tParam2;
-                        const g2 = sColor[1] + (tColor[1] - sColor[1]) * tParam2;
-                        const b2 = sColor[2] + (tColor[2] - sColor[2]) * tParam2;
-
-                        targetArray.push(pos1.x, pos1.y, r1, g1, b1, opacity);
-                        targetArray.push(pos2.x, pos2.y, r2, g2, b2, opacity);
-                    }
-                }
-
-                // Catmull-Rom spline interpolation
-                function catmullRomPoint(points, t) {
-                    const n = points.length - 1;
-                    const segment = Math.min(Math.floor(t * n), n - 1);
-                    const localT = (t * n) - segment;
-
-                    // Get 4 control points (with clamping at boundaries)
-                    const p0 = points[Math.max(0, segment - 1)];
-                    const p1 = points[segment];
-                    const p2 = points[Math.min(n, segment + 1)];
-                    const p3 = points[Math.min(n, segment + 2)];
-
-                    // Catmull-Rom basis functions
-                    const t2 = localT * localT;
-                    const t3 = t2 * localT;
-
-                    const x = 0.5 * (
-                        (2 * p1.x) +
-                        (-p0.x + p2.x) * localT +
-                        (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
-                        (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
-                    );
-
-                    const y = 0.5 * (
-                        (2 * p1.y) +
-                        (-p0.y + p2.y) * localT +
-                        (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
-                        (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
-                    );
-
-                    return { x, y };
-                }
-
-                // Semantic zoom for edges - aligned with node rendering
-                // scale < 0.025: Level 0 inter-super-cluster edges
-                // scale 0.025-0.06: Level 1 inter-sub-cluster edges
-                // scale > 0.06: Individual edges with LOD
-                const edgeSemanticLevel = scale < 0.025 ? 0 : (scale < 0.06 ? 1 : 2);
-
-                // Transition factors for smooth edge blending
-                const l0ToL1EdgeTransition = scale < 0.02 ? 0 : (scale < 0.03 ? (scale - 0.02) / 0.01 : 1);
-                const l1ToFullEdgeTransition = scale < 0.05 ? 0 : (scale < 0.07 ? (scale - 0.05) / 0.02 : 1);
-
-                // Draw Level 0 and Level 1 edges on 2D canvas (for variable line width)
-                // Skip WebGL edge drawing for cluster edges - handled below in canvas section
-
-                // Draw individual edges when zoomed in enough
-                const showIndividualEdges = edgeSemanticLevel === 2 || l1ToFullEdgeTransition > 0;
-                if (showIndividualEdges) {
-                    const edgeOpacity = edgeSemanticLevel === 2 ? 1.0 : l1ToFullEdgeTransition;
-
-                    for (const link of links) {
-                        const s = nodeMap[link.source];
-                        const t = nodeMap[link.target];
-                        if (!s || !t || !isNodeVisible(s) || !isNodeVisible(t)) continue;
-
-                        // During transition, dim intra-cluster edges
-                        const sameCluster = (s.cluster || 0) === (t.cluster || 0);
-                        const isTransitioning = l1ToFullEdgeTransition < 1;
-                        const thisEdgeOpacity = isTransitioning && sameCluster ? edgeOpacity * 0.5 : edgeOpacity;
-                        if (thisEdgeOpacity < 0.05) continue;
-
-                        const isGlowLink = selectedNode && (
-                            (s === selectedNode && neighborNodes.has(t.id)) ||
-                            (t === selectedNode && neighborNodes.has(s.id))
-                        );
-
-                        const targetArray = isGlowLink ? glowLineData : normalLineData;
-                        const baseOpacity = isGlowLink ? 0.9 : (hasSelection ? 0.35 : 0.7);
-                        const opacity = baseOpacity * thisEdgeOpacity;
-                        const sColor = getEdgeNodeColor(s);
-                        const tColor = getEdgeNodeColor(t);
-
-                        const dx = t.x - s.x, dy = t.y - s.y;
-                        const dist = Math.sqrt(dx*dx + dy*dy);
-                        if (dist < 0.001) continue;
-
-                        // Use hierarchical bundling when zoomed out
-                        if (scale < 0.15 && Object.keys(level1Centers).length > 0) {
-                            // Bundle strength based on zoom level (stronger when zoomed out)
-                            const bundleStrength = Math.min(1, Math.max(0.3, 1.5 - scale * 5));
-                            drawHierarchicalBundledEdge(targetArray, s, t, sColor, tColor, opacity, bundleStrength);
-                        } else {
-                            // Simple curved edge
-                            const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2;
-                            const curveAmount = Math.min(dist * 0.2, 150);
-                            const nx = -dy / dist, ny = dx / dist;
-                            const cx = mx + nx * curveAmount, cy = my + ny * curveAmount;
-                            drawBezierSegment(targetArray, s, t, cx, cy, sColor, tColor, opacity);
-                        }
-                    }
-                }
-
-                const posLoc = gl.getAttribLocation(lineProgram, 'a_position');
-                const colorLoc = gl.getAttribLocation(lineProgram, 'a_color');
-                const stride = 6 * 4; // 6 floats * 4 bytes
-
-                // Draw normal lines with gradients
-                if (normalLineData.length > 0) {
-                    gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
-                    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normalLineData), gl.DYNAMIC_DRAW);
-                    gl.enableVertexAttribArray(posLoc);
-                    gl.enableVertexAttribArray(colorLoc);
-                    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, stride, 0);
-                    gl.vertexAttribPointer(colorLoc, 4, gl.FLOAT, false, stride, 2 * 4);
-                    gl.drawArrays(gl.LINES, 0, normalLineData.length / 6);
-                }
-
-                // Draw glowing lines for selected node connections
-                if (glowLineData.length > 0) {
-                    gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
-                    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(glowLineData), gl.DYNAMIC_DRAW);
-                    gl.enableVertexAttribArray(posLoc);
-                    gl.enableVertexAttribArray(colorLoc);
-                    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, stride, 0);
-                    gl.vertexAttribPointer(colorLoc, 4, gl.FLOAT, false, stride, 2 * 4);
-                    gl.drawArrays(gl.LINES, 0, glowLineData.length / 6);
+                    labelCtx.strokeStyle = gradient;
+                    labelCtx.lineWidth = lineWidth;
+                    labelCtx.lineCap = 'round';
+                    labelCtx.beginPath();
+                    labelCtx.moveTo(pos1.x, pos1.y);
+                    labelCtx.quadraticCurveTo(cx, cy, pos2.x, pos2.y);
+                    labelCtx.stroke();
                 }
             }
 
-            // ============ SEMANTIC ZOOM: 5 levels of hierarchy ============
-            // Level 0: scale < 0.008 - super-clusters
-            // Level 1: scale 0.008-0.02 - large clusters
-            // Level 2: scale 0.02-0.045 - medium clusters
-            // Level 3: scale 0.045-0.09 - small clusters
-            // Level 4: scale > 0.09 - individual nodes
+            // Draw node-level edges at level 3
+            if (currentLevel === 3 && currentEdges.length > 0) {
+                for (const edge of currentEdges) {
+                    const s = nodeMap[edge.from];
+                    const t = nodeMap[edge.to];
+                    if (!s || !t) continue;
 
-            const semanticZoomLevel = scale < 0.008 ? 0 : (scale < 0.02 ? 1 : (scale < 0.045 ? 2 : (scale < 0.09 ? 3 : 4)));
-            const showLevel0 = semanticZoomLevel === 0;
-            const showLevel1 = semanticZoomLevel === 1;
-            const showLevel2 = semanticZoomLevel === 2;
-            const showLevel3 = semanticZoomLevel === 3;
-            const showNodes = semanticZoomLevel === 4;
+                    const pos1 = worldToScreen(s.x, s.y);
+                    const pos2 = worldToScreen(t.x, t.y);
+                    const sColor = typeColors[s.type] || typeColors.concept;
+                    const tColor = typeColors[t.type] || typeColors.concept;
 
-            // Transition factors for smooth blending between levels
-            const l0ToL1Transition = scale < 0.006 ? 0 : (scale < 0.01 ? (scale - 0.006) / 0.004 : 1);
-            const l1ToL2Transition = scale < 0.016 ? 0 : (scale < 0.024 ? (scale - 0.016) / 0.008 : 1);
-            const l2ToL3Transition = scale < 0.038 ? 0 : (scale < 0.052 ? (scale - 0.038) / 0.014 : 1);
-            const l3ToNodesTransition = scale < 0.08 ? 0 : (scale < 0.1 ? (scale - 0.08) / 0.02 : 1);
+                    const gradient = labelCtx.createLinearGradient(pos1.x, pos1.y, pos2.x, pos2.y);
+                    gradient.addColorStop(0, `rgba(${sColor[0]*255}, ${sColor[1]*255}, ${sColor[2]*255}, 0.5)`);
+                    gradient.addColorStop(1, `rgba(${tColor[0]*255}, ${tColor[1]*255}, ${tColor[2]*255}, 0.5)`);
 
-            // Pulsing animation timing (very subtle)
-            const pulseTime = Date.now() / 1000;
+                    labelCtx.strokeStyle = gradient;
+                    labelCtx.lineWidth = 1.5;
+                    labelCtx.beginPath();
+                    labelCtx.moveTo(pos1.x, pos1.y);
+                    labelCtx.lineTo(pos2.x, pos2.y);
+                    labelCtx.stroke();
+                }
+            }
+            labelCtx.restore();
 
+            // Render points (clusters or nodes)
             gl.useProgram(nodeProgram);
             gl.uniform2f(gl.getUniformLocation(nodeProgram, 'u_resolution'), w / 2, h / 2);
             gl.uniform2f(gl.getUniformLocation(nodeProgram, 'u_view'), viewX, viewY);
@@ -1123,154 +678,44 @@ GRAPH_HTML = """
             const nodeData = [];
             const labelsToRender = [];
 
-            // Draw Level 0 super-clusters when very zoomed out
-            if (showLevel0 || (showLevel1 && l0ToL1Transition < 1)) {
-                const opacity = showLevel0 ? 1.0 : (1 - l0ToL1Transition);
-
-                // Calculate max node count for relative sizing
-                const l0Entries = Object.entries(level0Centers);
-                const maxNodeCount = Math.max(1, ...l0Entries.map(([_, c]) => c.nodeCount));
-
-                for (const [l0Id, center] of l0Entries) {
-                    if (center.nodeCount < 5) continue;
-
-                    const pos = worldToScreen(center.x, center.y);
-                    if (pos.x < -300 || pos.x > w + 300 || pos.y < -300 || pos.y > h + 300) continue;
-
-                    const isLoaded = loadedClusters.has(parseInt(l0Id));
-                    const color = clusterPalette[l0Id % clusterPalette.length];
-                    // Size proportional to node count - use sqrt for visual area scaling
-                    const relativeSize = Math.sqrt(center.nodeCount / maxNodeCount);
-
-                    // Very subtle pulsing
-                    const pulseOffset = parseInt(l0Id) * 0.7;
-                    const pulse = 0.97 + 0.03 * Math.sin(pulseTime * 1.2 + pulseOffset);
-
-                    // Minimum screen pixels scales with relative size (20px min, 120px max)
-                    const minScreenPx = (20 + relativeSize * 100) * pulse;
-                    // Convert to world units for current scale
-                    const size = minScreenPx / scale;
-
-                    // Unloaded clusters are dimmer/more transparent
-                    const clusterOpacity = isLoaded ? opacity : opacity * 0.6;
-                    nodeData.push(center.x, center.y, color[0], color[1], color[2], clusterOpacity, size);
-
-                    // Labels for level 0
-                    if (showLevel0 && center.nodeCount >= 5) {
-                        labelsToRender.push({
-                            type: 'level0',
-                            x: center.x, y: center.y,
-                            name: center.name,
-                            count: center.nodeCount,
-                            color: color,
-                            size: size,
-                            loaded: isLoaded
-                        });
-                    }
-                }
-            }
-
-            // Draw Level 1 clusters
-            if (showLevel1 || (showLevel0 && l0ToL1Transition > 0) || (showLevel2 && l1ToL2Transition < 1)) {
-                const opacity = showLevel1 ? 1.0 : (showLevel0 ? l0ToL1Transition : (1 - l1ToL2Transition));
-                const l1Entries = Object.entries(level1Centers);
-                const maxNodeCount = Math.max(1, ...l1Entries.map(([_, c]) => c.nodeCount));
-
-                for (const [key, center] of l1Entries) {
-                    if (center.nodeCount < 3) continue;
-                    const pos = worldToScreen(center.x, center.y);
+            if (currentLevel < 3) {
+                // Draw clusters
+                const maxCount = Math.max(1, ...currentItems.map(c => c.count || 1));
+                for (const item of currentItems) {
+                    const pos = worldToScreen(item.x, item.y);
                     if (pos.x < -200 || pos.x > w + 200 || pos.y < -200 || pos.y > h + 200) continue;
 
-                    const color = clusterPalette[(center.parent || 0) % clusterPalette.length];
-                    const relativeSize = Math.sqrt(center.nodeCount / maxNodeCount);
-                    const minScreenPx = 15 + relativeSize * 50;
-                    const size = minScreenPx / scale;
+                    const color = clusterPalette[item.id % clusterPalette.length];
+                    const relSize = Math.sqrt((item.count || 1) / maxCount);
+                    const size = (30 + relSize * 80) / scale;
 
-                    nodeData.push(center.x, center.y, color[0], color[1], color[2], opacity * 0.95, size);
-
-                    if (showLevel1 && center.nodeCount >= 3) {
-                        labelsToRender.push({ type: 'level1', x: center.x, y: center.y, name: center.name, count: center.nodeCount, color: color, size: size });
-                    }
+                    nodeData.push(item.x, item.y, color[0], color[1], color[2], 1.0, size);
+                    labelsToRender.push({
+                        type: 'cluster', x: item.x, y: item.y,
+                        name: item.name, count: item.count, color: color
+                    });
                 }
-            }
-
-            // Draw Level 2 clusters
-            if (showLevel2 || (showLevel1 && l1ToL2Transition > 0) || (showLevel3 && l2ToL3Transition < 1)) {
-                const opacity = showLevel2 ? 1.0 : (showLevel1 ? l1ToL2Transition : (1 - l2ToL3Transition));
-                const l2Entries = Object.entries(level2Centers);
-                const maxNodeCount = Math.max(1, ...l2Entries.map(([_, c]) => c.nodeCount));
-
-                for (const [key, center] of l2Entries) {
-                    if (center.nodeCount < 2) continue;
-                    const pos = worldToScreen(center.x, center.y);
-                    if (pos.x < -150 || pos.x > w + 150 || pos.y < -150 || pos.y > h + 150) continue;
-
-                    const color = clusterPalette[(center.parent || 0) % clusterPalette.length];
-                    const relativeSize = Math.sqrt(center.nodeCount / maxNodeCount);
-                    const minScreenPx = 12 + relativeSize * 40;
-                    const size = minScreenPx / scale;
-
-                    nodeData.push(center.x, center.y, color[0], color[1], color[2], opacity * 0.9, size);
-
-                    if (showLevel2 && center.nodeCount >= 2) {
-                        labelsToRender.push({ type: 'level2', x: center.x, y: center.y, name: center.name, count: center.nodeCount, color: color, size: size });
-                    }
-                }
-            }
-
-            // Draw Level 3 clusters
-            if (showLevel3 || (showLevel2 && l2ToL3Transition > 0) || (showNodes && l3ToNodesTransition < 1)) {
-                const opacity = showLevel3 ? 1.0 : (showLevel2 ? l2ToL3Transition : (1 - l3ToNodesTransition));
-                const l3Entries = Object.entries(level3Centers);
-                const maxNodeCount = Math.max(1, ...l3Entries.map(([_, c]) => c.nodeCount));
-
-                for (const [key, center] of l3Entries) {
-                    if (center.nodeCount < 2) continue;
-                    const pos = worldToScreen(center.x, center.y);
-                    if (pos.x < -100 || pos.x > w + 100 || pos.y < -100 || pos.y > h + 100) continue;
-
-                    const color = clusterPalette[(center.parent || 0) % clusterPalette.length];
-                    const relativeSize = Math.sqrt(center.nodeCount / maxNodeCount);
-                    const minScreenPx = 10 + relativeSize * 30;
-                    const size = minScreenPx / scale;
-
-                    nodeData.push(center.x, center.y, color[0], color[1], color[2], opacity * 0.85, size);
-
-                    if (showLevel3 && center.nodeCount >= 1) {
-                        labelsToRender.push({ type: 'level3', x: center.x, y: center.y, name: center.name, count: center.nodeCount, color: color, size: size });
-                    }
-                }
-            }
-
-            // Draw individual nodes (loaded via lazy loading when cluster is clicked)
-            {
+            } else {
+                // Draw actual nodes
                 for (const node of nodes) {
-                    const nodeConn = node.conn || 0;
                     const color = getNodeColor(node);
-                    // Node size: scale with zoom level
-                    const baseSize = Math.max(48, Math.min(192, Math.sqrt(nodeConn || 1) * 32));
-                    const minScreenPx = semanticZoomLevel < 2 ? 8 : 6;
-                    const size = Math.max(minScreenPx / scale, baseSize * Math.max(1, Math.min(4, scale)));
-
+                    const size = Math.max(30, Math.sqrt(node.conn || 1) * 15) / scale;
                     let finalColor = color;
-                    if (node === selectedNode) {
-                        finalColor = [1, 1, 1, 1];
-                    } else if (node === hoveredNode) {
-                        finalColor = [1, 1, 1, 0.9];
-                    } else if (neighborNodes.has(node.id)) {
-                        finalColor = [color[0] * 1.2, color[1] * 1.2, color[2] * 1.2, 1];
-                    }
+                    if (node === selectedNode) finalColor = [1, 1, 1, 1];
+                    else if (node === hoveredNode) finalColor = [1, 1, 1, 0.9];
+                    else if (neighborNodes.has(node.id)) finalColor = [color[0]*1.2, color[1]*1.2, color[2]*1.2, 1];
 
                     nodeData.push(node.x, node.y, finalColor[0], finalColor[1], finalColor[2], finalColor[3], size);
+                    labelsToRender.push({
+                        type: 'node', x: node.x, y: node.y,
+                        name: node.name, color: typeColors[node.type] || typeColors.concept
+                    });
                 }
-                // Node labels already rendered in green by WebGL - no canvas labels needed
             }
 
-            // Render all collected nodes
             if (nodeData.length > 0) {
                 gl.bindBuffer(gl.ARRAY_BUFFER, nodeBuffer);
                 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(nodeData), gl.DYNAMIC_DRAW);
-
                 const stride = 7 * 4;
                 const posLoc = gl.getAttribLocation(nodeProgram, 'a_position');
                 const colorLoc = gl.getAttribLocation(nodeProgram, 'a_color');
@@ -1286,129 +731,49 @@ GRAPH_HTML = """
                 gl.drawArrays(gl.POINTS, 0, nodeData.length / 7);
             }
 
-            // Render labels on 2D canvas
+            // Render labels
             labelCtx.save();
             labelCtx.scale(dpr, dpr);
             labelCtx.textAlign = 'center';
 
-            // Helper to draw text with background
-            function drawTextWithBg(text, x, y, font, textColor, bgColor = 'rgba(10, 10, 18, 0.8)', padding = 3) {
-                labelCtx.font = font;
-                const metrics = labelCtx.measureText(text);
-                const textWidth = metrics.width;
-                // Extract font size from font string (e.g., "bold 14px ..." -> 14)
-                const fontSizeMatch = font.match(/(\d+)px/);
-                const fontSize = fontSizeMatch ? parseInt(fontSizeMatch[1]) : 12;
-
-                // Background positioned around text (text baseline is at y)
-                const bgX = x - textWidth / 2 - padding;
-                const bgY = y - fontSize + 1;
-                const bgW = textWidth + padding * 2;
-                const bgH = fontSize + padding + 2;
-
-                // Draw background
-                labelCtx.fillStyle = bgColor;
-                labelCtx.beginPath();
-                labelCtx.roundRect(bgX, bgY, bgW, bgH, 2);
-                labelCtx.fill();
-
-                // Draw text
-                labelCtx.fillStyle = textColor;
-                labelCtx.fillText(text, x, y);
-            }
-
             for (const label of labelsToRender) {
-                if (label.type === 'level0') {
-                    const pos = worldToScreen(label.x, label.y);
-                    if (pos.x < -200 || pos.x > w + 200 || pos.y < -200 || pos.y > h + 200) continue;
+                const pos = worldToScreen(label.x, label.y);
+                if (pos.x < -100 || pos.x > w + 100 || pos.y < -100 || pos.y > h + 100) continue;
 
-                    const color = label.color;
-                    const fontSize = Math.min(32, Math.max(14, 12 + Math.log(label.count) * 3));
-                    const isLoaded = label.loaded;
+                const color = label.color;
+                const textColor = `rgb(${color[0]*255}, ${color[1]*255}, ${color[2]*255})`;
 
-                    // Loaded clusters are bright, unloaded are dimmer with indicator
-                    const textColor = isLoaded
-                        ? `rgb(${color[0]*255}, ${color[1]*255}, ${color[2]*255})`
-                        : `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.6)`;
-
-                    labelCtx.shadowBlur = 0;
-                    drawTextWithBg(label.name, pos.x, pos.y - 10, `bold ${fontSize}px -apple-system, sans-serif`, textColor);
-
-                    // Show different indicator for loaded vs unloaded
-                    if (isLoaded) {
-                        drawTextWithBg(`${label.count} nodes`, pos.x, pos.y + fontSize - 5, `${Math.max(10, fontSize * 0.6)}px -apple-system, sans-serif`, 'rgba(255,255,255,0.7)');
-                    } else {
-                        drawTextWithBg(`${label.count} nodes · click to load`, pos.x, pos.y + fontSize - 5, `${Math.max(10, fontSize * 0.6)}px -apple-system, sans-serif`, 'rgba(200,200,255,0.5)');
-                    }
-
-                } else if (label.type === 'level1') {
-                    const pos = worldToScreen(label.x, label.y);
-                    if (pos.x < -150 || pos.x > w + 150 || pos.y < -150 || pos.y > h + 150) continue;
-
-                    const color = label.color;
-                    const fontSize = Math.min(18, Math.max(10, 8 + Math.log(label.count) * 2));
-                    const textColor = `rgb(${color[0]*255}, ${color[1]*255}, ${color[2]*255})`;
-
-                    labelCtx.shadowBlur = 0;
-                    drawTextWithBg(label.name, pos.x, pos.y - 5, `600 ${fontSize}px -apple-system, sans-serif`, textColor);
-                    drawTextWithBg(`${label.count}`, pos.x, pos.y + fontSize, `${Math.max(8, fontSize * 0.6)}px -apple-system, sans-serif`, 'rgba(255,255,255,0.6)');
-
-                } else if (label.type === 'level2') {
-                    const pos = worldToScreen(label.x, label.y);
-                    if (pos.x < -100 || pos.x > w + 100 || pos.y < -100 || pos.y > h + 100) continue;
-
-                    const color = label.color;
-                    const fontSize = Math.min(14, Math.max(9, 7 + Math.log(label.count) * 1.5));
-                    const textColor = `rgb(${color[0]*255}, ${color[1]*255}, ${color[2]*255})`;
-
-                    labelCtx.shadowBlur = 0;
-                    drawTextWithBg(label.name, pos.x, pos.y - 3, `500 ${fontSize}px -apple-system, sans-serif`, textColor);
-
-                } else if (label.type === 'level3') {
-                    const pos = worldToScreen(label.x, label.y);
-                    if (pos.x < -80 || pos.x > w + 80 || pos.y < -80 || pos.y > h + 80) continue;
-
-                    const color = label.color;
-                    const fontSize = Math.min(12, Math.max(8, 6 + Math.log(label.count) * 1.2));
-                    const textColor = `rgb(${color[0]*255}, ${color[1]*255}, ${color[2]*255})`;
-
-                    labelCtx.shadowBlur = 0;
-                    drawTextWithBg(label.name, pos.x, pos.y, `${fontSize}px -apple-system, sans-serif`, textColor);
+                if (label.type === 'cluster') {
+                    const fontSize = Math.min(20, Math.max(12, 10 + Math.log(label.count || 1) * 2));
+                    // Background
+                    labelCtx.font = `bold ${fontSize}px -apple-system, sans-serif`;
+                    const metrics = labelCtx.measureText(label.name);
+                    labelCtx.fillStyle = 'rgba(10, 10, 18, 0.85)';
+                    labelCtx.fillRect(pos.x - metrics.width/2 - 4, pos.y - fontSize, metrics.width + 8, fontSize + 10);
+                    // Text
+                    labelCtx.fillStyle = textColor;
+                    labelCtx.fillText(label.name, pos.x, pos.y - 5);
+                    // Count
+                    labelCtx.font = `${fontSize * 0.6}px -apple-system, sans-serif`;
+                    labelCtx.fillStyle = 'rgba(255,255,255,0.6)';
+                    labelCtx.fillText(`${label.count} nodes`, pos.x, pos.y + fontSize - 3);
+                } else if (label.type === 'node') {
+                    const fontSize = 11;
+                    labelCtx.font = `${fontSize}px -apple-system, sans-serif`;
+                    const metrics = labelCtx.measureText(label.name);
+                    labelCtx.fillStyle = 'rgba(10, 10, 18, 0.8)';
+                    labelCtx.fillRect(pos.x - metrics.width/2 - 3, pos.y + 8, metrics.width + 6, fontSize + 4);
+                    labelCtx.fillStyle = textColor;
+                    labelCtx.fillText(label.name, pos.x, pos.y + 18);
                 }
             }
             labelCtx.restore();
 
-            // Show zoom level indicator
-            const zoomIndicators = ['L0: Super-clusters', 'L1: Clusters', 'L2: Sub-clusters', 'L3: Groups', 'L4: Nodes'];
-            const zoomIndicator = zoomIndicators[semanticZoomLevel] || 'L4: Nodes';
-            document.getElementById('mode-indicator').textContent = `WebGL | ${zoomIndicator} | ${scale.toFixed(3)}`;
-
-            // Debug: log what's being rendered
-            if (nodeData.length > 0 && Math.random() < 0.01) { // 1% chance to log
-                console.log(`Rendering: scale=${scale.toFixed(4)}, level=${semanticZoomLevel}, points=${nodeData.length/7}, nodes=${nodes.length}`);
-            }
-
-        }
-
-        function findNodeAt(sx, sy) {
-            const world = screenToWorld(sx, sy);
-            let closest = null, closestDist = Infinity;
-
-            for (const node of nodes) {
-                if (!isNodeVisible(node)) continue;
-                const dx = node.x - world.x;
-                const dy = node.y - world.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                // Match bigger node sizes
-                const baseSize = Math.max(48, Math.min(192, Math.sqrt(node.conn || 1) * 32));
-                const threshold = (baseSize * 2) / scale + 30;
-
-                if (dist < threshold && dist < closestDist) {
-                    closest = node;
-                    closestDist = dist;
-                }
-            }
-            return closest;
+            // Show level indicator
+            const levelNames = ['L0 Clusters', 'L1 Clusters', 'L2 Clusters', 'Nodes'];
+            const backPath = currentLevel > 0 ? ` (ESC to go back)` : '';
+            const itemCount = currentLevel < 3 ? currentItems.length : nodes.length;
+            document.getElementById('mode-indicator').textContent = `${levelNames[currentLevel]}${backPath} | ${itemCount} items`;
         }
 
         // Tooltip
@@ -1441,7 +806,7 @@ GRAPH_HTML = """
                     neighborsHtml = data.neighbors.map(n => `
                         <div class="neighbor-item" data-x="${n.x}" data-y="${n.y}" data-id="${n.id}">
                             <span class="neighbor-dot" style="background:${typeColorsHex[n.type]}"></span>
-                            <span class="neighbor-name">${n.name}</span>
+                            <span class="neighbor-name">${escapeHtml(n.name)}</span>
                         </div>
                     `).join('');
                 } else {
@@ -1456,12 +821,12 @@ GRAPH_HTML = """
             const hasContent = displayContent.length > 0;
 
             content.innerHTML = `
-                <span class="type-badge" style="background:${color}20;color:${color}">${node.type}${node.subtype ? ' · ' + node.subtype : ''}</span>
-                <h3>${node.name}</h3>
+                <span class="type-badge" style="background:${color}20;color:${color}">${escapeHtml(node.type)}${node.subtype ? ' · ' + escapeHtml(node.subtype) : ''}</span>
+                <h3>${escapeHtml(node.name)}</h3>
                 ${hasContent ? `
                 <div class="info-row">
                     <div class="info-label">Content</div>
-                    <div class="info-value" style="max-height:150px;overflow-y:auto;white-space:pre-wrap;font-size:12px;line-height:1.5;background:rgba(0,0,0,0.2);padding:8px;border-radius:4px;margin-top:4px;">${displayContent}</div>
+                    <div class="info-value" style="max-height:150px;overflow-y:auto;white-space:pre-wrap;font-size:12px;line-height:1.5;background:rgba(0,0,0,0.2);padding:8px;border-radius:4px;margin-top:4px;">${escapeHtml(displayContent)}</div>
                 </div>` : ''}
                 <div class="info-row" style="display:flex;gap:16px;">
                     <div>
@@ -1536,213 +901,6 @@ GRAPH_HTML = """
             render();
         }
 
-        function computeClusterCenters() {
-            clusterCenters = {};
-            const clusterNodes = {};
-
-            // Group nodes by cluster
-            for (const node of nodes) {
-                const c = node.cluster || 0;
-                if (!clusterNodes[c]) clusterNodes[c] = [];
-                clusterNodes[c].push(node);
-            }
-
-            // Compute centers, radius, and gather top nodes
-            for (const [clusterId, clusterNodeList] of Object.entries(clusterNodes)) {
-                const sumX = clusterNodeList.reduce((s, n) => s + n.x, 0);
-                const sumY = clusterNodeList.reduce((s, n) => s + n.y, 0);
-                const count = clusterNodeList.length;
-                const cx = sumX / count;
-                const cy = sumY / count;
-
-                // Compute radius as max distance from center to any node + padding
-                let maxDist = 0;
-                for (const node of clusterNodeList) {
-                    const dx = node.x - cx;
-                    const dy = node.y - cy;
-                    const dist = Math.sqrt(dx*dx + dy*dy);
-                    if (dist > maxDist) maxDist = dist;
-                }
-                const radius = maxDist + 100;
-
-                // Sort by connections to find top nodes
-                const sorted = [...clusterNodeList].sort((a, b) => (b.conn || 0) - (a.conn || 0));
-                const topNodes = sorted.slice(0, 5).map(n => n.name || n.id);
-
-                clusterCenters[clusterId] = {
-                    x: cx,
-                    y: cy,
-                    radius: radius,
-                    nodeCount: count,
-                    topNodes: topNodes,
-                    name: topNodes[0]?.length > 20 ? topNodes[0].substring(0, 20) + '...' : (topNodes[0] || 'Cluster')
-                };
-            }
-        }
-
-        function computeInterClusterEdges() {
-            // Count edges between different clusters
-            const edgeCounts = {};
-
-            for (const link of links) {
-                const s = nodeMap[link.source];
-                const t = nodeMap[link.target];
-                if (!s || !t) continue;
-
-                const c1 = s.cluster || 0;
-                const c2 = t.cluster || 0;
-
-                if (c1 === c2) continue;
-
-                const key = c1 < c2 ? `${c1}-${c2}` : `${c2}-${c1}`;
-                edgeCounts[key] = (edgeCounts[key] || 0) + 1;
-            }
-
-            interClusterEdges = [];
-            for (const [key, count] of Object.entries(edgeCounts)) {
-                const [from, to] = key.split('-').map(Number);
-                interClusterEdges.push({ from, to, count });
-            }
-
-            interClusterEdges.sort((a, b) => b.count - a.count);
-        }
-
-        function computeHierarchicalCenters() {
-            // Compute centers for all 5 hierarchy levels
-            level0Centers = {};
-            level1Centers = {};
-            level2Centers = {};
-            level3Centers = {};
-            level0Edges = [];
-            level1Edges = [];
-            level2Edges = [];
-            level3Edges = [];
-
-            // Helper to compute centers for a level
-            function computeLevelCenters(levelKeys, radiusPadding) {
-                const grouped = {};
-                for (const node of nodes) {
-                    const key = levelKeys.map(k => node[k] || 0).join('-');
-                    if (!grouped[key]) grouped[key] = [];
-                    grouped[key].push(node);
-                }
-
-                const centers = {};
-                for (const [key, nodeList] of Object.entries(grouped)) {
-                    if (nodeList.length === 0) continue;
-
-                    const sumX = nodeList.reduce((s, n) => s + n.x, 0);
-                    const sumY = nodeList.reduce((s, n) => s + n.y, 0);
-                    const count = nodeList.length;
-                    const cx = sumX / count;
-                    const cy = sumY / count;
-
-                    let maxDist = 0;
-                    for (const node of nodeList) {
-                        const dx = node.x - cx;
-                        const dy = node.y - cy;
-                        const dist = Math.sqrt(dx*dx + dy*dy);
-                        if (dist > maxDist) maxDist = dist;
-                    }
-
-                    const sorted = [...nodeList].sort((a, b) => (b.conn || 0) - (a.conn || 0));
-                    const topName = sorted[0]?.name || 'Cluster';
-                    const parent = parseInt(key.split('-')[0]) || 0;
-
-                    centers[key] = {
-                        x: cx, y: cy,
-                        radius: maxDist + radiusPadding,
-                        nodeCount: count,
-                        parent: parent,
-                        name: topName.length > 25 ? topName.substring(0, 25) + '...' : topName
-                    };
-                }
-                return centers;
-            }
-
-            // Compute centers for each level
-            level0Centers = computeLevelCenters(['level0'], 200);
-            level1Centers = computeLevelCenters(['level0', 'level1'], 150);
-            level2Centers = computeLevelCenters(['level0', 'level1', 'level2'], 100);
-            level3Centers = computeLevelCenters(['level0', 'level1', 'level2', 'level3'], 50);
-
-            console.log(`Hierarchical centers: ${Object.keys(level0Centers).length} L0, ${Object.keys(level1Centers).length} L1, ${Object.keys(level2Centers).length} L2, ${Object.keys(level3Centers).length} L3`);
-
-            // Helper to compute inter-cluster edges
-            function computeLevelEdges(levelKeys) {
-                const edgeCounts = {};
-                for (const link of links) {
-                    const s = nodeMap[link.source];
-                    const t = nodeMap[link.target];
-                    if (!s || !t) continue;
-
-                    const keyS = levelKeys.map(k => s[k] || 0).join('-');
-                    const keyT = levelKeys.map(k => t[k] || 0).join('-');
-                    if (keyS === keyT) continue;
-
-                    const edgeKey = keyS < keyT ? `${keyS}|${keyT}` : `${keyT}|${keyS}`;
-                    edgeCounts[edgeKey] = (edgeCounts[edgeKey] || 0) + 1;
-                }
-
-                const edges = [];
-                for (const [key, count] of Object.entries(edgeCounts)) {
-                    const [from, to] = key.split('|');
-                    edges.push({ from, to, count });
-                }
-                edges.sort((a, b) => b.count - a.count);
-                return edges;
-            }
-
-            level0Edges = computeLevelEdges(['level0']);
-            level1Edges = computeLevelEdges(['level0', 'level1']);
-            level2Edges = computeLevelEdges(['level0', 'level1', 'level2']);
-            level3Edges = computeLevelEdges(['level0', 'level1', 'level2', 'level3']);
-
-            // Compute inter-level0 edges
-            const l0EdgeCounts = {};
-            for (const link of links) {
-                const s = nodeMap[link.source];
-                const t = nodeMap[link.target];
-                if (!s || !t) continue;
-
-                const l0s = s.level0 || 0;
-                const l0t = t.level0 || 0;
-                if (l0s === l0t) continue;
-
-                const key = l0s < l0t ? `${l0s}-${l0t}` : `${l0t}-${l0s}`;
-                l0EdgeCounts[key] = (l0EdgeCounts[key] || 0) + 1;
-            }
-
-            for (const [key, count] of Object.entries(l0EdgeCounts)) {
-                const [from, to] = key.split('-').map(Number);
-                level0Edges.push({ from, to, count });
-            }
-            level0Edges.sort((a, b) => b.count - a.count);
-
-            // Compute inter-level1 edges
-            const l1EdgeCounts = {};
-            for (const link of links) {
-                const s = nodeMap[link.source];
-                const t = nodeMap[link.target];
-                if (!s || !t) continue;
-
-                const keyS = `${s.level0 || 0}-${s.level1 || 0}`;
-                const keyT = `${t.level0 || 0}-${t.level1 || 0}`;
-                if (keyS === keyT) continue;
-
-                const edgeKey = keyS < keyT ? `${keyS}:${keyT}` : `${keyT}:${keyS}`;
-                l1EdgeCounts[edgeKey] = (l1EdgeCounts[edgeKey] || 0) + 1;
-            }
-
-            for (const [key, count] of Object.entries(l1EdgeCounts)) {
-                const [from, to] = key.split(':');
-                level1Edges.push({ from, to, count });
-            }
-            level1Edges.sort((a, b) => b.count - a.count);
-
-            console.log(`Hierarchical: ${Object.keys(level0Centers).length} L0, ${Object.keys(level1Centers).length} L1 clusters`);
-        }
-
         // Search
         const searchInput = document.getElementById('search-input');
         const searchResults = document.getElementById('search-results');
@@ -1776,16 +934,17 @@ GRAPH_HTML = """
         async function doSearch(q) {
             try {
                 const data = await (await fetch(`/admin/graph/search?q=${encodeURIComponent(q)}`)).json();
+                const results = data.results || [];
 
                 highlightedNodes.clear();
-                data.results.forEach(r => highlightedNodes.add(r.id));
+                results.forEach(r => highlightedNodes.add(r.id));
 
-                searchResults.innerHTML = data.results.length === 0
+                searchResults.innerHTML = results.length === 0
                     ? '<div style="padding:12px;color:#6b6b8a;">No results</div>'
-                    : data.results.slice(0, 20).map(r => `
+                    : results.slice(0, 20).map(r => `
                         <div class="search-result" data-x="${r.x}" data-y="${r.y}" data-id="${r.id}">
-                            <span class="search-result-name">${r.name}</span>
-                            <span class="search-result-type" style="background:${typeColorsHex[r.type]}20;color:${typeColorsHex[r.type]}">${r.type}</span>
+                            <span class="search-result-name">${escapeHtml(r.name)}</span>
+                            <span class="search-result-type" style="background:${typeColorsHex[r.type]}20;color:${typeColorsHex[r.type]}">${escapeHtml(r.type)}</span>
                         </div>
                     `).join('');
 
@@ -1822,62 +981,35 @@ GRAPH_HTML = """
                 lastMouseX = e.clientX;
                 lastMouseY = e.clientY;
                 render();
-                scheduleViewportLoad();
             } else {
-                // Check for hierarchical cluster hover
-                const clusterHit = findClusterAtPosition(e.clientX, e.clientY);
-                if (clusterHit !== null) {
+                const hit = findItemAtPosition(e.clientX, e.clientY);
+                if (hit) {
                     canvas.style.cursor = 'pointer';
-                    const center = clusterHit.center;
-                    const levelNames = { level0: 'L0 super-cluster', level1: 'L1 cluster', level2: 'L2 cluster', level3: 'L3 cluster' };
-                    const levelName = levelNames[clusterHit.type] || 'cluster';
-                    showTooltip({ name: `Click to zoom into "${center.name}" (${center.nodeCount} nodes, ${levelName})` }, e.clientX, e.clientY);
+                    if (hit.type === 'cluster') {
+                        showTooltip({ name: `Click to expand: ${escapeHtml(hit.item.name)} (${hit.item.count} nodes)` }, e.clientX, e.clientY);
+                    } else {
+                        hoveredNode = hit.item;
+                        showTooltip(hit.item, e.clientX, e.clientY);
+                    }
+                } else {
+                    canvas.style.cursor = 'default';
                     hoveredNode = null;
-                    return;
+                    hideTooltip();
                 }
-
-                canvas.style.cursor = 'default';
-                const node = findNodeAt(e.clientX, e.clientY);
-                if (node !== hoveredNode) {
-                    hoveredNode = node;
-                    node ? showTooltip(node, e.clientX, e.clientY) : hideTooltip();
-                    render();
-                }
+                render();
             }
         });
 
         canvas.addEventListener('mouseup', async (e) => {
             if (Math.abs(e.clientX - dragStartX) < 5 && Math.abs(e.clientY - dragStartY) < 5) {
-                // Check for hierarchical cluster click first (when zoomed out)
-                const clusterHit = findClusterAtPosition(e.clientX, e.clientY);
-                if (clusterHit !== null) {
-                    // Target scales to reach the next zoom level (zoom in extra for better visibility):
-                    // L0 → L1: need scale >= 0.008, target 0.025
-                    // L1 → L2: need scale >= 0.02, target 0.055
-                    // L2 → L3: need scale >= 0.045, target 0.1
-                    // L3 → L4 (nodes): need scale >= 0.09, target 0.2
-                    const targetScales = {
-                        level0: 0.006,
-                        level1: 0.015,
-                        level2: 0.035,
-                        level3: 0.065
-                    };
-                    const targetScale = targetScales[clusterHit.type] || 0.2;
+                const hit = findItemAtPosition(e.clientX, e.clientY);
 
-                    // Extract L0 cluster ID for lazy loading
-                    const l0Id = clusterHit.type === 'level0' ? parseInt(clusterHit.id) :
-                                 parseInt(clusterHit.id.split('-')[0]);
-
-                    await animateToHierarchicalCluster(clusterHit.center, targetScale, l0Id);
-                    isDragging = false;
-                    return;
-                }
-
-                // Then check for node click
-                const node = findNodeAt(e.clientX, e.clientY);
-                if (node) {
-                    selectedNode = node;
-                    showNodeInfo(node);
+                if (hit && hit.type === 'cluster') {
+                    // Drill into cluster
+                    await drillIntoCluster(hit.item.id);
+                } else if (hit && hit.type === 'node') {
+                    selectedNode = hit.item;
+                    showNodeInfo(hit.item);
                 } else {
                     closeNodeInfo();
                     highlightedNodes.clear();
@@ -1887,30 +1019,110 @@ GRAPH_HTML = """
             isDragging = false;
         });
 
-        async function animateToHierarchicalCluster(center, targetScale, clusterId = null) {
-            // Animate to center of hierarchical cluster with appropriate zoom
-            const padding = 1.1;
-            const fitScale = Math.min(
-                window.innerWidth / (center.radius * 4 * padding),
-                window.innerHeight / (center.radius * 4 * padding)
-            );
-            const finalScale = Math.max(targetScale, fitScale);
-            console.log(`Zooming to cluster: ${center.name}, x=${center.x.toFixed(0)}, y=${center.y.toFixed(0)}, radius=${center.radius.toFixed(0)}, nodes=${center.nodeCount}, finalScale=${finalScale.toFixed(4)}`);
+        // Level navigation functions
+        async function drillIntoCluster(itemId) {
+            console.log(`Drilling into cluster ${itemId} at level ${currentLevel}`);
 
-            // Lazy load: If this is an L0 cluster and not yet loaded, load it
-            if (clusterId !== null && !loadedClusters.has(clusterId)) {
-                console.log(`Lazy loading cluster ${clusterId}...`);
-                await loadClusterData(clusterId);
-
-                // Also load cross-cluster links if this is the first cluster
-                if (loadedClusters.size === 1) {
-                    loadCrossClusterLinks();  // Fire and forget
+            try {
+                if (currentLevel === 0) {
+                    // L0 → L1: Load L1 clusters
+                    parentPath.l0 = itemId;
+                    const data = await (await fetch(`/admin/graph/clusters/l1/${itemId}`)).json();
+                    currentItems = data.clusters || [];
+                    currentEdges = data.edges || [];
+                    currentLevel = 1;
+                } else if (currentLevel === 1) {
+                    // L1 → L2: Load L2 clusters
+                    parentPath.l1 = itemId;
+                    const data = await (await fetch(`/admin/graph/clusters/l2/${parentPath.l0}/${itemId}`)).json();
+                    currentItems = data.clusters || [];
+                    currentEdges = data.edges || [];
+                    currentLevel = 2;
+                } else if (currentLevel === 2) {
+                    // L2 → Nodes: Load actual nodes
+                    parentPath.l2 = itemId;
+                    const data = await (await fetch(`/admin/graph/clusters/nodes/${parentPath.l0}/${parentPath.l1}/${itemId}`)).json();
+                    nodes = data.nodes || [];
+                    nodeMap = {};
+                    for (const n of nodes) { nodeMap[n.id] = n; }
+                    currentEdges = data.edges || [];
+                    currentItems = [];  // Clear cluster items
+                    currentLevel = 3;
                 }
-            }
 
-            animateTo(center.x, center.y, finalScale);
+                // Fit view to new items
+                fitViewToCurrentLevel();
+                render();
+            } catch (e) {
+                console.error('Failed to load cluster data:', e);
+            }
         }
 
+        async function goBack() {
+            if (currentLevel === 0) return;  // Already at top
+
+            console.log(`Going back from level ${currentLevel}`);
+
+            try {
+                if (currentLevel === 1) {
+                    // Back to L0
+                    const data = await (await fetch('/admin/graph/clusters')).json();
+                    currentItems = data.clusters || [];
+                    currentEdges = data.edges || [];
+                    parentPath = { l0: null, l1: null, l2: null };
+                    currentLevel = 0;
+                } else if (currentLevel === 2) {
+                    // Back to L1
+                    const data = await (await fetch(`/admin/graph/clusters/l1/${parentPath.l0}`)).json();
+                    currentItems = data.clusters || [];
+                    currentEdges = data.edges || [];
+                    parentPath.l1 = null;
+                    parentPath.l2 = null;
+                    currentLevel = 1;
+                } else if (currentLevel === 3) {
+                    // Back to L2
+                    const data = await (await fetch(`/admin/graph/clusters/l2/${parentPath.l0}/${parentPath.l1}`)).json();
+                    currentItems = data.clusters || [];
+                    currentEdges = data.edges || [];
+                    nodes = [];
+                    nodeMap = {};
+                    parentPath.l2 = null;
+                    currentLevel = 2;
+                }
+
+                fitViewToCurrentLevel();
+                render();
+            } catch (e) {
+                console.error('Failed to go back:', e);
+            }
+        }
+
+        function fitViewToCurrentLevel() {
+            const items = currentLevel < 3 ? currentItems : nodes;
+            if (items.length === 0) return;
+
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            for (const item of items) {
+                minX = Math.min(minX, item.x);
+                maxX = Math.max(maxX, item.x);
+                minY = Math.min(minY, item.y);
+                maxY = Math.max(maxY, item.y);
+            }
+
+            const padding = 0.15;
+            // Prevent divide by zero when all items at same position
+            const gw = Math.max(100, (maxX - minX) * (1 + padding));
+            const gh = Math.max(100, (maxY - minY) * (1 + padding));
+            const centerX = (minX + maxX) / 2;
+            const centerY = (minY + maxY) / 2;
+
+            const newScale = Math.min(
+                window.innerWidth / (gw * 2) * 0.8,
+                window.innerHeight / (gh * 2) * 0.8
+            );
+
+            animateTo(centerX, centerY, Math.max(0.001, Math.min(2, newScale)));
+        }
 
         canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
@@ -1921,21 +1133,18 @@ GRAPH_HTML = """
             viewX += mouseWorld.x - newMouseWorld.x;
             viewY += mouseWorld.y - newMouseWorld.y;
             render();
-            scheduleViewportLoad();
         });
 
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
-                // Always zoom out to initial overview
-                animateToOverview();
-                closeNodeInfo();
-                highlightedNodes.clear();
-                stopActivationAnimation();
-                typeFilters.clear();
-                document.querySelectorAll('.legend-item').forEach(el => el.classList.remove('active', 'dimmed'));
-                searchInput.value = '';
-                searchResults.classList.remove('visible');
-                render();
+                if (currentLevel > 0) {
+                    goBack();
+                } else {
+                    closeNodeInfo();
+                    highlightedNodes.clear();
+                    searchInput.value = '';
+                    searchResults.classList.remove('visible');
+                }
             }
         });
 
@@ -2029,29 +1238,6 @@ GRAPH_HTML = """
             render();
         }
 
-        // Continuous animation for cluster glow pulsing
-        let continuousAnimationId = null;
-        function startContinuousAnimation() {
-            if (continuousAnimationId) return;
-
-            function animate() {
-                const semanticZoomLevel = scale < 0.008 ? 0 : (scale < 0.02 ? 1 : (scale < 0.045 ? 2 : (scale < 0.09 ? 3 : 4)));
-                // Animate when showing clusters (for pulsing) - levels 0-3
-                if (semanticZoomLevel <= 3) {
-                    render();
-                }
-                continuousAnimationId = requestAnimationFrame(animate);
-            }
-            animate();
-        }
-
-        function stopContinuousAnimation() {
-            if (continuousAnimationId) {
-                cancelAnimationFrame(continuousAnimationId);
-                continuousAnimationId = null;
-            }
-        }
-
         async function sendChat(isRetest = false) {
             const input = document.getElementById('chat-input');
             const sendBtn = document.getElementById('chat-send');
@@ -2138,8 +1324,8 @@ GRAPH_HTML = """
                 const assistantMsg = document.createElement('div');
                 assistantMsg.className = 'chat-message assistant';
 
-                // Format answer (basic markdown-like formatting)
-                let formattedAnswer = answer
+                // Format answer (escape HTML first, then apply markdown-like formatting)
+                let formattedAnswer = escapeHtml(answer)
                     .replace(/\\n/g, '<br>')
                     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
                     .replace(/\*(.+?)\*/g, '<em>$1</em>');
@@ -2222,8 +1408,8 @@ GRAPH_HTML = """
                 }).join('');
                 const filteredClass = m.included ? '' : 'filtered';
                 const testBtn = m.included
-                    ? `<button class="test-btn" onclick="testExcludeNode('${m.id}')" title="Test without this">−</button>`
-                    : `<button class="test-btn" onclick="testIncludeNode('${m.id}')" title="Test with this">+</button>`;
+                    ? `<button class="test-btn" onclick="testExcludeNode('${m.id}', event)" title="Test without this">−</button>`
+                    : `<button class="test-btn" onclick="testIncludeNode('${m.id}', event)" title="Test with this">+</button>`;
 
                 return `
                     <div class="debug-item ${filteredClass}" data-id="${m.id}" onclick="highlightNodeInGraph('${m.id}', event)">
@@ -2244,8 +1430,8 @@ GRAPH_HTML = """
                 const scorePercent = Math.min(100, c.activation * 100);
                 const filteredClass = c.included ? '' : 'filtered';
                 const testBtn = c.included
-                    ? `<button class="test-btn" onclick="testExcludeNode('${c.id}')" title="Test without this">−</button>`
-                    : `<button class="test-btn" onclick="testIncludeNode('${c.id}')" title="Test with this">+</button>`;
+                    ? `<button class="test-btn" onclick="testExcludeNode('${c.id}', event)" title="Test without this">−</button>`
+                    : `<button class="test-btn" onclick="testIncludeNode('${c.id}', event)" title="Test with this">+</button>`;
 
                 return `
                     <div class="debug-item ${filteredClass}" data-id="${c.id}" onclick="highlightNodeInGraph('${c.id}', event)">
@@ -2298,8 +1484,8 @@ GRAPH_HTML = """
             }
         }
 
-        function testIncludeNode(nodeId) {
-            event.stopPropagation();
+        function testIncludeNode(nodeId, evt) {
+            if (evt) evt.stopPropagation();
             if (!forceIncludeNodes.includes(nodeId)) {
                 forceIncludeNodes.push(nodeId);
             }
@@ -2307,8 +1493,8 @@ GRAPH_HTML = """
             sendChat(true);
         }
 
-        function testExcludeNode(nodeId) {
-            event.stopPropagation();
+        function testExcludeNode(nodeId, evt) {
+            if (evt) evt.stopPropagation();
             if (!forceExcludeNodes.includes(nodeId)) {
                 forceExcludeNodes.push(nodeId);
             }
@@ -2330,287 +1516,45 @@ GRAPH_HTML = """
             this.style.height = Math.min(this.scrollHeight, 100) + 'px';
         });
 
-        // Lazy loading state
-        let loadedClusters = new Set();  // L0 cluster IDs that have been loaded
-        let clusterNodes = {};  // L0 ID -> array of nodes
-        let clusterLinks = {};  // L0 ID -> array of internal links
-        let crossClusterLinks = [];  // Links between clusters
-        let clusterCentersData = null;  // Cached cluster centers from API
-        let isLoadingCluster = false;
-
         async function init() {
             resize();
             window.addEventListener('resize', resize);
 
-            const boundsData = await (await fetch('/admin/graph/bounds')).json();
-            if (!boundsData.has_layout) {
-                document.getElementById('loading').innerHTML = 'No layout. Run: uv run python scripts/compute_layout.py';
-                return;
-            }
-
-            bounds = boundsData;
-            viewX = (bounds.min_x + bounds.max_x) / 2;
-            viewY = (bounds.min_y + bounds.max_y) / 2;
-            const graphWidth = bounds.max_x - bounds.min_x;
-            const graphHeight = bounds.max_y - bounds.min_y;
-            scale = Math.max(0.001, Math.min(1, Math.min(
-                window.innerWidth * 0.7 / (graphWidth * 2),
-                window.innerHeight * 0.7 / (graphHeight * 2)
-            )));
-
-            initialView = { x: viewX, y: viewY, scale: scale };
-
-            const stats = await (await fetch('/admin/graph/stats')).json();
-            document.getElementById('c-count').textContent = stats.concepts;
-            document.getElementById('s-count').textContent = stats.semantic;
-            document.getElementById('e-count').textContent = stats.episodic;
-            document.getElementById('stats').innerHTML = `<div>Total: <strong style="color:#5eead4">${stats.total}</strong></div><div>Clusters: <strong style="color:#a78bfa">${stats.clusters}</strong></div>`;
-
-            // Lazy load: Only load cluster centers initially (very fast)
-            await loadClusterCentersOnly();
-
-            document.getElementById('loading').style.display = 'none';
-
-            // Start with overview (no nodes loaded yet, just cluster bubbles)
-            render();
-
-            startContinuousAnimation();
-        }
-
-        async function loadClusterCentersOnly() {
-            const loadingEl = document.getElementById('loading');
-            loadingEl.innerHTML = 'Loading cluster map...';
-
             try {
-                clusterCentersData = await (await fetch('/admin/graph/clusters')).json();
-
-                // Build hierarchical centers from API data (no nodes loaded yet)
-                buildCentersFromClusterData(clusterCentersData);
-
-                console.log(`Loaded ${clusterCentersData.l0.length} L0 clusters, ${clusterCentersData.l1.length} L1, ${clusterCentersData.l2.length} L2 (${clusterCentersData.total_nodes} total nodes available)`);
-            } catch (e) {
-                console.error('Failed to load cluster centers:', e);
-            }
-        }
-
-        function buildCentersFromClusterData(data) {
-            // Build level0Centers from API data
-            level0Centers = {};
-            for (const c of data.l0) {
-                level0Centers[c.level0] = {
-                    x: c.center_x,
-                    y: c.center_y,
-                    radius: c.radius || 200,
-                    nodeCount: c.node_count,
-                    name: c.name || 'Cluster',
-                    loaded: loadedClusters.has(c.level0)
-                };
-            }
-
-            // Build level1Centers
-            level1Centers = {};
-            for (const c of data.l1) {
-                const key = `${c.level0}-${c.level1}`;
-                level1Centers[key] = {
-                    x: c.center_x,
-                    y: c.center_y,
-                    radius: 150,
-                    nodeCount: c.node_count,
-                    parent: c.level0,
-                    name: c.name || `Group ${c.level1}`
-                };
-            }
-
-            // Build level2Centers
-            level2Centers = {};
-            for (const c of data.l2) {
-                const key = `${c.level0}-${c.level1}-${c.level2}`;
-                level2Centers[key] = {
-                    x: c.center_x,
-                    y: c.center_y,
-                    radius: 100,
-                    nodeCount: c.node_count,
-                    parent: c.level0,
-                    name: c.name || `Set ${c.level2}`
-                };
-            }
-
-            // Build L0 edges
-            level0Edges = data.edges.map(e => ({
-                from: String(e.from),
-                to: String(e.to),
-                count: e.weight
-            }));
-
-            level1Edges = [];
-            level2Edges = [];
-            level3Edges = [];
-            level3Centers = {};
-        }
-
-        async function loadClusterData(level0Id) {
-            if (loadedClusters.has(level0Id) || isLoadingCluster) return;
-
-            isLoadingCluster = true;
-            console.log(`Loading cluster ${level0Id}...`);
-
-            try {
-                const data = await (await fetch(`/admin/graph/data/cluster/${level0Id}`)).json();
-
-                clusterNodes[level0Id] = data.nodes;
-                clusterLinks[level0Id] = data.links;
-                loadedClusters.add(level0Id);
-
-                // Mark cluster as loaded in centers
-                if (level0Centers[level0Id]) {
-                    level0Centers[level0Id].loaded = true;
+                const boundsData = await (await fetch('/admin/graph/bounds')).json();
+                if (!boundsData.has_layout) {
+                    document.getElementById('loading').innerHTML = 'No layout. Run: uv run python scripts/compute_layout.py';
+                    return;
                 }
 
-                // Rebuild nodes/links arrays from all loaded clusters
-                rebuildNodesFromLoadedClusters();
+                bounds = boundsData;
 
-                console.log(`Loaded cluster ${level0Id}: ${data.nodes.length} nodes, ${data.links.length} links`);
+                const stats = await (await fetch('/admin/graph/stats')).json();
+                document.getElementById('c-count').textContent = stats.concepts || 0;
+                document.getElementById('s-count').textContent = stats.semantic || 0;
+                document.getElementById('e-count').textContent = stats.episodic || 0;
+                document.getElementById('stats').innerHTML = `<div>Total: <strong style="color:#5eead4">${stats.total || 0}</strong></div><div>Clusters: <strong style="color:#a78bfa">${stats.clusters || 0}</strong></div>`;
+
+                // Load L0 clusters (initial view)
+                document.getElementById('loading').innerHTML = 'Loading clusters...';
+                const data = await (await fetch('/admin/graph/clusters')).json();
+                currentItems = data.clusters || [];
+                currentEdges = data.edges || [];
+                currentLevel = 0;
+                parentPath = { l0: null, l1: null, l2: null };
+
+                console.log(`Loaded ${currentItems.length} L0 clusters, ${data.total_nodes || 0} total nodes`);
+
+                document.getElementById('loading').style.display = 'none';
+
+                // Fit view to initial clusters
+                fitViewToCurrentLevel();
+                initialView = { x: viewX, y: viewY, scale: scale };
+
                 render();
             } catch (e) {
-                console.error(`Failed to load cluster ${level0Id}:`, e);
-            } finally {
-                isLoadingCluster = false;
-            }
-        }
-
-        function rebuildNodesFromLoadedClusters() {
-            // Combine all loaded cluster data into nodes/links arrays
-            nodes = [];
-            nodeMap = {};
-
-            for (const l0Id of loadedClusters) {
-                const clusterNodeList = clusterNodes[l0Id] || [];
-                for (const n of clusterNodeList) {
-                    if (!nodeMap[n.id]) {
-                        nodes.push(n);
-                        nodeMap[n.id] = n;
-                    }
-                }
-            }
-
-            // Combine internal links from loaded clusters
-            links = [];
-            for (const l0Id of loadedClusters) {
-                const clusterLinkList = clusterLinks[l0Id] || [];
-                for (const link of clusterLinkList) {
-                    if (nodeMap[link.source] && nodeMap[link.target]) {
-                        links.push(link);
-                    }
-                }
-            }
-
-            // Add cross-cluster links between loaded clusters
-            for (const link of crossClusterLinks) {
-                if (nodeMap[link.source] && nodeMap[link.target]) {
-                    links.push(link);
-                }
-            }
-
-            // Recompute centers for loaded data
-            if (nodes.length > 0) {
-                computeDetailedCentersForLoadedNodes();
-            }
-
-            computeClusterCenters();
-            computeInterClusterEdges();
-        }
-
-        function computeDetailedCentersForLoadedNodes() {
-            // Update level1-3 centers with actual loaded node data
-            const tempLevel1 = {};
-            const tempLevel2 = {};
-            const tempLevel3 = {};
-
-            for (const node of nodes) {
-                // L1
-                const l1Key = `${node.level0}-${node.level1}`;
-                if (!tempLevel1[l1Key]) tempLevel1[l1Key] = [];
-                tempLevel1[l1Key].push(node);
-
-                // L2
-                const l2Key = `${node.level0}-${node.level1}-${node.level2}`;
-                if (!tempLevel2[l2Key]) tempLevel2[l2Key] = [];
-                tempLevel2[l2Key].push(node);
-
-                // L3
-                const l3Key = `${node.level0}-${node.level1}-${node.level2}-${node.level3}`;
-                if (!tempLevel3[l3Key]) tempLevel3[l3Key] = [];
-                tempLevel3[l3Key].push(node);
-            }
-
-            // Compute L1 centers from actual nodes
-            for (const [key, nodeList] of Object.entries(tempLevel1)) {
-                const cx = nodeList.reduce((s, n) => s + n.x, 0) / nodeList.length;
-                const cy = nodeList.reduce((s, n) => s + n.y, 0) / nodeList.length;
-                let maxDist = 0;
-                for (const n of nodeList) {
-                    const d = Math.sqrt((n.x - cx)**2 + (n.y - cy)**2);
-                    if (d > maxDist) maxDist = d;
-                }
-                const sorted = [...nodeList].sort((a, b) => (b.conn || 0) - (a.conn || 0));
-                level1Centers[key] = {
-                    x: cx, y: cy,
-                    radius: maxDist + 100,
-                    nodeCount: nodeList.length,
-                    parent: parseInt(key.split('-')[0]) || 0,
-                    name: (sorted[0]?.name || 'Cluster').substring(0, 25)
-                };
-            }
-
-            // Compute L2 centers
-            for (const [key, nodeList] of Object.entries(tempLevel2)) {
-                const cx = nodeList.reduce((s, n) => s + n.x, 0) / nodeList.length;
-                const cy = nodeList.reduce((s, n) => s + n.y, 0) / nodeList.length;
-                let maxDist = 0;
-                for (const n of nodeList) {
-                    const d = Math.sqrt((n.x - cx)**2 + (n.y - cy)**2);
-                    if (d > maxDist) maxDist = d;
-                }
-                const sorted = [...nodeList].sort((a, b) => (b.conn || 0) - (a.conn || 0));
-                level2Centers[key] = {
-                    x: cx, y: cy,
-                    radius: maxDist + 50,
-                    nodeCount: nodeList.length,
-                    parent: parseInt(key.split('-')[0]) || 0,
-                    name: (sorted[0]?.name || 'Group').substring(0, 25)
-                };
-            }
-
-            // Compute L3 centers
-            for (const [key, nodeList] of Object.entries(tempLevel3)) {
-                const cx = nodeList.reduce((s, n) => s + n.x, 0) / nodeList.length;
-                const cy = nodeList.reduce((s, n) => s + n.y, 0) / nodeList.length;
-                let maxDist = 0;
-                for (const n of nodeList) {
-                    const d = Math.sqrt((n.x - cx)**2 + (n.y - cy)**2);
-                    if (d > maxDist) maxDist = d;
-                }
-                const sorted = [...nodeList].sort((a, b) => (b.conn || 0) - (a.conn || 0));
-                level3Centers[key] = {
-                    x: cx, y: cy,
-                    radius: maxDist + 30,
-                    nodeCount: nodeList.length,
-                    parent: parseInt(key.split('-')[0]) || 0,
-                    name: (sorted[0]?.name || 'Set').substring(0, 25)
-                };
-            }
-        }
-
-        async function loadCrossClusterLinks() {
-            if (crossClusterLinks.length > 0) return;
-
-            try {
-                const data = await (await fetch('/admin/graph/links/cross')).json();
-                crossClusterLinks = data.links;
-                console.log(`Loaded ${crossClusterLinks.length} cross-cluster links`);
-                rebuildNodesFromLoadedClusters();
-            } catch (e) {
-                console.error('Failed to load cross-cluster links:', e);
+                console.error('Failed to initialize graph:', e);
+                document.getElementById('loading').textContent = 'Error loading graph: ' + e.message;
             }
         }
 
