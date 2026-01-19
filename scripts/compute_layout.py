@@ -1001,8 +1001,8 @@ def compute_hierarchical_communities(nodes, edges, levels=5):
     # Compute degree (connection count) for each node
     degree = {nid: len(neighbors[nid]) for nid in nodes}
 
-    # Hub threshold: nodes with >500 connections or top 0.1% by degree
-    hub_threshold = max(500, sorted(degree.values(), reverse=True)[min(len(nodes) // 1000, len(nodes) - 1)] if nodes else 500)
+    # Hub threshold: nodes with >100 connections or top 0.1% by degree
+    hub_threshold = max(100, sorted(degree.values(), reverse=True)[min(len(nodes) // 1000, len(nodes) - 1)] if nodes else 100)
     hub_nodes = {nid for nid, d in degree.items() if d >= hub_threshold}
     if hub_nodes:
         print(f"  Detected {len(hub_nodes)} hub nodes (>={hub_threshold} connections)")
