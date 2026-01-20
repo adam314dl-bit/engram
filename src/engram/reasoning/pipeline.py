@@ -85,6 +85,8 @@ class ReasoningPipeline:
         top_k_memories: int = 10,
         top_k_episodes: int = 3,
         temperature: float = 0.7,
+        force_include_nodes: list[str] | None = None,
+        force_exclude_nodes: list[str] | None = None,
     ) -> ReasoningResult:
         """
         Execute the full reasoning pipeline.
@@ -106,6 +108,39 @@ class ReasoningPipeline:
             top_k_memories=top_k_memories,
             top_k_episodes=top_k_episodes,
         )
+
+        # Apply force exclude - remove specified nodes
+        if force_exclude_nodes:
+            exclude_set = set(force_exclude_nodes)
+            retrieval_result.memories = [
+                m for m in retrieval_result.memories
+                if m.memory.id not in exclude_set
+            ]
+            # Also exclude from activated concepts
+            retrieval_result.activated_concepts = {
+                k: v for k, v in retrieval_result.activated_concepts.items()
+                if k not in exclude_set
+            }
+
+        # Apply force include - fetch and add specified nodes
+        if force_include_nodes:
+            from engram.retrieval.hybrid_search import ScoredMemory
+            for node_id in force_include_nodes:
+                # Check if already in results
+                existing_ids = {m.memory.id for m in retrieval_result.memories}
+                if node_id not in existing_ids and node_id.startswith("mem_"):
+                    # Try to fetch the memory
+                    memory = await self.db.get_semantic_memory(node_id)
+                    if memory:
+                        retrieval_result.memories.insert(0, ScoredMemory(
+                            memory=memory,
+                            score=1.0,  # Forced nodes get max score
+                            sources=["F"],  # F = Forced
+                        ))
+                elif node_id not in existing_ids and node_id.startswith("c_"):
+                    # Force include a concept - add to activated concepts
+                    if node_id not in retrieval_result.activated_concepts:
+                        retrieval_result.activated_concepts[node_id] = 1.0
 
         logger.debug(
             f"Retrieved {len(retrieval_result.memories)} memories, "

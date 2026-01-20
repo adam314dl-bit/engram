@@ -253,6 +253,8 @@ async def chat_completions(
             top_k_memories=body.top_k_memories,
             top_k_episodes=body.top_k_episodes,
             temperature=body.temperature,
+            force_include_nodes=body.force_include_nodes if body.force_include_nodes else None,
+            force_exclude_nodes=body.force_exclude_nodes if body.force_exclude_nodes else None,
         )
 
         # Append confidence to response content for visibility in Open WebUI
