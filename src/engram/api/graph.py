@@ -31,7 +31,7 @@ def get_db(request: Request) -> Neo4jClient:
     return request.app.state.db
 
 
-@router.get("/admin/graph/bounds")
+@router.get("/constellation/bounds", include_in_schema=False)
 async def get_graph_bounds(request: Request) -> dict:
     db = get_db(request)
     result = await db.execute_query(
@@ -53,7 +53,7 @@ async def get_graph_bounds(request: Request) -> dict:
     return {"has_layout": False, "total": 0}
 
 
-@router.get("/admin/graph/search")
+@router.get("/constellation/search", include_in_schema=False)
 async def search_nodes(request: Request, q: str = Query(..., min_length=2)) -> dict:
     db = get_db(request)
     query_lower = q.lower()
@@ -106,7 +106,7 @@ async def search_nodes(request: Request, q: str = Query(..., min_length=2)) -> d
     return {"results": results[:100], "total": len(results)}
 
 
-@router.get("/admin/graph/neighbors")
+@router.get("/constellation/neighbors", include_in_schema=False)
 async def get_neighbors(request: Request, node_id: str = Query(...)) -> dict:
     """Get neighbors of a node."""
     db = get_db(request)
@@ -142,7 +142,7 @@ async def get_neighbors(request: Request, node_id: str = Query(...)) -> dict:
     return {"neighbors": results}
 
 
-@router.get("/admin/graph/data")
+@router.get("/constellation/data", include_in_schema=False)
 async def get_graph_data(
     request: Request,
     min_x: Optional[float] = Query(None),
@@ -251,7 +251,7 @@ async def get_graph_data(
     return {"nodes": nodes, "links": links}
 
 
-@router.get("/admin/graph/stats")
+@router.get("/constellation/stats", include_in_schema=False)
 async def get_graph_stats(request: Request) -> dict:
     db = get_db(request)
     concepts = await db.execute_query("MATCH (c:Concept) RETURN count(c) as count")
@@ -267,7 +267,7 @@ async def get_graph_stats(request: Request) -> dict:
     return {"concepts": c, "semantic": s, "episodic": e, "total": c + s + e, "clusters": cl}
 
 
-@router.get("/admin/graph/cluster-meta")
+@router.get("/constellation/cluster-meta", include_in_schema=False)
 async def get_cluster_metadata(request: Request) -> dict:
     """Get cluster centers and inter-cluster edges for cluster-level rendering."""
     db = get_db(request)
@@ -710,7 +710,7 @@ GRAPH_HTML = """
 
             try {
                 // Load 10% of all nodes, no viewport filtering
-                const url = `/admin/graph/data?sample=10`;
+                const url = `/constellation/data?sample=10`;
                 const data = await (await fetch(url)).json();
 
                 nodes = data.nodes;
@@ -1103,7 +1103,7 @@ GRAPH_HTML = """
             // Fetch neighbors
             let neighborsHtml = '<div style="color:#6b6b8a;padding:8px 0;">Loading...</div>';
             try {
-                const res = await fetch(`/admin/graph/neighbors?node_id=${encodeURIComponent(node.id)}`);
+                const res = await fetch(`/constellation/neighbors?node_id=${encodeURIComponent(node.id)}`);
                 const data = await res.json();
 
                 neighborNodes.clear();
@@ -1293,7 +1293,7 @@ GRAPH_HTML = """
 
         async function doSearch(q) {
             try {
-                const data = await (await fetch(`/admin/graph/search?q=${encodeURIComponent(q)}`)).json();
+                const data = await (await fetch(`/constellation/search?q=${encodeURIComponent(q)}`)).json();
 
                 highlightedNodes.clear();
                 data.results.forEach(r => highlightedNodes.add(r.id));
@@ -1578,7 +1578,7 @@ GRAPH_HTML = """
             resize();
             window.addEventListener('resize', resize);
 
-            const boundsData = await (await fetch('/admin/graph/bounds')).json();
+            const boundsData = await (await fetch('/constellation/bounds')).json();
             if (!boundsData.has_layout) {
                 document.getElementById('loading').innerHTML = 'No layout. Run: uv run python scripts/compute_layout.py';
                 return;
@@ -1596,7 +1596,7 @@ GRAPH_HTML = """
             scale = 0.0005;
             console.log(`Initial scale: ${scale}`);
 
-            const stats = await (await fetch('/admin/graph/stats')).json();
+            const stats = await (await fetch('/constellation/stats')).json();
             document.getElementById('c-count').textContent = stats.concepts;
             document.getElementById('s-count').textContent = stats.semantic;
             document.getElementById('e-count').textContent = stats.episodic;
@@ -1604,7 +1604,7 @@ GRAPH_HTML = """
 
             // Load cluster metadata for cluster-level rendering
             try {
-                clusterMeta = await (await fetch('/admin/graph/cluster-meta')).json();
+                clusterMeta = await (await fetch('/constellation/cluster-meta')).json();
                 // Apply spread factor to cluster centers
                 clusterMeta.centers.forEach(c => { c.x *= spreadFactor; c.y *= spreadFactor; });
                 console.log(`Loaded ${clusterMeta.centers.length} cluster centers, ${clusterMeta.edges.length} cluster edges`);
@@ -1629,6 +1629,6 @@ GRAPH_HTML = """
 """
 
 
-@router.get("/admin/graph", response_class=HTMLResponse)
+@router.get("/constellation", include_in_schema=False, response_class=HTMLResponse)
 async def graph_view() -> str:
     return GRAPH_HTML
