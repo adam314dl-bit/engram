@@ -786,16 +786,10 @@ GRAPH_HTML = """
             const isNeighbor = neighborNodes.has(node.id);
             const isSelected = node === selectedNode;
             const isActivated = activatedNodes.has(node.id);
-            const connCount = node.conn || 0;
 
-            // Sun nodes (high connection hubs) get warm pulsating glow
-            // Threshold: top nodes with 100+ connections are "suns"
-            const isSun = connCount >= 100;
-
-            // Activated nodes from chat get subtle highlight (not huge glow)
+            // Activated nodes from chat get bright cyan
             if (isActivated) {
-                // Bright cyan highlight for activated nodes
-                return [0.5, 1.0, 0.9, 1.0];
+                return [0.4, 1.0, 0.85, 1.0];
             }
 
             if (!isHighlighted && !isNeighbor && !isSelected && highlightedNodes.size > 0) {

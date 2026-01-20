@@ -48,6 +48,11 @@ class ChatCompletionRequest(BaseModel):
     top_k_memories: int = Field(default=10, ge=1, le=50)
     top_k_episodes: int = Field(default=3, ge=0, le=10)
 
+    # Debug options
+    debug: bool = False
+    force_include_nodes: list[str] = []
+    force_exclude_nodes: list[str] = []
+
 
 class ChatCompletionChoice(BaseModel):
     """Single choice in chat completion response."""
@@ -63,6 +68,32 @@ class ChatCompletionUsage(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+
+
+class DebugMemoryInfo(BaseModel):
+    """Debug info for a retrieved memory."""
+    id: str
+    content: str
+    score: float
+    sources: list[str] = []  # V=Vector, B=BM25, G=Graph, F=Forced
+    included: bool = True
+
+
+class DebugConceptInfo(BaseModel):
+    """Debug info for an activated concept."""
+    id: str
+    name: str
+    activation: float
+    hop: int = 0
+    included: bool = True
+
+
+class DebugInfo(BaseModel):
+    """Debug information for chat response."""
+    retrieved_memories: list[DebugMemoryInfo] = []
+    activated_concepts: list[DebugConceptInfo] = []
+    query_concepts: list[str] = []
+    thresholds: dict = {}
 
 
 class ChatCompletionResponse(BaseModel):
@@ -81,6 +112,9 @@ class ChatCompletionResponse(BaseModel):
     concepts_activated: list[str] = []  # Concept IDs
     memories_used: list[str] = []  # Memory IDs
     memories_count: int = 0
+
+    # Debug info (only when debug=true)
+    debug_info: DebugInfo | None = None
 
 
 # ============================================================================
@@ -228,6 +262,37 @@ async def chat_completions(
 
         content_with_stats = result.answer + stats_footer
 
+        # Build debug info if requested
+        debug_info = None
+        if body.debug:
+            debug_memories = []
+            for sm in result.retrieval.memories[:30]:
+                debug_memories.append(DebugMemoryInfo(
+                    id=sm.memory.id,
+                    content=sm.memory.content[:100] + "..." if len(sm.memory.content) > 100 else sm.memory.content,
+                    score=sm.score,
+                    sources=sm.sources,
+                    included=sm.memory.id in result.synthesis.memories_used,
+                ))
+
+            debug_concepts = []
+            for concept_id, activation in list(result.retrieval.activated_concepts.items())[:30]:
+                # Get concept name from db (simplified - just use id for now)
+                debug_concepts.append(DebugConceptInfo(
+                    id=concept_id,
+                    name=concept_id.split("_")[0] if "_" in concept_id else concept_id,
+                    activation=activation,
+                    hop=0,  # Would need more info from activation result
+                    included=concept_id in result.synthesis.concepts_activated,
+                ))
+
+            debug_info = DebugInfo(
+                retrieved_memories=debug_memories,
+                activated_concepts=debug_concepts,
+                query_concepts=[c.name for c in result.retrieval.query_concepts],
+                thresholds={"top_k_memories": body.top_k_memories},
+            )
+
         return ChatCompletionResponse(
             id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
             created=int(time.time()),
@@ -247,6 +312,7 @@ async def chat_completions(
             concepts_activated=result.synthesis.concepts_activated[:50],  # Concept IDs
             memories_used=result.synthesis.memories_used[:50],  # Memory IDs
             memories_count=memories_count,
+            debug_info=debug_info,
         )
 
     except Exception as e:
