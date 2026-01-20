@@ -467,6 +467,35 @@ GRAPH_HTML = """
             100% { opacity: 0.3; }
         }
         .activation-glow { animation: activationPulse 1.5s ease-in-out infinite; }
+
+        /* Debug Panel */
+        #debug-panel {
+            display: none; max-height: 300px; overflow-y: auto;
+            border-top: 1px solid #1a1a2e; padding: 12px;
+            background: #0a0a12; font-size: 11px;
+        }
+        #debug-panel.visible { display: block; }
+        .debug-section { margin-bottom: 12px; }
+        .debug-section-title { color: #5eead4; font-weight: 600; margin-bottom: 8px; text-transform: uppercase; font-size: 10px; }
+        .debug-item {
+            display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+            background: rgba(255,255,255,0.02); border-radius: 4px; margin: 4px 0;
+        }
+        .debug-item:hover { background: rgba(255,255,255,0.05); }
+        .debug-item-name { flex: 1; color: #e0e0ff; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .debug-item-name:hover { color: #5eead4; text-decoration: underline; }
+        .debug-score-bar { width: 60px; height: 6px; background: #1a1a2e; border-radius: 3px; overflow: hidden; }
+        .debug-score-fill { height: 100%; background: #5eead4; border-radius: 3px; }
+        .debug-score { color: #8b949e; min-width: 35px; text-align: right; }
+        .debug-source { font-size: 9px; padding: 2px 4px; border-radius: 2px; background: #1a1a2e; color: #8b949e; }
+        .debug-source.V { background: #5eead420; color: #5eead4; }
+        .debug-source.B { background: #a78bfa20; color: #a78bfa; }
+        .debug-source.G { background: #f472b620; color: #f472b6; }
+        .debug-source.F { background: #fbbf2420; color: #fbbf24; }
+        .debug-btn { padding: 2px 6px; border: 1px solid #2a2a4e; background: transparent; color: #8b949e; border-radius: 3px; cursor: pointer; font-size: 10px; }
+        .debug-btn:hover { border-color: #5eead4; color: #5eead4; }
+        .debug-btn.active { background: #5eead420; border-color: #5eead4; color: #5eead4; }
+        .debug-hop { font-size: 9px; color: #6b6b8a; }
     </style>
 </head>
 <body>
@@ -512,8 +541,19 @@ GRAPH_HTML = """
         <div id="chat-header">
             <h2>Chat with Memory</h2>
             <div class="chat-actions">
+                <button class="chat-action-btn" id="debug-btn" onclick="toggleDebugMode()">🔍 Debug</button>
                 <button class="chat-action-btn" id="show-activation-btn" onclick="showLastActivation()">Show Activation</button>
                 <button class="chat-action-btn" onclick="clearChat()">Clear</button>
+            </div>
+        </div>
+        <div id="debug-panel">
+            <div class="debug-section">
+                <div class="debug-section-title">Retrieved Memories</div>
+                <div id="debug-memories"></div>
+            </div>
+            <div class="debug-section">
+                <div class="debug-section-title">Activated Concepts</div>
+                <div id="debug-concepts"></div>
             </div>
         </div>
         <div id="chat-messages">
@@ -1427,6 +1467,111 @@ GRAPH_HTML = """
         // ============ CHAT FUNCTIONALITY ============
         let lastActivation = { concepts: [], memories: [] };
         let chatOpen = false;
+        let debugMode = false;
+        let lastDebugInfo = null;
+        let forceIncludeNodes = [];
+        let forceExcludeNodes = [];
+
+        function toggleDebugMode() {
+            debugMode = !debugMode;
+            document.getElementById('debug-btn').classList.toggle('active', debugMode);
+            document.getElementById('debug-panel').classList.toggle('visible', debugMode);
+        }
+
+        function renderDebugInfo(debugInfo) {
+            if (!debugInfo) return;
+            lastDebugInfo = debugInfo;
+
+            const memoriesEl = document.getElementById('debug-memories');
+            const conceptsEl = document.getElementById('debug-concepts');
+
+            // Render retrieved memories
+            if (debugInfo.retrieved_memories && debugInfo.retrieved_memories.length > 0) {
+                memoriesEl.innerHTML = debugInfo.retrieved_memories.map(m => {
+                    const score = (m.score || 0).toFixed(2);
+                    const pct = Math.round((m.score || 0) * 100);
+                    const sources = (m.sources || []).map(s => `<span class="debug-source ${s}">${s}</span>`).join('');
+                    const included = m.included !== false;
+                    const isForced = forceIncludeNodes.includes(m.id);
+                    const isExcluded = forceExcludeNodes.includes(m.id);
+                    return `
+                        <div class="debug-item" style="${!included ? 'opacity:0.5' : ''}">
+                            <span class="debug-item-name" onclick="highlightDebugNode('${m.id}')" title="${m.content || m.id}">${(m.content || m.id).substring(0, 40)}${(m.content || '').length > 40 ? '...' : ''}</span>
+                            <div class="debug-score-bar"><div class="debug-score-fill" style="width:${pct}%"></div></div>
+                            <span class="debug-score">${score}</span>
+                            ${sources}
+                            <button class="debug-btn ${isForced ? 'active' : ''}" onclick="toggleForceInclude('${m.id}')" title="Force include">+</button>
+                            <button class="debug-btn ${isExcluded ? 'active' : ''}" onclick="toggleForceExclude('${m.id}')" title="Force exclude">−</button>
+                        </div>
+                    `;
+                }).join('');
+            } else {
+                memoriesEl.innerHTML = '<div style="color:#6b6b8a;padding:8px;">No memories retrieved</div>';
+            }
+
+            // Render activated concepts
+            if (debugInfo.activated_concepts && debugInfo.activated_concepts.length > 0) {
+                conceptsEl.innerHTML = debugInfo.activated_concepts.map(c => {
+                    const activation = (c.activation || 0).toFixed(2);
+                    const pct = Math.round((c.activation || 0) * 100);
+                    const hop = c.hop !== undefined ? `<span class="debug-hop">hop ${c.hop}</span>` : '';
+                    const included = c.included !== false;
+                    return `
+                        <div class="debug-item" style="${!included ? 'opacity:0.5' : ''}">
+                            <span class="debug-item-name" onclick="highlightDebugNode('${c.id}')" title="${c.name || c.id}">${(c.name || c.id).substring(0, 30)}</span>
+                            <div class="debug-score-bar"><div class="debug-score-fill" style="width:${pct}%;background:#a78bfa"></div></div>
+                            <span class="debug-score">${activation}</span>
+                            ${hop}
+                        </div>
+                    `;
+                }).join('');
+            } else {
+                conceptsEl.innerHTML = '<div style="color:#6b6b8a;padding:8px;">No concepts activated</div>';
+            }
+        }
+
+        function highlightDebugNode(nodeId) {
+            const node = nodeMap[nodeId];
+            if (node) {
+                viewX = node.x;
+                viewY = node.y;
+                scale = 0.01;
+                selectedNode = node;
+                highlightedNodes.clear();
+                highlightedNodes.add(nodeId);
+                showNodeInfo(node);
+                render();
+            } else {
+                // Node not loaded, try to find in search
+                console.log('Node not in current view:', nodeId);
+            }
+        }
+
+        function toggleForceInclude(nodeId) {
+            const idx = forceIncludeNodes.indexOf(nodeId);
+            if (idx >= 0) {
+                forceIncludeNodes.splice(idx, 1);
+            } else {
+                forceIncludeNodes.push(nodeId);
+                // Remove from exclude if present
+                const exIdx = forceExcludeNodes.indexOf(nodeId);
+                if (exIdx >= 0) forceExcludeNodes.splice(exIdx, 1);
+            }
+            renderDebugInfo(lastDebugInfo);
+        }
+
+        function toggleForceExclude(nodeId) {
+            const idx = forceExcludeNodes.indexOf(nodeId);
+            if (idx >= 0) {
+                forceExcludeNodes.splice(idx, 1);
+            } else {
+                forceExcludeNodes.push(nodeId);
+                // Remove from include if present
+                const incIdx = forceIncludeNodes.indexOf(nodeId);
+                if (incIdx >= 0) forceIncludeNodes.splice(incIdx, 1);
+            }
+            renderDebugInfo(lastDebugInfo);
+        }
 
         function toggleChat() {
             chatOpen = !chatOpen;
@@ -1531,21 +1676,39 @@ GRAPH_HTML = """
             messages.scrollTop = messages.scrollHeight;
 
             try {
+                const requestBody = {
+                    model: 'engram',
+                    messages: [{ role: 'user', content: query }],
+                    top_k_memories: 20,
+                    top_k_episodes: 5
+                };
+
+                // Add debug parameters if debug mode is on
+                if (debugMode) {
+                    requestBody.debug = true;
+                    if (forceIncludeNodes.length > 0) {
+                        requestBody.force_include_nodes = forceIncludeNodes;
+                    }
+                    if (forceExcludeNodes.length > 0) {
+                        requestBody.force_exclude_nodes = forceExcludeNodes;
+                    }
+                }
+
                 const response = await fetch('/v1/chat/completions', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        model: 'engram',
-                        messages: [{ role: 'user', content: query }],
-                        top_k_memories: 20,
-                        top_k_episodes: 5
-                    })
+                    body: JSON.stringify(requestBody)
                 });
 
                 const data = await response.json();
 
                 // Remove loading message
                 messages.removeChild(loadingMsg);
+
+                // Render debug info if available
+                if (debugMode && data.debug_info) {
+                    renderDebugInfo(data.debug_info);
+                }
 
                 // Extract response
                 const answer = data.choices[0].message.content;
