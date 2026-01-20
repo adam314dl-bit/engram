@@ -591,10 +591,17 @@ GRAPH_HTML = """
                 vec2 coord = gl_PointCoord - vec2(0.5);
                 float dist = length(coord);
                 if (dist > 0.5) discard;
-                // Glow effect for important nodes
-                float glow = v_color.a > 0.95 ? (1.0 - dist * 1.5) * 0.3 : 0.0;
+                // Glow effect for important nodes (alpha > 0.95)
+                // Extra strong glow for sun nodes (alpha > 1.5, clamped for display)
+                float isSun = step(1.5, v_color.a);
+                float isImportant = step(0.95, v_color.a) * (1.0 - isSun);
+                float glow = isImportant * (1.0 - dist * 1.5) * 0.3;
+                // Sun glow - stronger, warmer
+                float sunGlow = isSun * (1.0 - dist * 1.2) * 0.6;
                 float alpha = 1.0 - smoothstep(0.35, 0.5, dist);
-                gl_FragColor = vec4(v_color.rgb + glow, alpha * v_color.a);
+                // Clamp display alpha to 1.0
+                float displayAlpha = min(v_color.a, 1.0);
+                gl_FragColor = vec4(v_color.rgb + glow + sunGlow, alpha * displayAlpha);
             }
         `;
 
@@ -722,6 +729,8 @@ GRAPH_HTML = """
                 nodes.forEach(n => nodeMap[n.id] = n);
 
                 console.log(`Loaded ${nodes.length} nodes`);
+                // Check for sun nodes to start pulsation animation
+                checkForSunNodes();
                 render();
             } catch (e) {
                 console.error('Failed to load:', e);
@@ -747,12 +756,25 @@ GRAPH_HTML = """
             const isNeighbor = neighborNodes.has(node.id);
             const isSelected = node === selectedNode;
             const isActivated = activatedNodes.has(node.id);
+            const connCount = node.conn || 0;
+
+            // Sun nodes (high connection hubs) get warm pulsating glow
+            // Threshold: top nodes with 100+ connections are "suns"
+            const isSun = connCount >= 100;
 
             // Activated nodes from chat get bright glow
             if (isActivated) {
                 // Pulsing glow effect using time
                 const pulse = 0.7 + 0.3 * Math.sin(Date.now() / 300);
                 return [1.0, 0.95, 0.3, pulse]; // Golden glow for activated
+            }
+
+            // Sun nodes pulsate with warm orange/yellow glow
+            if (isSun) {
+                // Slower, subtle pulsation for suns
+                const pulse = 0.85 + 0.15 * Math.sin(Date.now() / 800 + connCount * 0.1);
+                // Warm orange-yellow color, alpha > 1.5 triggers sun shader
+                return [1.0, 0.7, 0.2, 1.6 * pulse];
             }
 
             if (!isHighlighted && !isNeighbor && !isSelected && highlightedNodes.size > 0) {
@@ -770,7 +792,7 @@ GRAPH_HTML = """
             }
 
             // Add glow (alpha > 0.95) for important nodes
-            const importance = node.conn > 10 ? 1.0 : 0.9;
+            const importance = connCount > 10 ? 1.0 : 0.9;
             return [color[0], color[1], color[2], importance];
         }
 
@@ -1471,11 +1493,14 @@ GRAPH_HTML = """
             startActivationAnimation();
         }
 
+        let hasSunNodes = false; // Track if we have sun nodes for continuous animation
+
         function startActivationAnimation() {
             if (animationFrameId) cancelAnimationFrame(animationFrameId);
 
             function animate() {
-                if (activatedNodes.size === 0) {
+                // Keep animating if there are activated nodes OR sun nodes
+                if (activatedNodes.size === 0 && !hasSunNodes) {
                     animationFrameId = null;
                     return;
                 }
@@ -1491,7 +1516,20 @@ GRAPH_HTML = """
                 animationFrameId = null;
             }
             activatedNodes.clear();
-            render();
+            // Restart animation if we have sun nodes
+            if (hasSunNodes) {
+                startActivationAnimation();
+            } else {
+                render();
+            }
+        }
+
+        function checkForSunNodes() {
+            // Check if any loaded nodes are "suns" (100+ connections)
+            hasSunNodes = nodes.some(n => (n.conn || 0) >= 100);
+            if (hasSunNodes && !animationFrameId) {
+                startActivationAnimation();
+            }
         }
 
         async function sendChat() {
