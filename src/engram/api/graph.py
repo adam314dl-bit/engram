@@ -527,7 +527,6 @@ GRAPH_HTML = """
         </div>
         <div class="control-row">
             <button class="toggle-btn" id="cluster-btn" onclick="toggleClusters()">Clusters</button>
-            <button class="toggle-btn" id="bundle-btn" onclick="toggleBundling()">Bundle</button>
             <button class="toggle-btn" id="constellation-btn" onclick="toggleConstellation()">✨ Constellation</button>
         </div>
     </div>
@@ -593,7 +592,7 @@ GRAPH_HTML = """
         let neighborNodes = new Set();
         let neighborPositions = {}; // Store positions of ALL neighbors (not just loaded ones)
         let activatedNodes = new Set(); // Nodes activated by chat
-        let showClusters = false, showBundling = false, showConstellation = false;
+        let showClusters = false, showConstellation = false;
         let clusterCenters = {}; // { clusterId: { x, y, name, nodeCount } }
         let clusterMeta = { centers: [], edges: [] }; // Precomputed cluster data
         let renderMode = 'culled'; // 'cluster', 'culled', 'badge'
@@ -1258,12 +1257,6 @@ GRAPH_HTML = """
             render();
         }
 
-        function toggleBundling() {
-            showBundling = !showBundling;
-            document.getElementById('bundle-btn').classList.toggle('active', showBundling);
-            render();
-        }
-
         function toggleConstellation() {
             showConstellation = !showConstellation;
             document.getElementById('constellation-btn').classList.toggle('active', showConstellation);
@@ -1814,7 +1807,6 @@ GRAPH_HTML = """
         window.closeNodeInfo = closeNodeInfo;
         window.toggleTypeFilter = toggleTypeFilter;
         window.toggleClusters = toggleClusters;
-        window.toggleBundling = toggleBundling;
         window.toggleConstellation = toggleConstellation;
         window.highlightDebugNode = highlightDebugNode;
         window.toggleForceInclude = toggleForceInclude;
