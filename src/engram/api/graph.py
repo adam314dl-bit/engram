@@ -771,6 +771,11 @@ GRAPH_HTML = """
         }
 
         function determineRenderMode() {
+            // Force cluster mode when very zoomed out
+            if (scale < 0.01) {
+                return 'cluster';
+            }
+
             // Count visible nodes and find max connections
             let visibleCount = 0;
             let maxConn = 0;
@@ -1678,17 +1683,9 @@ GRAPH_HTML = """
             bounds = boundsData;
             viewX = (bounds.min_x + bounds.max_x) / 2;
             viewY = (bounds.min_y + bounds.max_y) / 2;
-            // Start at max zoom out to show entire graph
-            // Fit graph on screen: scale so graph fills ~90% of viewport (fully zoomed out)
-            const graphWidth = bounds.max_x - bounds.min_x;
-            const graphHeight = bounds.max_y - bounds.min_y;
-            scale = Math.min(
-                window.innerWidth * 0.9 / (graphWidth * 2),
-                window.innerHeight * 0.9 / (graphHeight * 2)
-            );
-            // Allow very low scale for large graphs (0.001 min)
-            scale = Math.max(0.001, Math.min(0.5, scale));  // Cap at 0.5 to start zoomed out
-            console.log(`Initial scale: ${scale.toFixed(4)}, graph size: ${graphWidth.toFixed(0)} x ${graphHeight.toFixed(0)}`);
+            // Start at max zoom out
+            scale = 0.001;
+            console.log(`Initial scale: ${scale}`);
 
             const stats = await (await fetch('/admin/graph/stats')).json();
             document.getElementById('c-count').textContent = stats.concepts;
