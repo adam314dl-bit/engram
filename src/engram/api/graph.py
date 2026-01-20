@@ -631,10 +631,9 @@ GRAPH_HTML = """
                 vec2 coord = gl_PointCoord - vec2(0.5);
                 float dist = length(coord);
                 if (dist > 0.5) discard;
-                // Glow effect for important nodes (alpha > 0.95)
-                float glow = v_color.a > 0.95 ? (1.0 - dist * 1.5) * 0.3 : 0.0;
-                float alpha = 1.0 - smoothstep(0.35, 0.5, dist);
-                gl_FragColor = vec4(v_color.rgb + glow, alpha * v_color.a);
+                // Simple circle with soft edge, no glow
+                float alpha = 1.0 - smoothstep(0.4, 0.5, dist);
+                gl_FragColor = vec4(v_color.rgb, alpha * v_color.a);
             }
         `;
 
@@ -793,16 +792,10 @@ GRAPH_HTML = """
             // Threshold: top nodes with 100+ connections are "suns"
             const isSun = connCount >= 100;
 
-            // Activated nodes from chat get bright glow
+            // Activated nodes from chat get subtle highlight (not huge glow)
             if (isActivated) {
-                // Pulsing glow effect using time
-                const pulse = 0.7 + 0.3 * Math.sin(Date.now() / 300);
-                return [1.0, 0.95, 0.3, pulse]; // Golden glow for activated
-            }
-
-            // Sun nodes - regular cyan, same as concepts
-            if (isSun) {
-                return [0.37, 0.92, 0.83, 1.0];
+                // Bright cyan highlight for activated nodes
+                return [0.5, 1.0, 0.9, 1.0];
             }
 
             if (!isHighlighted && !isNeighbor && !isSelected && highlightedNodes.size > 0) {
@@ -906,10 +899,10 @@ GRAPH_HTML = """
                     // 1 conn = 2px, 10 = 4px, 100 = 7px, 1000 = 12px, 5000 = 18px
                     let screenPixels = 2 + Math.pow(Math.log10(connCount + 1), 2) * 4;
 
-                    // Boost size for activated nodes (from chat)
+                    // Slight boost for activated nodes (from chat)
                     const isActivated = activatedNodes.has(node.id);
                     if (isActivated) {
-                        screenPixels = Math.max(screenPixels * 3, 8); // At least 8px, or 3x normal
+                        screenPixels = Math.max(screenPixels * 1.5, 5); // 1.5x normal, min 5px
                     }
 
                     // Convert to world size (divide by scale)
