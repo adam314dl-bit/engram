@@ -709,8 +709,8 @@ GRAPH_HTML = """
             loadingViewport = true;
 
             try {
-                // Load 10% of all nodes, no viewport filtering
-                const url = `/constellation/data?sample=10`;
+                // Load all nodes
+                const url = `/constellation/data?sample=1`;
                 const data = await (await fetch(url)).json();
 
                 nodes = data.nodes;
