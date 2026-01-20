@@ -1461,22 +1461,16 @@ GRAPH_HTML = """
 
         function toggleDebugMode() {
             debugMode = !debugMode;
-            console.log('Debug mode toggled to:', debugMode);
             document.getElementById('debug-btn').classList.toggle('active', debugMode);
             document.getElementById('debug-panel').classList.toggle('visible', debugMode);
         }
 
         function renderDebugInfo(debugInfo) {
-            console.log('renderDebugInfo called with:', debugInfo);
-            if (!debugInfo) {
-                console.log('No debug info');
-                return;
-            }
+            if (!debugInfo) return;
             lastDebugInfo = debugInfo;
 
             const memoriesEl = document.getElementById('debug-memories');
             const conceptsEl = document.getElementById('debug-concepts');
-            console.log('Found elements:', memoriesEl, conceptsEl);
 
             // Render retrieved memories
             if (debugInfo.retrieved_memories && debugInfo.retrieved_memories.length > 0) {
@@ -1643,7 +1637,6 @@ GRAPH_HTML = """
         }
 
         async function sendChat() {
-            console.log('sendChat called, debugMode:', debugMode);
             const input = document.getElementById('chat-input');
             const sendBtn = document.getElementById('chat-send');
             const messages = document.getElementById('chat-messages');
@@ -1695,18 +1688,13 @@ GRAPH_HTML = """
                 });
 
                 const data = await response.json();
-                console.log('Chat response:', data);
-                console.log('Debug mode:', debugMode, 'Has debug_info:', !!data.debug_info);
 
                 // Remove loading message
                 messages.removeChild(loadingMsg);
 
                 // Render debug info if available
                 if (debugMode && data.debug_info) {
-                    console.log('Rendering debug info...');
                     renderDebugInfo(data.debug_info);
-                } else if (debugMode) {
-                    console.log('Debug mode on but no debug_info in response');
                 }
 
                 // Extract response
