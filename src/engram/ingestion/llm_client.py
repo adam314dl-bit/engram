@@ -1,12 +1,14 @@
 """LLM client for OpenAI-compatible endpoints (Ollama, vLLM, etc.).
 
-Enhanced with robust thinking/reasoning leakage prevention for Kimi K2 Thinking model.
+FIXED version - simplified thinking handling. The --reasoning-parser kimi_k2 flag
+handles separation automatically at vLLM level. This client just needs to:
+1. Accept content from normal field
+2. Fall back to reasoning field if content is empty
+3. Strip any remaining thinking tags via ThinkingStripper
 """
 
 import asyncio
-import json
 import logging
-import re
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -126,38 +128,14 @@ class LLMClient:
         if raw_content is None:
             raw_content = choices[0].get("text")
 
-        # For thinking models like kimi-k2-thinking, content may be None
-        # but the actual response is in reasoning field
+        # FALLBACK: If content is empty but reasoning has data
+        # This happens when model puts answer in thinking tags due to anti-leakage prompts
+        # The --reasoning-parser kimi_k2 flag handles separation, so we can use reasoning directly
         if raw_content is None and reasoning_content:
-            logger.info("Content is None, extracting answer from reasoning field")
-            # Try to find final answer markers in Russian/English
-            answer_patterns = [
-                r'(?:Ответ|Итог|Результат|Вывод)[\s:：]+(.+?)(?:\n\n|\Z)',
-                r'(?:Answer|Result|Conclusion|Output)[\s:：]+(.+?)(?:\n\n|\Z)',
-                r'```json\s*([\s\S]*?)\s*```',  # JSON in code block
-                r'(\{[\s\S]*\})\s*$',  # JSON at end
-                r'(\[[\s\S]*\])\s*$',  # Array at end
-            ]
-            extracted = None
-            for pattern in answer_patterns:
-                match = re.search(pattern, reasoning_content, re.DOTALL | re.IGNORECASE)
-                if match:
-                    extracted = match.group(1).strip()
-                    if extracted:
-                        logger.info(f"Extracted answer from reasoning: {extracted[:100]}...")
-                        break
-
-            if extracted:
-                raw_content = extracted
-            else:
-                # Fallback: use last substantial paragraph as answer
-                paragraphs = [p.strip() for p in reasoning_content.split('\n\n') if p.strip()]
-                if paragraphs:
-                    raw_content = paragraphs[-1]
-                    logger.warning(f"No answer marker found, using last paragraph: {raw_content[:100]}...")
-                else:
-                    raw_content = reasoning_content
-            reasoning_content = None  # Already processed
+            logger.warning("Content empty, using reasoning field as content")
+            # Use reasoning as content - ThinkingStripper will clean it
+            raw_content = reasoning_content
+            reasoning_content = None  # Don't double-process
 
         if raw_content is None:
             logger.error(f"LLM returned None content. Full response: {data}")

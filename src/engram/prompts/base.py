@@ -1,53 +1,46 @@
 """
-Base prompts with anti-leakage instructions.
-Designed for Kimi K2 Thinking with Russian content.
+Base prompts - FIXED version without aggressive anti-leakage.
+
+The --reasoning-parser kimi_k2 flag handles separation automatically.
+No need for prompt-level instructions that confuse the model.
 """
 
-# Anti-leakage suffix (Russian)
-ANTI_LEAK_SUFFIX_RU = """
+# Simple prompt ending (Russian)
+PROMPT_ENDING_RU = """
 
-КРИТИЧЕСКИ ВАЖНО:
-- Выдай ТОЛЬКО запрошенный результат
-- НЕ показывай процесс рассуждения
-- НЕ используй теги <think> или подобные
-- Начни ответ СРАЗУ с результата"""
+Ответ:"""
 
-# Anti-leakage suffix (English)
-ANTI_LEAK_SUFFIX_EN = """
+# Simple prompt ending (English)
+PROMPT_ENDING_EN = """
 
-CRITICAL:
-- Output ONLY the requested result
-- Do NOT show reasoning process
-- Do NOT use <think> or similar tags
-- Start response DIRECTLY with the result"""
+Answer:"""
+
+
+def get_prompt_ending(language: str = "ru") -> str:
+    """Get simple prompt ending."""
+    return PROMPT_ENDING_RU if language == "ru" else PROMPT_ENDING_EN
+
+
+# DEPRECATED: Keep for backwards compatibility but don't use
+# These caused the model to put everything in <think> tags
+ANTI_LEAK_SUFFIX_RU = PROMPT_ENDING_RU
+ANTI_LEAK_SUFFIX_EN = PROMPT_ENDING_EN
 
 
 def get_anti_leak_suffix(language: str = "ru") -> str:
-    """Get anti-leakage suffix for prompt."""
-    return ANTI_LEAK_SUFFIX_RU if language == "ru" else ANTI_LEAK_SUFFIX_EN
+    """DEPRECATED: Use get_prompt_ending instead."""
+    return get_prompt_ending(language)
 
 
-# System prompt for extraction tasks
+# System prompt - keep simple, no anti-reasoning instructions
 EXTRACTION_SYSTEM_PROMPT_RU = """Ты — система извлечения информации.
-Твоя задача — извлекать данные из документов точно и структурированно.
-
-Правила:
-1. Выдавай ТОЛЬКО извлечённые данные
-2. Не объясняй свои рассуждения
-3. Не используй теги размышлений
-4. Отвечай в запрошенном формате"""
+Извлекай данные из документов точно и структурированно."""
 
 EXTRACTION_SYSTEM_PROMPT_EN = """You are an information extraction system.
-Your task is to extract data from documents accurately and in a structured way.
-
-Rules:
-1. Output ONLY the extracted data
-2. Do not explain your reasoning
-3. Do not use thinking tags
-4. Respond in the requested format"""
+Extract data from documents accurately and in a structured way."""
 
 
-# Marker-based output format (for reliable extraction)
+# Marker-based output (optional, for critical extractions)
 OUTPUT_MARKERS = {
     "start": "===РЕЗУЛЬТАТ===",
     "end": "===КОНЕЦ===",

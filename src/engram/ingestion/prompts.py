@@ -1,14 +1,14 @@
 """LLM prompts for knowledge extraction.
 
-Enhanced with anti-leakage instructions for Kimi K2 Thinking model.
+FIXED version - removed aggressive anti-leakage that caused empty content.
+The --reasoning-parser kimi_k2 flag handles thinking separation automatically.
 """
 
-from engram.prompts.base import ANTI_LEAK_SUFFIX_RU
+from engram.prompts.base import PROMPT_ENDING_RU
 
-# System prompt for structured extraction tasks
+# System prompt for structured extraction tasks - SIMPLIFIED
 EXTRACTION_SYSTEM_PROMPT = """Ты извлекаешь информацию в простой строчный формат.
-Выводи ТОЛЬКО запрошенные строки. Без объяснений, без markdown, без лишнего текста.
-НЕ используй теги <think> или подобные. Начни ответ СРАЗУ с результата."""
+Выводи ТОЛЬКО запрошенные строки. Без объяснений, без markdown, без лишнего текста."""
 
 CONCEPT_EXTRACTION_PROMPT = """Извлеки концепты из этого текста.
 
@@ -33,9 +33,7 @@ RELATION|источник|цель|тип
 Пример:
 RELATION|docker|контейнер|uses
 RELATION|dockerfile|образ|causes
-""" + ANTI_LEAK_SUFFIX_RU + """
-
-Вывод:"""
+""" + PROMPT_ENDING_RU
 
 
 MEMORY_EXTRACTION_PROMPT = """Извлеки знания из этого документа.
@@ -55,9 +53,7 @@ MEMORY|содержание|тип|концепты|важность
 MEMORY|Docker использует контейнеры для изоляции приложений|fact|docker,контейнер|8
 MEMORY|Команда docker system prune освобождает место на диске|procedure|docker,диск|7
 MEMORY|Kubernetes требует Docker или containerd для работы|relationship|kubernetes,docker|9
-""" + ANTI_LEAK_SUFFIX_RU + """
-
-Вывод:"""
+""" + PROMPT_ENDING_RU
 
 
 BEHAVIOR_EXTRACTION_PROMPT = """Проанализируй ответ и извлеки стратегию рассуждения.
