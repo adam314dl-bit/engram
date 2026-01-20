@@ -592,19 +592,9 @@ GRAPH_HTML = """
                 float dist = length(coord);
                 if (dist > 0.5) discard;
                 // Glow effect for important nodes (alpha > 0.95)
-                // Extra strong glow for sun nodes (alpha > 1.5, clamped for display)
-                float isSun = step(1.5, v_color.a);
-                float isImportant = step(0.95, v_color.a) * (1.0 - isSun);
-                float glow = isImportant * (1.0 - dist * 1.5) * 0.3;
-                // Sun halo - outer ring glow effect
-                float haloIntensity = (v_color.a - 1.5) * 0.5; // Pulsates with alpha
-                float outerGlow = isSun * exp(-dist * 3.0) * haloIntensity;
-                float innerGlow = isSun * (1.0 - dist * 1.5) * 0.4;
-                float sunGlow = outerGlow + innerGlow;
+                float glow = v_color.a > 0.95 ? (1.0 - dist * 1.5) * 0.3 : 0.0;
                 float alpha = 1.0 - smoothstep(0.35, 0.5, dist);
-                // Clamp display alpha to 1.0
-                float displayAlpha = min(v_color.a, 1.0);
-                gl_FragColor = vec4(v_color.rgb + glow + sunGlow, alpha * displayAlpha);
+                gl_FragColor = vec4(v_color.rgb + glow, alpha * v_color.a);
             }
         `;
 
@@ -732,8 +722,6 @@ GRAPH_HTML = """
                 nodes.forEach(n => nodeMap[n.id] = n);
 
                 console.log(`Loaded ${nodes.length} nodes`);
-                // Check for sun nodes to start pulsation animation
-                checkForSunNodes();
                 render();
             } catch (e) {
                 console.error('Failed to load:', e);
@@ -772,12 +760,10 @@ GRAPH_HTML = """
                 return [1.0, 0.95, 0.3, pulse]; // Golden glow for activated
             }
 
-            // Sun nodes pulsate with cyan halo glow
+            // Sun nodes - brighter cyan
             if (isSun) {
-                // Faster, more visible pulsation for suns
-                const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 400 + connCount * 0.1);
-                // Cyan color (same as concept), alpha > 1.5 triggers sun shader
-                return [0.37, 0.92, 0.83, 1.6 + 0.4 * pulse];
+                // Bright white-cyan for sun nodes
+                return [0.7, 1.0, 0.95, 1.0];
             }
 
             if (!isHighlighted && !isNeighbor && !isSelected && highlightedNodes.size > 0) {
@@ -1496,14 +1482,11 @@ GRAPH_HTML = """
             startActivationAnimation();
         }
 
-        let hasSunNodes = false; // Track if we have sun nodes for continuous animation
-
         function startActivationAnimation() {
             if (animationFrameId) cancelAnimationFrame(animationFrameId);
 
             function animate() {
-                // Keep animating if there are activated nodes OR sun nodes
-                if (activatedNodes.size === 0 && !hasSunNodes) {
+                if (activatedNodes.size === 0) {
                     animationFrameId = null;
                     return;
                 }
@@ -1519,20 +1502,7 @@ GRAPH_HTML = """
                 animationFrameId = null;
             }
             activatedNodes.clear();
-            // Restart animation if we have sun nodes
-            if (hasSunNodes) {
-                startActivationAnimation();
-            } else {
-                render();
-            }
-        }
-
-        function checkForSunNodes() {
-            // Check if any loaded nodes are "suns" (100+ connections)
-            hasSunNodes = nodes.some(n => (n.conn || 0) >= 100);
-            if (hasSunNodes && !animationFrameId) {
-                startActivationAnimation();
-            }
+            render();
         }
 
         async function sendChat() {
