@@ -918,10 +918,8 @@ GRAPH_HTML = """
                 labelCtx.save();
                 labelCtx.scale(dpr, dpr);
 
-                // Find max node count and filter clusters to show only top 50%
-                const maxNodeCount = Math.max(...clusterMeta.centers.map(c => c.nodeCount));
-                const minThreshold = maxNodeCount * 0.5;
-                const visibleClusters = clusterMeta.centers.filter(c => c.nodeCount >= minThreshold);
+                // Show all clusters (small clusters already merged at layout computation)
+                const visibleClusters = clusterMeta.centers;
 
                 const centerMap = {};
                 for (const c of visibleClusters) {

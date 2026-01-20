@@ -168,9 +168,11 @@ def compute_layout(nodes, edges, scale=3000):
     return compute_layout_networkx(nodes, edges, scale)
 
 
-def compute_communities(nodes, edges):
-    """Detect communities using Louvain algorithm."""
+def compute_communities(nodes, edges, positions, min_cluster_size=20):
+    """Detect communities using Louvain algorithm and merge small clusters."""
     import networkx as nx
+    from collections import defaultdict
+    import math
 
     G = nx.Graph()
     G.add_nodes_from(nodes)
@@ -184,8 +186,64 @@ def compute_communities(nodes, edges):
         for cluster_id, community in enumerate(communities):
             for node_id in community:
                 node_clusters[node_id] = cluster_id
-        print(f"Found {len(communities)} communities")
+        print(f"Found {len(communities)} initial communities")
+
+        # Merge small clusters into nearest large cluster
+        # Compute cluster centers and sizes
+        cluster_positions = defaultdict(list)
+        for node_id, cluster_id in node_clusters.items():
+            if node_id in positions:
+                cluster_positions[cluster_id].append(positions[node_id])
+
+        cluster_centers = {}
+        cluster_sizes = {}
+        for cluster_id, pos_list in cluster_positions.items():
+            xs = [p[0] for p in pos_list]
+            ys = [p[1] for p in pos_list]
+            cluster_centers[cluster_id] = (sum(xs) / len(xs), sum(ys) / len(ys))
+            cluster_sizes[cluster_id] = len(pos_list)
+
+        # Find small and large clusters
+        small_clusters = {cid for cid, size in cluster_sizes.items() if size < min_cluster_size}
+        large_clusters = {cid for cid, size in cluster_sizes.items() if size >= min_cluster_size}
+
+        if not large_clusters:
+            # If no large clusters, keep all as-is
+            print(f"No clusters >= {min_cluster_size} nodes, keeping all")
+            return node_clusters
+
+        print(f"Merging {len(small_clusters)} small clusters into {len(large_clusters)} large clusters...")
+
+        # Map small clusters to nearest large cluster
+        merge_map = {}
+        for small_cid in small_clusters:
+            small_center = cluster_centers[small_cid]
+            best_large = None
+            best_dist = float('inf')
+            for large_cid in large_clusters:
+                large_center = cluster_centers[large_cid]
+                dist = math.sqrt((small_center[0] - large_center[0])**2 +
+                                (small_center[1] - large_center[1])**2)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_large = large_cid
+            merge_map[small_cid] = best_large
+
+        # Reassign node clusters
+        for node_id in node_clusters:
+            old_cluster = node_clusters[node_id]
+            if old_cluster in merge_map:
+                node_clusters[node_id] = merge_map[old_cluster]
+
+        # Renumber clusters to be contiguous
+        unique_clusters = sorted(set(node_clusters.values()))
+        cluster_remap = {old: new for new, old in enumerate(unique_clusters)}
+        for node_id in node_clusters:
+            node_clusters[node_id] = cluster_remap[node_clusters[node_id]]
+
+        print(f"Final: {len(unique_clusters)} clusters after merging")
         return node_clusters
+
     except Exception as e:
         print(f"Community detection failed: {e}, using single cluster")
         return {node_id: 0 for node_id in nodes}
@@ -272,7 +330,7 @@ async def compute_and_store_layout():
 
     # Detect communities
     print("Detecting communities...")
-    node_clusters = compute_communities(all_nodes, all_edges)
+    node_clusters = compute_communities(all_nodes, all_edges, positions, min_cluster_size=20)
 
     # Compute cluster metadata (centers and inter-cluster edges)
     print("Computing cluster metadata...")
