@@ -149,6 +149,7 @@ async def get_graph_data(
     max_x: Optional[float] = Query(None),
     min_y: Optional[float] = Query(None),
     max_y: Optional[float] = Query(None),
+    sample: int = Query(1, description="Load every Nth node (1=all, 10=every 10th)"),
 ) -> dict:
     db = get_db(request)
     nodes = []
@@ -163,10 +164,14 @@ async def get_graph_data(
         """
         params = {"min_x": min_x, "max_x": max_x, "min_y": min_y, "max_y": max_y}
 
+    # Sampling filter: use random sampling for performance
+    # rand() < 1/sample gives ~1/sample of nodes
+    sample_filter = f"AND rand() < {1.0 / sample}" if sample > 1 else ""
+
     concepts = await db.execute_query(
         f"""
         MATCH (n:Concept)
-        WHERE n.layout_x IS NOT NULL {viewport_filter}
+        WHERE n.layout_x IS NOT NULL {viewport_filter} {sample_filter}
         OPTIONAL MATCH (n)-[r]-()
         WITH n, count(r) as conn
         RETURN n.id as id, n.name as name, n.type as type,
@@ -185,7 +190,7 @@ async def get_graph_data(
     memories = await db.execute_query(
         f"""
         MATCH (n:SemanticMemory)
-        WHERE n.layout_x IS NOT NULL {viewport_filter}
+        WHERE n.layout_x IS NOT NULL {viewport_filter} {sample_filter}
         OPTIONAL MATCH (n)-[r]-()
         WITH n, count(r) as conn
         RETURN n.id as id, n.content as content, n.memory_type as type,
@@ -206,7 +211,7 @@ async def get_graph_data(
     episodes = await db.execute_query(
         f"""
         MATCH (n:EpisodicMemory)
-        WHERE n.layout_x IS NOT NULL {viewport_filter}
+        WHERE n.layout_x IS NOT NULL {viewport_filter} {sample_filter}
         OPTIONAL MATCH (n)-[r]-()
         WITH n, count(r) as conn
         RETURN n.id as id, n.query as query, n.behavior_name as behavior,
@@ -551,6 +556,7 @@ GRAPH_HTML = """
         let isDragging = false, lastMouseX = 0, lastMouseY = 0, dragStartX = 0, dragStartY = 0;
         let animationFrameId = null;
         let loadingViewport = false, lastViewport = null, viewportDebounceTimer = null;
+        let currentSampleRate = 10; // Start with sampling (every 10th node)
 
         // WebGL shaders
         const vertexShaderSrc = `
@@ -682,13 +688,21 @@ GRAPH_HTML = """
         async function loadViewportData() {
             if (loadingViewport) return;
             const vp = getViewportBounds();
-            if (!viewportChanged(vp, lastViewport)) return;
+
+            // Determine sample rate based on zoom level
+            // At very low zoom (zoomed out), use high sampling
+            // At higher zoom (zoomed in), load all nodes
+            const newSampleRate = scale < 0.01 ? 10 : (scale < 0.05 ? 5 : 1);
+
+            // Skip if viewport hasn't changed AND sample rate is same
+            if (!viewportChanged(vp, lastViewport) && newSampleRate === currentSampleRate) return;
 
             loadingViewport = true;
             lastViewport = vp;
+            currentSampleRate = newSampleRate;
 
             try {
-                const url = `/admin/graph/data?min_x=${vp.min_x}&max_x=${vp.max_x}&min_y=${vp.min_y}&max_y=${vp.max_y}`;
+                const url = `/admin/graph/data?min_x=${vp.min_x}&max_x=${vp.max_x}&min_y=${vp.min_y}&max_y=${vp.max_y}&sample=${currentSampleRate}`;
                 const data = await (await fetch(url)).json();
 
                 nodes = data.nodes;
@@ -696,6 +710,7 @@ GRAPH_HTML = """
                 nodeMap = {};
                 nodes.forEach(n => nodeMap[n.id] = n);
 
+                console.log(`Loaded ${nodes.length} nodes (sample=${currentSampleRate}, scale=${scale.toFixed(4)})`);
                 render();
             } catch (e) {
                 console.error('Failed to load:', e);
@@ -1663,15 +1678,17 @@ GRAPH_HTML = """
             bounds = boundsData;
             viewX = (bounds.min_x + bounds.max_x) / 2;
             viewY = (bounds.min_y + bounds.max_y) / 2;
-            // Fit graph on screen: scale so graph fills ~70% of viewport
+            // Start at max zoom out to show entire graph
+            // Fit graph on screen: scale so graph fills ~90% of viewport (fully zoomed out)
             const graphWidth = bounds.max_x - bounds.min_x;
             const graphHeight = bounds.max_y - bounds.min_y;
             scale = Math.min(
-                window.innerWidth * 0.7 / (graphWidth * 2),
-                window.innerHeight * 0.7 / (graphHeight * 2)
+                window.innerWidth * 0.9 / (graphWidth * 2),
+                window.innerHeight * 0.9 / (graphHeight * 2)
             );
             // Allow very low scale for large graphs (0.001 min)
-            scale = Math.max(0.001, Math.min(1, scale));
+            scale = Math.max(0.001, Math.min(0.5, scale));  // Cap at 0.5 to start zoomed out
+            console.log(`Initial scale: ${scale.toFixed(4)}, graph size: ${graphWidth.toFixed(0)} x ${graphHeight.toFixed(0)}`);
 
             const stats = await (await fetch('/admin/graph/stats')).json();
             document.getElementById('c-count').textContent = stats.concepts;
