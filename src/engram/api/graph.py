@@ -850,14 +850,20 @@ GRAPH_HTML = """
 
                 for (const node of nodes) {
                     const color = getNodeColor(node);
-                    // Node sizes: strongly based on connection count
+                    // Node sizes in SCREEN pixels (always visible regardless of zoom)
                     const connCount = node.conn || 1;
-                    const baseSize = Math.max(3, Math.min(300, 2 + Math.sqrt(connCount) * 25));
-                    // Scale up when zoomed in (limited)
-                    const zoomBoost = Math.max(1, Math.min(10, scale * 200));
-                    // At low zoom, ensure min 4px on screen
-                    const minScreenSize = 4 / scale;
-                    const size = Math.max(minScreenSize, baseSize * zoomBoost);
+                    // Screen pixel size: 2px min, scales with connections
+                    // 1 conn = 2px, 10 = 5px, 100 = 10px, 1000 = 20px, 5000 = 35px
+                    let screenPixels = 2 + Math.pow(Math.log10(connCount + 1), 2) * 8;
+
+                    // Boost size for activated nodes (from chat)
+                    const isActivated = activatedNodes.has(node.id);
+                    if (isActivated) {
+                        screenPixels = Math.max(screenPixels * 2, 15); // At least 15px, or 2x normal
+                    }
+
+                    // Convert to world size (divide by scale)
+                    const size = screenPixels / scale;
 
                     let finalColor = color;
                     if (node === selectedNode) {

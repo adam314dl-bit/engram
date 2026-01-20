@@ -146,26 +146,104 @@ def compute_layout_networkx(nodes, edges, scale=3000):
     return {k: (float(v[0]), float(v[1])) for k, v in positions.items()}
 
 
+def resolve_collisions(positions, node_degrees, iterations=50, min_distance_factor=0.5):
+    """Push apart overlapping nodes based on their degree (connection count).
+
+    Nodes with more connections get larger effective radius.
+    """
+    import math
+
+    node_ids = list(positions.keys())
+    n = len(node_ids)
+
+    if n < 2:
+        return positions
+
+    print(f"Resolving collisions for {n} nodes...")
+
+    # Compute effective radius for each node based on degree
+    # Similar to screen pixel formula: 2 + log10(conn+1)^2 * 8
+    radii = {}
+    for nid in node_ids:
+        degree = node_degrees.get(nid, 1)
+        # Scale factor to convert screen pixels to world units
+        radii[nid] = (2 + math.pow(math.log10(degree + 1), 2) * 8) * 500
+
+    # Convert to list for faster access
+    pos_list = [[positions[nid][0], positions[nid][1]] for nid in node_ids]
+    rad_list = [radii[nid] for nid in node_ids]
+
+    for iteration in range(iterations):
+        moved = 0
+        for i in range(n):
+            for j in range(i + 1, n):
+                dx = pos_list[j][0] - pos_list[i][0]
+                dy = pos_list[j][1] - pos_list[i][1]
+                dist = math.sqrt(dx * dx + dy * dy) + 0.001
+
+                min_dist = (rad_list[i] + rad_list[j]) * min_distance_factor
+
+                if dist < min_dist:
+                    # Push apart
+                    overlap = min_dist - dist
+                    nx, ny = dx / dist, dy / dist
+                    push = overlap * 0.5
+
+                    pos_list[i][0] -= nx * push
+                    pos_list[i][1] -= ny * push
+                    pos_list[j][0] += nx * push
+                    pos_list[j][1] += ny * push
+                    moved += 1
+
+        if moved == 0:
+            print(f"  Converged after {iteration + 1} iterations")
+            break
+
+    if moved > 0:
+        print(f"  Completed {iterations} iterations, {moved} adjustments in last iteration")
+
+    # Convert back to dict
+    return {node_ids[i]: (pos_list[i][0], pos_list[i][1]) for i in range(n)}
+
+
 def compute_layout(nodes, edges, scale=3000):
     """Compute layout using best available backend."""
     # Try GPU first (cuGraph)
     try:
-        return compute_layout_cugraph(nodes, edges, scale)
+        positions = compute_layout_cugraph(nodes, edges, scale)
     except ImportError:
         print("cuGraph not available, trying igraph...")
+        positions = None
     except Exception as e:
         print(f"cuGraph failed: {e}, trying igraph...")
+        positions = None
 
     # Try fast CPU (igraph)
-    try:
-        return compute_layout_igraph(nodes, edges, scale)
-    except ImportError:
-        print("igraph not available, falling back to NetworkX...")
-    except Exception as e:
-        print(f"igraph failed: {e}, falling back to NetworkX...")
+    if positions is None:
+        try:
+            positions = compute_layout_igraph(nodes, edges, scale)
+        except ImportError:
+            print("igraph not available, falling back to NetworkX...")
+            positions = None
+        except Exception as e:
+            print(f"igraph failed: {e}, falling back to NetworkX...")
+            positions = None
 
     # Fallback to single-core (NetworkX)
-    return compute_layout_networkx(nodes, edges, scale)
+    if positions is None:
+        positions = compute_layout_networkx(nodes, edges, scale)
+
+    # Compute node degrees for collision resolution
+    from collections import Counter
+    degree_count = Counter()
+    for src, dst in edges:
+        degree_count[src] += 1
+        degree_count[dst] += 1
+
+    # Resolve collisions - push apart nodes based on their size
+    positions = resolve_collisions(positions, degree_count)
+
+    return positions
 
 
 def compute_communities(nodes, edges, positions, min_cluster_size=20):
