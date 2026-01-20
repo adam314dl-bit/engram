@@ -1,46 +1,41 @@
-"""LLM client for OpenAI-compatible endpoints (Ollama, vLLM, etc.)."""
+"""LLM client for OpenAI-compatible endpoints (Ollama, vLLM, etc.).
+
+Enhanced with robust thinking/reasoning leakage prevention for Kimi K2 Thinking model.
+"""
 
 import asyncio
 import json
 import logging
 import re
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Optional
 
 import requests
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 
 from engram.config import settings
+from engram.preprocessing.thinking_stripper import ThinkingStripper, OutputParser
 
 logger = logging.getLogger(__name__)
 
-# Thinking tag patterns for models like Kimi, GLM, DeepSeek, etc.
-THINKING_PATTERNS = [
-    re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE),
-    re.compile(r'<thinking>.*?</thinking>', re.DOTALL | re.IGNORECASE),
-    re.compile(r'<thought>.*?</thought>', re.DOTALL | re.IGNORECASE),
-    re.compile(r'<reason>.*?</reason>', re.DOTALL | re.IGNORECASE),
-    re.compile(r'<reasoning>.*?</reasoning>', re.DOTALL | re.IGNORECASE),
-    re.compile(r'<reflection>.*?</reflection>', re.DOTALL | re.IGNORECASE),
-    re.compile(r'<inner_monologue>.*?</inner_monologue>', re.DOTALL | re.IGNORECASE),
-    # Orphan closing tags (without opening tag)
-    re.compile(r'</think>', re.IGNORECASE),
-    re.compile(r'</thinking>', re.IGNORECASE),
-    re.compile(r'</thought>', re.IGNORECASE),
-    re.compile(r'</reason>', re.IGNORECASE),
-    re.compile(r'</reasoning>', re.IGNORECASE),
-    re.compile(r'</reflection>', re.IGNORECASE),
-]
+
+@dataclass
+class LLMResponse:
+    """Structured LLM response."""
+    content: str                      # Cleaned content (thinking removed)
+    raw_content: str                  # Original content
+    thinking: Optional[str] = None    # Extracted thinking (if any)
+    usage: Optional[dict] = None      # Token usage
+    finish_reason: Optional[str] = None
 
 
 def strip_thinking_tags(text: str) -> str:
-    """Remove thinking/reasoning tags from model output."""
-    result = text
-    for pattern in THINKING_PATTERNS:
-        result = pattern.sub('', result)
-    # Clean up extra whitespace left after removal
-    result = re.sub(r'\n{3,}', '\n\n', result)
-    return result.strip()
+    """Remove thinking/reasoning tags from model output.
+
+    Uses ThinkingStripper for comprehensive cleaning.
+    """
+    return ThinkingStripper.strip(text, aggressive=False)
 
 
 class LLMClient:
@@ -92,8 +87,10 @@ class LLMClient:
         messages: list[dict[str, str]],
         temperature: float,
         max_tokens: int,
+        return_response: bool = False,
+        aggressive_strip: bool = False,
         **kwargs: Any,
-    ) -> str:
+    ) -> str | LLMResponse:
         """Synchronous chat request (runs in thread)."""
         session = self._get_session()
 
@@ -120,22 +117,37 @@ class LLMClient:
             raise ValueError("LLM returned empty choices")
 
         message = choices[0].get("message", {})
-        content = message.get("content")
+        raw_content = message.get("content")
 
-        # Kimi K2 thinking model uses "reasoning" field
-        if content is None:
-            content = message.get("reasoning")
+        # Kimi K2 thinking model uses "reasoning" or "reasoning_content" field
+        reasoning_content = message.get("reasoning_content") or message.get("reasoning")
 
         # Some APIs use "text" instead of "content"
-        if content is None:
-            content = choices[0].get("text")
+        if raw_content is None:
+            raw_content = choices[0].get("text")
 
-        if content is None:
+        if raw_content is None:
             logger.error(f"LLM returned None content. Full response: {data}")
             raise ValueError(f"LLM returned None content: {data}")
 
-        # Strip thinking tags from models like Kimi, DeepSeek, etc.
-        return strip_thinking_tags(content)
+        # Extract thinking and clean content
+        thinking, content = ThinkingStripper.extract_thinking_and_content(raw_content)
+        content = ThinkingStripper.strip(content, aggressive=aggressive_strip)
+
+        # Prefer vLLM-extracted reasoning if available
+        if reasoning_content and not thinking:
+            thinking = reasoning_content
+
+        if return_response:
+            return LLMResponse(
+                content=content,
+                raw_content=raw_content,
+                thinking=thinking,
+                usage=data.get("usage"),
+                finish_reason=choices[0].get("finish_reason"),
+            )
+
+        return content
 
     async def generate(
         self,
@@ -163,8 +175,10 @@ class LLMClient:
         messages: list[dict[str, str]],
         temperature: float = 0.7,
         max_tokens: int = 2048,
+        return_response: bool = False,
+        aggressive_strip: bool = False,
         **kwargs: Any,
-    ) -> str:
+    ) -> str | LLMResponse:
         """Send chat messages and get response."""
         async with self._semaphore:
             try:
@@ -174,6 +188,8 @@ class LLMClient:
                     messages,
                     temperature,
                     max_tokens,
+                    return_response,
+                    aggressive_strip,
                     **kwargs,
                 )
                 return response
@@ -191,9 +207,10 @@ class LLMClient:
         system_prompt: str | None = None,
         temperature: float = 0.3,  # Lower for structured output
         max_tokens: int = 2048,
+        fallback: Any = None,
         **kwargs: Any,
-    ) -> dict[str, Any] | list[Any]:
-        """Generate and parse JSON response."""
+    ) -> dict[str, Any] | list[Any] | Any:
+        """Generate and parse JSON response using robust OutputParser."""
         response = await self.generate(
             prompt=prompt,
             system_prompt=system_prompt,
@@ -202,37 +219,33 @@ class LLMClient:
             **kwargs,
         )
 
-        # Clean response - remove markdown code blocks if present
-        cleaned = response.strip()
-        if cleaned.startswith("```json"):
-            cleaned = cleaned[7:]
-        elif cleaned.startswith("```"):
-            cleaned = cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
+        result = OutputParser.parse_json(response, fallback=fallback)
 
-        try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse JSON response: {e}")
-            logger.debug(f"Raw response: {response}")
-            # Try to extract JSON object from response
-            json_match = re.search(r"\{[\s\S]*\}", cleaned)
-            if json_match:
-                try:
-                    return json.loads(json_match.group())
-                except json.JSONDecodeError:
-                    pass
-            # Try to extract JSON array from response
-            array_match = re.search(r"\[[\s\S]*\]", cleaned)
-            if array_match:
-                try:
-                    return json.loads(array_match.group())
-                except json.JSONDecodeError:
-                    pass
+        if result is None and fallback is None:
             logger.warning(f"Could not parse LLM response as JSON: {response[:200]}")
             raise ValueError(f"Could not parse LLM response as JSON: {response[:200]}")
+
+        return result
+
+    async def generate_list(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        separator: str = "auto",
+        **kwargs: Any,
+    ) -> list[str]:
+        """Generate and parse list response."""
+        response = await self.generate(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            **kwargs,
+        )
+
+        return OutputParser.parse_list(response, separator=separator)
 
 
 # Global client instance

@@ -1,5 +1,6 @@
 """Configuration management using Pydantic Settings."""
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +20,36 @@ class Settings(BaseSettings):
     llm_max_concurrent: int = 16
     llm_timeout: float = 120.0
     ingestion_max_concurrent: int = 8  # Max parallel document ingestion
+
+    # Kimi K2 Thinking specific settings
+    llm_temperature: float = Field(
+        default=1.0,
+        description="Kimi K2 Thinking recommends 1.0"
+    )
+    llm_min_p: float = Field(
+        default=0.01,
+        description="Kimi recommended to suppress unlikely tokens"
+    )
+
+    # Anti-leakage settings
+    strip_thinking: bool = Field(
+        default=True,
+        description="Always strip thinking tags from output"
+    )
+    aggressive_strip: bool = Field(
+        default=False,
+        description="Also strip reasoning phrases (for extraction tasks)"
+    )
+    use_output_markers: bool = Field(
+        default=False,
+        description="Use ===РЕЗУЛЬТАТ=== markers for reliable extraction"
+    )
+
+    # Language
+    primary_language: str = Field(
+        default="ru",
+        description="Primary content language: 'ru' or 'en'"
+    )
 
     # Neo4j Configuration
     neo4j_uri: str = "bolt://localhost:7687"
