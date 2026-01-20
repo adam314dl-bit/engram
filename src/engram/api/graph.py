@@ -772,7 +772,7 @@ GRAPH_HTML = """
 
         function determineRenderMode() {
             // Force cluster mode when very zoomed out
-            if (scale < 0.001) {
+            if (scale < 0.005) {
                 return 'cluster';
             }
 
