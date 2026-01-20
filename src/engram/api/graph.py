@@ -818,12 +818,12 @@ GRAPH_HTML = """
                 // Skip WebGL edges, we'll draw them on labelCtx after nodes
 
             } else if (clickRevealedNode && neighborNodes.size > 0) {
-                // NODES_ONLY MODE: Only draw edges when a node is clicked (with viewport culling)
+                // NODES_ONLY MODE: Draw ALL edges when a node is clicked
                 const revealedLineData = [];
                 for (const neighborId of neighborNodes) {
                     const neighbor = nodeMap[neighborId];
-                    // Only draw edge if neighbor is in viewport
-                    if (neighbor && isInViewport(neighbor.x, neighbor.y)) {
+                    // Draw edge to all neighbors (even if not in viewport)
+                    if (neighbor) {
                         revealedLineData.push(
                             clickRevealedNode.x, clickRevealedNode.y,
                             neighbor.x, neighbor.y
@@ -852,7 +852,9 @@ GRAPH_HTML = """
                 for (const node of nodes) {
                     const color = getNodeColor(node);
                     // Node sizes: base by connections, scale with zoom for visibility
-                    const baseSize = Math.max(40, Math.min(200, Math.sqrt(node.conn || 1) * 20));
+                    // Size strongly based on connection count
+                    const connCount = node.conn || 1;
+                    const baseSize = Math.max(20, Math.min(300, 10 + Math.sqrt(connCount) * 25));
                     // Scale up when zoomed in (larger dots at higher zoom) - very aggressive
                     const zoomBoost = Math.max(1, Math.min(100, scale * 150));
                     // At low zoom, ensure min 10px on screen
