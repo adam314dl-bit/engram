@@ -564,6 +564,7 @@ GRAPH_HTML = """
         let isDragging = false, lastMouseX = 0, lastMouseY = 0, dragStartX = 0, dragStartY = 0;
         let animationFrameId = null;
         let loadingViewport = false, lastViewport = null, viewportDebounceTimer = null;
+        let nodesLoaded = false;
         const spreadFactor = 0.5; // Compress node positions (0.5 = half spread)
 
         // WebGL shaders
@@ -703,8 +704,9 @@ GRAPH_HTML = """
             if (loadingViewport) return;
             const vp = getViewportBounds();
 
-            // Load 10% of ALL nodes once (no viewport culling, no reload on zoom)
-            if (nodes.length > 0) return; // Already loaded
+            // Load all nodes once at startup
+            if (nodesLoaded) return;
+            nodesLoaded = true;
 
             loadingViewport = true;
 
