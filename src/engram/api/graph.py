@@ -702,15 +702,14 @@ GRAPH_HTML = """
             if (loadingViewport) return;
             const vp = getViewportBounds();
 
-            // Always show 10% of nodes, no zoom-based logic
-            if (!viewportChanged(vp, lastViewport)) return;
+            // Load 10% of ALL nodes once (no viewport culling, no reload on zoom)
+            if (nodes.length > 0) return; // Already loaded
 
             loadingViewport = true;
-            lastViewport = vp;
 
             try {
-                // Always sample 10% of nodes (sample=10), no connection filtering
-                const url = `/admin/graph/data?min_x=${vp.min_x}&max_x=${vp.max_x}&min_y=${vp.min_y}&max_y=${vp.max_y}&sample=10`;
+                // Load 10% of all nodes, no viewport filtering
+                const url = `/admin/graph/data?sample=10`;
                 const data = await (await fetch(url)).json();
 
                 nodes = data.nodes;
