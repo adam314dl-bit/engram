@@ -707,10 +707,8 @@ GRAPH_HTML = """
             // More granular: load more nodes as user zooms in
             let newSampleRate, newMinConnPct;
             if (scale < 0.001) { newSampleRate = 10; newMinConnPct = 0.05; }      // very zoomed out
-            else if (scale < 0.005) { newSampleRate = 5; newMinConnPct = 0.02; }  // zoomed out
-            else if (scale < 0.01) { newSampleRate = 2; newMinConnPct = 0.01; }   // medium-out
-            else if (scale < 0.02) { newSampleRate = 1; newMinConnPct = 0; }      // medium
-            else { newSampleRate = 1; newMinConnPct = 0; }                         // zoomed in: all nodes
+            else if (scale < 0.01) { newSampleRate = 5; newMinConnPct = 0.02; }   // zoomed out
+            else { newSampleRate = 1; newMinConnPct = 0; }                         // >= 0.01: all nodes
 
             // Reload if viewport changed OR sample settings changed
             const settingsChanged = newSampleRate !== currentSampleRate || newMinConnPct !== currentMinConnPct;
