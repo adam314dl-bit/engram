@@ -690,9 +690,14 @@ GRAPH_HTML = """
             const vp = getViewportBounds();
 
             // Determine sample rate based on zoom level
-            // At very low zoom (zoomed out), use high sampling
-            // At higher zoom (zoomed in), load all nodes
-            const newSampleRate = scale < 0.01 ? 10 : (scale < 0.05 ? 5 : 1);
+            // More granular: load more nodes as user zooms in
+            let newSampleRate;
+            if (scale < 0.001) newSampleRate = 20;      // very zoomed out: every 20th
+            else if (scale < 0.005) newSampleRate = 10; // zoomed out: every 10th
+            else if (scale < 0.01) newSampleRate = 5;   // medium-out: every 5th
+            else if (scale < 0.05) newSampleRate = 3;   // medium: every 3rd
+            else if (scale < 0.1) newSampleRate = 2;    // medium-in: every 2nd
+            else newSampleRate = 1;                      // zoomed in: all nodes
 
             // Skip if viewport hasn't changed AND sample rate is same
             if (!viewportChanged(vp, lastViewport) && newSampleRate === currentSampleRate) return;
@@ -1025,9 +1030,9 @@ GRAPH_HTML = """
                 labelCtx.save();
                 labelCtx.scale(dpr, dpr);
 
-                // Find max node count and filter clusters to show only >10% of max
+                // Find max node count and filter clusters to show only >30% of max
                 const maxNodeCount = Math.max(...clusterMeta.centers.map(c => c.nodeCount));
-                const minThreshold = maxNodeCount * 0.1;
+                const minThreshold = maxNodeCount * 0.3;
                 const visibleClusters = clusterMeta.centers.filter(c => c.nodeCount >= minThreshold);
 
                 const centerMap = {};
