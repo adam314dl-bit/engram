@@ -277,10 +277,12 @@ async def chat_completions(
 
             debug_concepts = []
             for concept_id, activation in list(result.retrieval.activated_concepts.items())[:30]:
-                # Get concept name from db (simplified - just use id for now)
+                # Extract concept name from id (e.g., c_docker_1a8e -> docker)
+                parts = concept_id.split("_")
+                name = "_".join(parts[1:-1]) if len(parts) > 2 else concept_id
                 debug_concepts.append(DebugConceptInfo(
                     id=concept_id,
-                    name=concept_id.split("_")[0] if "_" in concept_id else concept_id,
+                    name=name,
                     activation=activation,
                     hop=0,  # Would need more info from activation result
                     included=concept_id in result.synthesis.concepts_activated,
