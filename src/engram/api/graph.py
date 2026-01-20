@@ -596,8 +596,11 @@ GRAPH_HTML = """
                 float isSun = step(1.5, v_color.a);
                 float isImportant = step(0.95, v_color.a) * (1.0 - isSun);
                 float glow = isImportant * (1.0 - dist * 1.5) * 0.3;
-                // Sun glow - stronger, warmer
-                float sunGlow = isSun * (1.0 - dist * 1.2) * 0.6;
+                // Sun halo - outer ring glow effect
+                float haloIntensity = (v_color.a - 1.5) * 0.5; // Pulsates with alpha
+                float outerGlow = isSun * exp(-dist * 3.0) * haloIntensity;
+                float innerGlow = isSun * (1.0 - dist * 1.5) * 0.4;
+                float sunGlow = outerGlow + innerGlow;
                 float alpha = 1.0 - smoothstep(0.35, 0.5, dist);
                 // Clamp display alpha to 1.0
                 float displayAlpha = min(v_color.a, 1.0);
@@ -769,12 +772,12 @@ GRAPH_HTML = """
                 return [1.0, 0.95, 0.3, pulse]; // Golden glow for activated
             }
 
-            // Sun nodes pulsate with warm orange/yellow glow
+            // Sun nodes pulsate with cyan halo glow
             if (isSun) {
-                // Slower, subtle pulsation for suns
-                const pulse = 0.85 + 0.15 * Math.sin(Date.now() / 800 + connCount * 0.1);
-                // Warm orange-yellow color, alpha > 1.5 triggers sun shader
-                return [1.0, 0.7, 0.2, 1.6 * pulse];
+                // Faster, more visible pulsation for suns
+                const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 400 + connCount * 0.1);
+                // Cyan color (same as concept), alpha > 1.5 triggers sun shader
+                return [0.37, 0.92, 0.83, 1.6 + 0.4 * pulse];
             }
 
             if (!isHighlighted && !isNeighbor && !isSelected && highlightedNodes.size > 0) {
