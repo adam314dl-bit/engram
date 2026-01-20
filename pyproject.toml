@@ -68,6 +68,8 @@ module = ["sentence_transformers.*", "neo4j.*"]
 ignore_missing_imports = true
 
 [tool.uv]
+# GPU server: uv sync
+# CPU server: uv sync --extra-index-url https://download.pytorch.org/whl/cpu
 extra-index-url = ["https://pypi.nvidia.com"]
 
 [tool.ruff]

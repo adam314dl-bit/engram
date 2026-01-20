@@ -901,11 +901,11 @@ GRAPH_HTML = """
                 for (const node of nodes) {
                     const color = getNodeColor(node);
                     // Node sizes: base by connections, scale with zoom for visibility
-                    const baseSize = Math.max(8, Math.min(40, Math.sqrt(node.conn || 1) * 8));
-                    // Scale up when zoomed in (larger dots at higher zoom)
-                    const zoomBoost = Math.max(1, Math.min(8, scale * 10));
-                    // At low zoom, ensure min 4px on screen
-                    const minScreenSize = 4 / scale;
+                    const baseSize = Math.max(20, Math.min(80, Math.sqrt(node.conn || 1) * 12));
+                    // Scale up when zoomed in (larger dots at higher zoom) - more aggressive
+                    const zoomBoost = Math.max(1, Math.min(20, scale * 30));
+                    // At low zoom, ensure min 6px on screen
+                    const minScreenSize = 6 / scale;
                     const size = Math.max(minScreenSize, baseSize * zoomBoost);
 
                     let finalColor = color;
