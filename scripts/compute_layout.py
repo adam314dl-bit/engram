@@ -191,6 +191,43 @@ def compute_communities(nodes, edges):
         return {node_id: 0 for node_id in nodes}
 
 
+def compute_cluster_metadata(positions, node_clusters, edges):
+    """Compute cluster centers and inter-cluster edge counts."""
+    from collections import defaultdict
+
+    # Compute cluster centers
+    cluster_positions = defaultdict(list)
+    for node_id, (x, y) in positions.items():
+        cluster_id = node_clusters.get(node_id, 0)
+        cluster_positions[cluster_id].append((x, y))
+
+    cluster_centers = {}
+    for cluster_id, pos_list in cluster_positions.items():
+        xs = [p[0] for p in pos_list]
+        ys = [p[1] for p in pos_list]
+        cluster_centers[cluster_id] = {
+            "x": sum(xs) / len(xs),
+            "y": sum(ys) / len(ys),
+            "node_count": len(pos_list),
+        }
+
+    print(f"Computed centers for {len(cluster_centers)} clusters")
+
+    # Compute inter-cluster edges
+    cluster_edges = defaultdict(int)
+    for src, dst in edges:
+        src_cluster = node_clusters.get(src)
+        dst_cluster = node_clusters.get(dst)
+        if src_cluster is not None and dst_cluster is not None and src_cluster != dst_cluster:
+            # Use sorted tuple to avoid duplicates (a->b same as b->a)
+            edge_key = tuple(sorted([src_cluster, dst_cluster]))
+            cluster_edges[edge_key] += 1
+
+    print(f"Found {len(cluster_edges)} inter-cluster edge groups")
+
+    return cluster_centers, dict(cluster_edges)
+
+
 async def compute_and_store_layout():
     """Compute layout and store positions in Neo4j."""
 
@@ -237,6 +274,10 @@ async def compute_and_store_layout():
     print("Detecting communities...")
     node_clusters = compute_communities(all_nodes, all_edges)
 
+    # Compute cluster metadata (centers and inter-cluster edges)
+    print("Computing cluster metadata...")
+    cluster_centers, cluster_edges = compute_cluster_metadata(positions, node_clusters, all_edges)
+
     print("Storing positions and clusters in Neo4j...")
 
     # Store positions and clusters back to Neo4j in batches
@@ -261,6 +302,45 @@ async def compute_and_store_layout():
 
         progress = min(i + batch_size, len(node_list))
         print(f"  Stored {progress}/{len(node_list)} positions...")
+
+    # Store cluster metadata
+    print("Storing cluster metadata...")
+
+    # Clear old cluster metadata
+    await db.execute_query("MATCH (c:ClusterMeta) DETACH DELETE c")
+
+    # Create ClusterMeta nodes
+    for cluster_id, center in cluster_centers.items():
+        await db.execute_query(
+            """
+            CREATE (c:ClusterMeta {
+                cluster_id: $cluster_id,
+                center_x: $x,
+                center_y: $y,
+                node_count: $node_count
+            })
+            """,
+            cluster_id=cluster_id,
+            x=center["x"],
+            y=center["y"],
+            node_count=center["node_count"],
+        )
+
+    print(f"  Created {len(cluster_centers)} ClusterMeta nodes")
+
+    # Create inter-cluster edges
+    for (src_cluster, dst_cluster), edge_count in cluster_edges.items():
+        await db.execute_query(
+            """
+            MATCH (c1:ClusterMeta {cluster_id: $src}), (c2:ClusterMeta {cluster_id: $dst})
+            CREATE (c1)-[:CLUSTER_EDGE {count: $count}]->(c2)
+            """,
+            src=src_cluster,
+            dst=dst_cluster,
+            count=edge_count,
+        )
+
+    print(f"  Created {len(cluster_edges)} inter-cluster edges")
 
     # Compute bounding box
     if positions:

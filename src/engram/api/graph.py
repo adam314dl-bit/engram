@@ -255,6 +255,33 @@ async def get_graph_stats(request: Request) -> dict:
     return {"concepts": c, "semantic": s, "episodic": e, "total": c + s + e, "clusters": cl}
 
 
+@router.get("/admin/graph/cluster-meta")
+async def get_cluster_metadata(request: Request) -> dict:
+    """Get cluster centers and inter-cluster edges for cluster-level rendering."""
+    db = get_db(request)
+
+    # Get cluster centers
+    centers = await db.execute_query(
+        """
+        MATCH (c:ClusterMeta)
+        RETURN c.cluster_id as id, c.center_x as x, c.center_y as y, c.node_count as nodeCount
+        """
+    )
+
+    # Get inter-cluster edges
+    edges = await db.execute_query(
+        """
+        MATCH (c1:ClusterMeta)-[r:CLUSTER_EDGE]->(c2:ClusterMeta)
+        RETURN c1.cluster_id as source, c2.cluster_id as target, r.count as count
+        """
+    )
+
+    return {
+        "centers": [{"id": c["id"], "x": c["x"], "y": c["y"], "nodeCount": c["nodeCount"]} for c in centers],
+        "edges": [{"source": e["source"], "target": e["target"], "count": e["count"]} for e in edges],
+    }
+
+
 GRAPH_HTML = """
 <!DOCTYPE html>
 <html>
@@ -461,6 +488,7 @@ GRAPH_HTML = """
         <div class="control-row">
             <button class="toggle-btn" id="cluster-btn" onclick="toggleClusters()">Clusters</button>
             <button class="toggle-btn" id="bundle-btn" onclick="toggleBundling()">Bundle</button>
+            <button class="toggle-btn" id="constellation-btn" onclick="toggleConstellation()">✨ Constellation</button>
         </div>
     </div>
 
@@ -513,7 +541,11 @@ GRAPH_HTML = """
         let highlightedNodes = new Set();
         let neighborNodes = new Set();
         let activatedNodes = new Set(); // Nodes activated by chat
-        let showClusters = false, showBundling = false;
+        let showClusters = false, showBundling = false, showConstellation = false;
+        let clusterCenters = {}; // { clusterId: { x, y, name, nodeCount } }
+        let clusterMeta = { centers: [], edges: [] }; // Precomputed cluster data
+        let renderMode = 'culled'; // 'cluster', 'culled', 'badge'
+        let clickRevealedNode = null; // Node whose edges are revealed in badge mode
         let typeFilters = new Set(); // empty = show all
 
         let isDragging = false, lastMouseX = 0, lastMouseY = 0, dragStartX = 0, dragStartY = 0;
@@ -716,6 +748,36 @@ GRAPH_HTML = """
             return [color[0], color[1], color[2], importance];
         }
 
+        function isInViewport(x, y) {
+            const pos = worldToScreen(x, y);
+            const margin = 50;
+            return pos.x >= -margin && pos.x <= window.innerWidth + margin &&
+                   pos.y >= -margin && pos.y <= window.innerHeight + margin;
+        }
+
+        function determineRenderMode() {
+            // Count visible nodes and find max connections
+            let visibleCount = 0;
+            let maxConn = 0;
+            for (const node of nodes) {
+                if (isNodeVisible(node) && isInViewport(node.x, node.y)) {
+                    visibleCount++;
+                    if (node.conn > maxConn) maxConn = node.conn;
+                }
+            }
+
+            // Adaptive thresholds based on edge complexity
+            const edgeComplexity = visibleCount * maxConn;
+
+            if (edgeComplexity > 50000 || maxConn > 500) {
+                return 'badge';
+            } else if (visibleCount > 300 || edgeComplexity > 10000) {
+                return 'cluster';
+            } else {
+                return 'culled';
+            }
+        }
+
         function render() {
             gl.clearColor(0.039, 0.039, 0.071, 1);
             gl.clear(gl.COLOR_BUFFER_BIT);
@@ -729,13 +791,24 @@ GRAPH_HTML = """
             // Clear label canvas
             labelCtx.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
 
-            // Draw lines
-            if (links.length > 0) {
-                gl.useProgram(lineProgram);
-                gl.uniform2f(gl.getUniformLocation(lineProgram, 'u_resolution'), w / 2, h / 2);
-                gl.uniform2f(gl.getUniformLocation(lineProgram, 'u_view'), viewX, viewY);
-                gl.uniform1f(gl.getUniformLocation(lineProgram, 'u_scale'), scale);
+            // Determine render mode adaptively
+            renderMode = determineRenderMode();
 
+            // Draw edges based on render mode
+            gl.useProgram(lineProgram);
+            gl.uniform2f(gl.getUniformLocation(lineProgram, 'u_resolution'), w / 2, h / 2);
+            gl.uniform2f(gl.getUniformLocation(lineProgram, 'u_view'), viewX, viewY);
+            gl.uniform1f(gl.getUniformLocation(lineProgram, 'u_scale'), scale);
+
+            const posLoc = gl.getAttribLocation(lineProgram, 'a_position');
+            gl.enableVertexAttribArray(posLoc);
+
+            if (renderMode === 'cluster' && clusterMeta.centers.length > 0) {
+                // CLUSTER MODE: Draw on 2D canvas for better visibility (constellation style)
+                // Skip WebGL edges, we'll draw them on labelCtx after nodes
+
+            } else if (renderMode === 'culled' && links.length > 0) {
+                // CULLED MODE: Draw node edges only if BOTH endpoints in viewport
                 const hasSelection = selectedNode || neighborNodes.size > 0;
                 const normalLineData = [];
                 const glowLineData = [];
@@ -743,8 +816,10 @@ GRAPH_HTML = """
                 for (const link of links) {
                     const s = nodeMap[link.source];
                     const t = nodeMap[link.target];
-                    if (s && t && isNodeVisible(s) && isNodeVisible(t)) {
-                        // Check if this link connects selected node to neighbor
+                    // Viewport culling: only draw if BOTH nodes are visible in viewport
+                    if (s && t && isNodeVisible(s) && isNodeVisible(t) &&
+                        isInViewport(s.x, s.y) && isInViewport(t.x, t.y)) {
+
                         const isGlowLink = selectedNode && (
                             (s === selectedNode && neighborNodes.has(t.id)) ||
                             (t === selectedNode && neighborNodes.has(s.id))
@@ -771,10 +846,6 @@ GRAPH_HTML = """
                     }
                 }
 
-                const posLoc = gl.getAttribLocation(lineProgram, 'a_position');
-                gl.enableVertexAttribArray(posLoc);
-
-                // Draw normal lines (dimmed if selection active)
                 if (normalLineData.length > 0) {
                     const normalOpacity = hasSelection ? 0.1 : 0.4;
                     gl.uniform4f(gl.getUniformLocation(lineProgram, 'u_color'), 0.37, 0.92, 0.83, normalOpacity);
@@ -784,18 +855,36 @@ GRAPH_HTML = """
                     gl.drawArrays(gl.LINES, 0, normalLineData.length / 2);
                 }
 
-                // Draw glowing lines for selected node connections
                 if (glowLineData.length > 0) {
-                    // Draw glow (wider, more transparent)
                     gl.uniform4f(gl.getUniformLocation(lineProgram, 'u_color'), 0.37, 0.92, 0.83, 0.6);
                     gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
                     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(glowLineData), gl.DYNAMIC_DRAW);
                     gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
                     gl.drawArrays(gl.LINES, 0, glowLineData.length / 2);
-
-                    // Draw bright core
                     gl.uniform4f(gl.getUniformLocation(lineProgram, 'u_color'), 0.6, 1.0, 0.95, 0.9);
                     gl.drawArrays(gl.LINES, 0, glowLineData.length / 2);
+                }
+
+            } else if (renderMode === 'badge') {
+                // BADGE MODE: No regular edges, but draw click-revealed edges
+                if (clickRevealedNode && neighborNodes.size > 0) {
+                    const revealedLineData = [];
+                    for (const neighborId of neighborNodes) {
+                        const neighbor = nodeMap[neighborId];
+                        if (neighbor && isInViewport(neighbor.x, neighbor.y)) {
+                            revealedLineData.push(
+                                clickRevealedNode.x, clickRevealedNode.y,
+                                neighbor.x, neighbor.y
+                            );
+                        }
+                    }
+                    if (revealedLineData.length > 0) {
+                        gl.uniform4f(gl.getUniformLocation(lineProgram, 'u_color'), 0.6, 1.0, 0.95, 0.7);
+                        gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
+                        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(revealedLineData), gl.DYNAMIC_DRAW);
+                        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+                        gl.drawArrays(gl.LINES, 0, revealedLineData.length / 2);
+                    }
                 }
             }
 
@@ -811,9 +900,13 @@ GRAPH_HTML = """
 
                 for (const node of nodes) {
                     const color = getNodeColor(node);
-                    // 4x BIGGER nodes: base 24-96, scaled by connections
-                    const baseSize = Math.max(24, Math.min(96, Math.sqrt(node.conn || 1) * 16));
-                    const size = baseSize * Math.max(1, Math.min(4, scale));
+                    // Node sizes: base by connections, scale with zoom for visibility
+                    const baseSize = Math.max(8, Math.min(40, Math.sqrt(node.conn || 1) * 8));
+                    // Scale up when zoomed in (larger dots at higher zoom)
+                    const zoomBoost = Math.max(1, Math.min(8, scale * 10));
+                    // At low zoom, ensure min 4px on screen
+                    const minScreenSize = 4 / scale;
+                    const size = Math.max(minScreenSize, baseSize * zoomBoost);
 
                     let finalColor = color;
                     if (node === selectedNode) {
@@ -865,6 +958,186 @@ GRAPH_HTML = """
                     labelCtx.fillStyle = 'rgba(255,255,255,0.7)';
                     labelCtx.fillText(label, pos.x, pos.y + screenSize / 2 + 14);
                 }
+
+                // BADGE MODE: Draw connection count badges
+                if (renderMode === 'badge') {
+                    labelCtx.font = 'bold 10px -apple-system, sans-serif';
+                    labelCtx.textAlign = 'center';
+                    labelCtx.textBaseline = 'middle';
+
+                    for (const node of nodes) {
+                        if (!isNodeVisible(node) || !isInViewport(node.x, node.y)) continue;
+                        if (node.conn < 1) continue;
+
+                        const pos = worldToScreen(node.x, node.y);
+                        const baseSize = Math.max(24, Math.min(96, Math.sqrt(node.conn || 1) * 16));
+                        const screenSize = Math.max(4, baseSize * scale);
+
+                        // Badge position (top-right of node)
+                        const badgeX = pos.x + screenSize / 2 + 8;
+                        const badgeY = pos.y - screenSize / 2 - 4;
+
+                        // Badge background
+                        const badgeText = node.conn > 999 ? (node.conn / 1000).toFixed(1) + 'k' : String(node.conn);
+                        const badgeWidth = labelCtx.measureText(badgeText).width + 8;
+
+                        // Color based on connection count
+                        let badgeColor;
+                        if (node.conn > 1000) badgeColor = '#f472b6'; // pink for supernodes
+                        else if (node.conn > 100) badgeColor = '#fbbf24'; // yellow for hubs
+                        else badgeColor = '#5eead4'; // teal for normal
+
+                        labelCtx.fillStyle = badgeColor + '40'; // semi-transparent bg
+                        labelCtx.beginPath();
+                        labelCtx.roundRect(badgeX - badgeWidth/2, badgeY - 8, badgeWidth, 16, 4);
+                        labelCtx.fill();
+
+                        labelCtx.fillStyle = badgeColor;
+                        labelCtx.fillText(badgeText, badgeX, badgeY);
+                    }
+                }
+
+                labelCtx.restore();
+            }
+
+            // CLUSTER MODE: Draw cluster centers and edges (constellation style)
+            if (renderMode === 'cluster' && clusterMeta.centers.length > 0) {
+                labelCtx.save();
+                labelCtx.scale(dpr, dpr);
+
+                const centerMap = {};
+                for (const c of clusterMeta.centers) {
+                    centerMap[c.id] = c;
+                }
+
+                // Draw cluster-to-cluster edges (dashed, bright)
+                labelCtx.strokeStyle = 'rgba(94, 234, 212, 0.5)';
+                labelCtx.lineWidth = 2;
+                labelCtx.setLineDash([8, 12]);
+
+                for (const edge of clusterMeta.edges) {
+                    const s = centerMap[edge.source];
+                    const t = centerMap[edge.target];
+                    if (!s || !t) continue;
+
+                    const pos1 = worldToScreen(s.x, s.y);
+                    const pos2 = worldToScreen(t.x, t.y);
+
+                    // Skip if both off screen
+                    if ((pos1.x < -50 || pos1.x > w + 50) && (pos2.x < -50 || pos2.x > w + 50)) continue;
+
+                    // Line thickness based on edge count
+                    labelCtx.lineWidth = Math.min(6, 1 + Math.log(edge.count + 1));
+
+                    labelCtx.beginPath();
+                    labelCtx.moveTo(pos1.x, pos1.y);
+                    labelCtx.lineTo(pos2.x, pos2.y);
+                    labelCtx.stroke();
+                }
+
+                labelCtx.setLineDash([]);
+
+                // Draw cluster centers as small dots (constellation style, no glow)
+                for (const center of clusterMeta.centers) {
+                    const pos = worldToScreen(center.x, center.y);
+                    if (pos.x < -100 || pos.x > w + 100 || pos.y < -100 || pos.y > h + 100) continue;
+
+                    const color = clusterPalette[center.id % clusterPalette.length];
+                    // Small fixed size like constellation
+                    const dotSize = Math.min(12, 4 + Math.log(center.nodeCount) * 2);
+
+                    // Simple colored dot
+                    labelCtx.fillStyle = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 1)`;
+                    labelCtx.beginPath();
+                    labelCtx.arc(pos.x, pos.y, dotSize, 0, Math.PI * 2);
+                    labelCtx.fill();
+
+                    // Node count label
+                    labelCtx.font = 'bold 11px -apple-system, sans-serif';
+                    labelCtx.fillStyle = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.9)`;
+                    labelCtx.textAlign = 'center';
+                    labelCtx.fillText(`${center.nodeCount}`, pos.x, pos.y + dotSize + 12);
+                }
+
+                labelCtx.restore();
+            }
+
+            // Draw constellation mode overlay
+            if (showConstellation && Object.keys(clusterCenters).length > 0) {
+                labelCtx.save();
+                labelCtx.scale(dpr, dpr);
+
+                const centersList = Object.entries(clusterCenters);
+
+                // Draw constellation lines between nearby clusters
+                labelCtx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+                labelCtx.lineWidth = 1;
+                labelCtx.setLineDash([5, 10]);
+
+                for (let i = 0; i < centersList.length; i++) {
+                    const [id1, c1] = centersList[i];
+                    const pos1 = worldToScreen(c1.x, c1.y);
+
+                    // Connect to 2-3 nearest clusters
+                    const distances = [];
+                    for (let j = 0; j < centersList.length; j++) {
+                        if (i === j) continue;
+                        const [id2, c2] = centersList[j];
+                        const dx = c2.x - c1.x, dy = c2.y - c1.y;
+                        distances.push({ j, dist: Math.sqrt(dx*dx + dy*dy) });
+                    }
+                    distances.sort((a, b) => a.dist - b.dist);
+
+                    // Draw lines to nearest 2 clusters
+                    for (let k = 0; k < Math.min(2, distances.length); k++) {
+                        const [id2, c2] = centersList[distances[k].j];
+                        const pos2 = worldToScreen(c2.x, c2.y);
+
+                        labelCtx.beginPath();
+                        labelCtx.moveTo(pos1.x, pos1.y);
+                        labelCtx.lineTo(pos2.x, pos2.y);
+                        labelCtx.stroke();
+                    }
+                }
+
+                labelCtx.setLineDash([]);
+
+                // Draw cluster centers as stars and labels
+                for (const [clusterId, center] of centersList) {
+                    const pos = worldToScreen(center.x, center.y);
+                    if (pos.x < -100 || pos.x > w + 100 || pos.y < -100 || pos.y > h + 100) continue;
+
+                    // Draw star shape at cluster center
+                    const starSize = Math.min(20, 8 + Math.log(center.nodeCount) * 3);
+                    const color = clusterPalette[clusterId % clusterPalette.length];
+
+                    // Glow
+                    const gradient = labelCtx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, starSize * 2);
+                    gradient.addColorStop(0, `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.6)`);
+                    gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+                    labelCtx.fillStyle = gradient;
+                    labelCtx.beginPath();
+                    labelCtx.arc(pos.x, pos.y, starSize * 2, 0, Math.PI * 2);
+                    labelCtx.fill();
+
+                    // Star center
+                    labelCtx.fillStyle = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 1)`;
+                    labelCtx.beginPath();
+                    labelCtx.arc(pos.x, pos.y, starSize / 2, 0, Math.PI * 2);
+                    labelCtx.fill();
+
+                    // Cluster name
+                    labelCtx.font = 'bold 12px -apple-system, sans-serif';
+                    labelCtx.fillStyle = `rgba(${color[0]*255}, ${color[1]*255}, ${color[2]*255}, 0.9)`;
+                    labelCtx.textAlign = 'center';
+                    labelCtx.fillText(center.name, pos.x, pos.y - starSize - 8);
+
+                    // Node count
+                    labelCtx.font = '10px -apple-system, sans-serif';
+                    labelCtx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                    labelCtx.fillText(`${center.nodeCount} nodes`, pos.x, pos.y + starSize + 16);
+                }
+
                 labelCtx.restore();
             }
         }
@@ -905,6 +1178,9 @@ GRAPH_HTML = """
             const panel = document.getElementById('node-info');
             const content = document.getElementById('node-info-content');
             const color = typeColorsHex[node.type];
+
+            // Set click-revealed node for badge mode edge drawing
+            clickRevealedNode = node;
 
             // Fetch neighbors
             let neighborsHtml = '<div style="color:#6b6b8a;padding:8px 0;">Loading...</div>';
@@ -974,6 +1250,7 @@ GRAPH_HTML = """
         function closeNodeInfo() {
             document.getElementById('node-info').classList.remove('visible');
             selectedNode = null;
+            clickRevealedNode = null;
             neighborNodes.clear();
             render();
         }
@@ -1019,6 +1296,45 @@ GRAPH_HTML = """
             showBundling = !showBundling;
             document.getElementById('bundle-btn').classList.toggle('active', showBundling);
             render();
+        }
+
+        function toggleConstellation() {
+            showConstellation = !showConstellation;
+            document.getElementById('constellation-btn').classList.toggle('active', showConstellation);
+            if (showConstellation) {
+                computeClusterCenters();
+            }
+            render();
+        }
+
+        function computeClusterCenters() {
+            clusterCenters = {};
+            for (const node of nodes) {
+                const cid = node.cluster || 0;
+                if (!clusterCenters[cid]) {
+                    clusterCenters[cid] = { x: 0, y: 0, count: 0, names: {} };
+                }
+                clusterCenters[cid].x += node.x;
+                clusterCenters[cid].y += node.y;
+                clusterCenters[cid].count++;
+                // Track top concept names for cluster naming
+                if (node.type === 'concept' && node.name) {
+                    const name = node.name.split(' ')[0]; // First word
+                    clusterCenters[cid].names[name] = (clusterCenters[cid].names[name] || 0) + (node.conn || 1);
+                }
+            }
+            // Finalize centers and pick names
+            for (const cid of Object.keys(clusterCenters)) {
+                const c = clusterCenters[cid];
+                c.x /= c.count;
+                c.y /= c.count;
+                c.nodeCount = c.count;
+                // Pick most connected concept name
+                const sortedNames = Object.entries(c.names).sort((a, b) => b[1] - a[1]);
+                c.name = sortedNames.length > 0 ? sortedNames[0][0] : `Cluster ${cid}`;
+                delete c.names;
+                delete c.count;
+            }
         }
 
         // Search
@@ -1130,7 +1446,7 @@ GRAPH_HTML = """
             e.preventDefault();
             const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
             const mouseWorld = screenToWorld(e.clientX, e.clientY);
-            scale = Math.max(0.05, Math.min(10, scale * zoomFactor));
+            scale = Math.max(0.001, Math.min(10, scale * zoomFactor));
             const newMouseWorld = screenToWorld(e.clientX, e.clientY);
             viewX += mouseWorld.x - newMouseWorld.x;
             viewY += mouseWorld.y - newMouseWorld.y;
@@ -1347,10 +1663,15 @@ GRAPH_HTML = """
             bounds = boundsData;
             viewX = (bounds.min_x + bounds.max_x) / 2;
             viewY = (bounds.min_y + bounds.max_y) / 2;
-            scale = Math.max(0.05, Math.min(1, Math.min(
-                window.innerWidth / (bounds.max_x - bounds.min_x) * 0.8,
-                window.innerHeight / (bounds.max_y - bounds.min_y) * 0.8
-            )));
+            // Fit graph on screen: scale so graph fills ~70% of viewport
+            const graphWidth = bounds.max_x - bounds.min_x;
+            const graphHeight = bounds.max_y - bounds.min_y;
+            scale = Math.min(
+                window.innerWidth * 0.7 / (graphWidth * 2),
+                window.innerHeight * 0.7 / (graphHeight * 2)
+            );
+            // Allow very low scale for large graphs (0.001 min)
+            scale = Math.max(0.001, Math.min(1, scale));
 
             const stats = await (await fetch('/admin/graph/stats')).json();
             document.getElementById('c-count').textContent = stats.concepts;
@@ -1358,8 +1679,22 @@ GRAPH_HTML = """
             document.getElementById('e-count').textContent = stats.episodic;
             document.getElementById('stats').innerHTML = `<div>Total: <strong style="color:#5eead4">${stats.total}</strong></div><div>Clusters: <strong style="color:#a78bfa">${stats.clusters}</strong></div>`;
 
+            // Load cluster metadata for cluster-level rendering
+            try {
+                clusterMeta = await (await fetch('/admin/graph/cluster-meta')).json();
+                console.log(`Loaded ${clusterMeta.centers.length} cluster centers, ${clusterMeta.edges.length} cluster edges`);
+            } catch (e) {
+                console.warn('No cluster metadata available, run compute_layout.py');
+            }
+
             document.getElementById('loading').style.display = 'none';
             await loadViewportData();
+
+            // Update mode indicator periodically
+            setInterval(() => {
+                const modeNames = { cluster: 'Cluster Edges', culled: 'Culled Edges', badge: 'Badge Mode' };
+                document.getElementById('mode-indicator').textContent = modeNames[renderMode] || 'WebGL';
+            }, 500);
         }
 
         init();
