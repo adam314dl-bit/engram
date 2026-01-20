@@ -918,9 +918,9 @@ GRAPH_HTML = """
                 labelCtx.save();
                 labelCtx.scale(dpr, dpr);
 
-                // Find max node count and filter clusters to show only >10% of max
+                // Find max node count and filter clusters to show only top 50%
                 const maxNodeCount = Math.max(...clusterMeta.centers.map(c => c.nodeCount));
-                const minThreshold = maxNodeCount * 0.1;
+                const minThreshold = maxNodeCount * 0.5;
                 const visibleClusters = clusterMeta.centers.filter(c => c.nodeCount >= minThreshold);
 
                 const centerMap = {};
@@ -1611,8 +1611,8 @@ GRAPH_HTML = """
             bounds.max_y *= spreadFactor;
             viewX = (bounds.min_x + bounds.max_x) / 2;
             viewY = (bounds.min_y + bounds.max_y) / 2;
-            // Start at max zoom out
-            scale = 0.0005;
+            // Start zoomed out
+            scale = 0.00015;
             console.log(`Initial scale: ${scale}`);
 
             const stats = await (await fetch('/constellation/stats')).json();
