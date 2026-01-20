@@ -24,9 +24,22 @@ class EmbeddingService:
     def _get_model(self) -> SentenceTransformer:
         """Get or load the embedding model."""
         if self._model is None:
+            import torch
             logger.info(f"Loading embedding model: {self.model_name}")
-            self._model = SentenceTransformer(self.model_name, trust_remote_code=True)
-            logger.info(f"Embedding model loaded. Dimensions: {self._model.get_sentence_embedding_dimension()}")
+
+            # Determine target device
+            target_device = "cuda" if torch.cuda.is_available() else "cpu"
+
+            # Load model with low_cpu_mem_usage=False to avoid meta tensor issues
+            # Some models (e.g., Giga-Embeddings-instruct) fail with meta tensors on GPU
+            self._model = SentenceTransformer(
+                self.model_name,
+                trust_remote_code=True,
+                device=target_device,
+                model_kwargs={"low_cpu_mem_usage": False}
+            )
+
+            logger.info(f"Embedding model loaded on {target_device}. Dimensions: {self._model.get_sentence_embedding_dimension()}")
         return self._model
 
     @property
