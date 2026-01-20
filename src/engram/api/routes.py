@@ -344,6 +344,7 @@ async def health_check(request: Request) -> HealthResponse:
     )
 
 
+@router.get("/models")
 @router.get("/v1/models")
 async def list_models() -> dict:
     """
