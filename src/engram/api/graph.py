@@ -1484,7 +1484,7 @@ GRAPH_HTML = """
                     return `
                         <div class="debug-item" style="${!included ? 'opacity:0.5' : ''}">
                             <span class="debug-item-name" onclick="highlightDebugNode('${m.id}')" title="${m.content || m.id}">${(m.content || m.id).substring(0, 40)}${(m.content || '').length > 40 ? '...' : ''}</span>
-                            <div class="debug-score-bar"><div class="debug-score-fill" style="width:${pct}%"></div></div>
+                            <div class="debug-score-bar"><div class="debug-score-fill" style="width:${pct}%;background:#a78bfa"></div></div>
                             <span class="debug-score">${score}</span>
                             ${sources}
                             <button class="debug-btn ${isForced ? 'active' : ''}" onclick="toggleForceInclude('${m.id}')" title="Force include">+</button>
@@ -1506,7 +1506,7 @@ GRAPH_HTML = """
                     return `
                         <div class="debug-item" style="${!included ? 'opacity:0.5' : ''}">
                             <span class="debug-item-name" onclick="highlightDebugNode('${c.id}')" title="${c.name || c.id}">${(c.name || c.id).substring(0, 30)}</span>
-                            <div class="debug-score-bar"><div class="debug-score-fill" style="width:${pct}%;background:#a78bfa"></div></div>
+                            <div class="debug-score-bar"><div class="debug-score-fill" style="width:${pct}%"></div></div>
                             <span class="debug-score">${activation}</span>
                             ${hop}
                         </div>
