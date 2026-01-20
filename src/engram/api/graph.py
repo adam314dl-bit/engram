@@ -563,8 +563,6 @@ GRAPH_HTML = """
         let isDragging = false, lastMouseX = 0, lastMouseY = 0, dragStartX = 0, dragStartY = 0;
         let animationFrameId = null;
         let loadingViewport = false, lastViewport = null, viewportDebounceTimer = null;
-        let currentSampleRate = 10; // Start with sampling (every 10th node)
-        let currentMinConnPct = 0.1; // Start filtering to 10% of max connections
         const spreadFactor = 0.5; // Compress node positions (0.5 = half spread)
 
         // WebGL shaders
@@ -704,34 +702,25 @@ GRAPH_HTML = """
             if (loadingViewport) return;
             const vp = getViewportBounds();
 
-            // Determine sample rate based on zoom level
-            // More granular: load more nodes as user zooms in
-            let newSampleRate, newMinConnPct;
-            if (scale < 0.001) { newSampleRate = 10; newMinConnPct = 0.05; }      // very zoomed out
-            else if (scale < 0.01) { newSampleRate = 5; newMinConnPct = 0.02; }   // zoomed out
-            else { newSampleRate = 1; newMinConnPct = 0; }                         // >= 0.01: all nodes
-
-            // Reload if viewport changed OR sample settings changed
-            const settingsChanged = newSampleRate !== currentSampleRate || newMinConnPct !== currentMinConnPct;
-            if (!viewportChanged(vp, lastViewport) && !settingsChanged) return;
+            // Always show 10% of nodes, no zoom-based logic
+            if (!viewportChanged(vp, lastViewport)) return;
 
             loadingViewport = true;
             lastViewport = vp;
-            currentSampleRate = newSampleRate;
-            currentMinConnPct = newMinConnPct;
 
             try {
-                const url = `/admin/graph/data?min_x=${vp.min_x}&max_x=${vp.max_x}&min_y=${vp.min_y}&max_y=${vp.max_y}&sample=${currentSampleRate}&min_conn_pct=${currentMinConnPct}`;
+                // Always sample 10% of nodes (sample=10), no connection filtering
+                const url = `/admin/graph/data?min_x=${vp.min_x}&max_x=${vp.max_x}&min_y=${vp.min_y}&max_y=${vp.max_y}&sample=10`;
                 const data = await (await fetch(url)).json();
 
                 nodes = data.nodes;
-                links = data.links;
+                links = []; // Don't load connections - only show on click
                 // Apply spread factor to compress positions
                 nodes.forEach(n => { n.x *= spreadFactor; n.y *= spreadFactor; });
                 nodeMap = {};
                 nodes.forEach(n => nodeMap[n.id] = n);
 
-                console.log(`Loaded ${nodes.length} nodes (sample=${currentSampleRate}, minConn=${currentMinConnPct}, scale=${scale.toFixed(4)})`);
+                console.log(`Loaded ${nodes.length} nodes (10% sample)`);
                 render();
             } catch (e) {
                 console.error('Failed to load:', e);
@@ -792,31 +781,12 @@ GRAPH_HTML = """
         }
 
         function determineRenderMode() {
-            // Force cluster mode when very zoomed out
+            // Simple mode: cluster view when zoomed out, otherwise show nodes only
+            // Connections only shown when clicking a node
             if (scale < 0.005) {
                 return 'cluster';
             }
-
-            // Count visible nodes and find max connections
-            let visibleCount = 0;
-            let maxConn = 0;
-            for (const node of nodes) {
-                if (isNodeVisible(node) && isInViewport(node.x, node.y)) {
-                    visibleCount++;
-                    if (node.conn > maxConn) maxConn = node.conn;
-                }
-            }
-
-            // Adaptive thresholds based on edge complexity
-            const edgeComplexity = visibleCount * maxConn;
-
-            if (edgeComplexity > 50000 || maxConn > 500) {
-                return 'badge';
-            } else if (visibleCount > 300 || edgeComplexity > 10000) {
-                return 'cluster';
-            } else {
-                return 'culled';
-            }
+            return 'nodes_only';
         }
 
         function render() {
@@ -848,84 +818,25 @@ GRAPH_HTML = """
                 // CLUSTER MODE: Draw on 2D canvas for better visibility (constellation style)
                 // Skip WebGL edges, we'll draw them on labelCtx after nodes
 
-            } else if (renderMode === 'culled' && links.length > 0) {
-                // CULLED MODE: Draw node edges only if BOTH endpoints in viewport
-                const hasSelection = selectedNode || neighborNodes.size > 0;
-                const normalLineData = [];
-                const glowLineData = [];
-
-                for (const link of links) {
-                    const s = nodeMap[link.source];
-                    const t = nodeMap[link.target];
-                    // Viewport culling: only draw if BOTH nodes are visible in viewport
-                    if (s && t && isNodeVisible(s) && isNodeVisible(t) &&
-                        isInViewport(s.x, s.y) && isInViewport(t.x, t.y)) {
-
-                        const isGlowLink = selectedNode && (
-                            (s === selectedNode && neighborNodes.has(t.id)) ||
-                            (t === selectedNode && neighborNodes.has(s.id))
+            } else if (clickRevealedNode && neighborNodes.size > 0) {
+                // NODES_ONLY MODE: Only draw edges when a node is clicked (with viewport culling)
+                const revealedLineData = [];
+                for (const neighborId of neighborNodes) {
+                    const neighbor = nodeMap[neighborId];
+                    // Only draw edge if neighbor is in viewport
+                    if (neighbor && isInViewport(neighbor.x, neighbor.y)) {
+                        revealedLineData.push(
+                            clickRevealedNode.x, clickRevealedNode.y,
+                            neighbor.x, neighbor.y
                         );
-
-                        const targetArray = isGlowLink ? glowLineData : normalLineData;
-
-                        if (showBundling) {
-                            const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2;
-                            const dx = t.x - s.x, dy = t.y - s.y;
-                            const cx = mx - dy * 0.15, cy = my + dx * 0.15;
-                            for (let i = 0; i < 8; i++) {
-                                const t1 = i / 8, t2 = (i + 1) / 8;
-                                targetArray.push(
-                                    (1-t1)*(1-t1)*s.x + 2*(1-t1)*t1*cx + t1*t1*t.x,
-                                    (1-t1)*(1-t1)*s.y + 2*(1-t1)*t1*cy + t1*t1*t.y,
-                                    (1-t2)*(1-t2)*s.x + 2*(1-t2)*t2*cx + t2*t2*t.x,
-                                    (1-t2)*(1-t2)*s.y + 2*(1-t2)*t2*cy + t2*t2*t.y
-                                );
-                            }
-                        } else {
-                            targetArray.push(s.x, s.y, t.x, t.y);
-                        }
                     }
                 }
-
-                if (normalLineData.length > 0) {
-                    const normalOpacity = hasSelection ? 0.1 : 0.4;
-                    gl.uniform4f(gl.getUniformLocation(lineProgram, 'u_color'), 0.37, 0.92, 0.83, normalOpacity);
+                if (revealedLineData.length > 0) {
+                    gl.uniform4f(gl.getUniformLocation(lineProgram, 'u_color'), 0.6, 1.0, 0.95, 0.7);
                     gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
-                    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normalLineData), gl.DYNAMIC_DRAW);
+                    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(revealedLineData), gl.DYNAMIC_DRAW);
                     gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
-                    gl.drawArrays(gl.LINES, 0, normalLineData.length / 2);
-                }
-
-                if (glowLineData.length > 0) {
-                    gl.uniform4f(gl.getUniformLocation(lineProgram, 'u_color'), 0.37, 0.92, 0.83, 0.6);
-                    gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
-                    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(glowLineData), gl.DYNAMIC_DRAW);
-                    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
-                    gl.drawArrays(gl.LINES, 0, glowLineData.length / 2);
-                    gl.uniform4f(gl.getUniformLocation(lineProgram, 'u_color'), 0.6, 1.0, 0.95, 0.9);
-                    gl.drawArrays(gl.LINES, 0, glowLineData.length / 2);
-                }
-
-            } else if (renderMode === 'badge') {
-                // BADGE MODE: No regular edges, but draw click-revealed edges
-                if (clickRevealedNode && neighborNodes.size > 0) {
-                    const revealedLineData = [];
-                    for (const neighborId of neighborNodes) {
-                        const neighbor = nodeMap[neighborId];
-                        if (neighbor && isInViewport(neighbor.x, neighbor.y)) {
-                            revealedLineData.push(
-                                clickRevealedNode.x, clickRevealedNode.y,
-                                neighbor.x, neighbor.y
-                            );
-                        }
-                    }
-                    if (revealedLineData.length > 0) {
-                        gl.uniform4f(gl.getUniformLocation(lineProgram, 'u_color'), 0.6, 1.0, 0.95, 0.7);
-                        gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
-                        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(revealedLineData), gl.DYNAMIC_DRAW);
-                        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
-                        gl.drawArrays(gl.LINES, 0, revealedLineData.length / 2);
-                    }
+                    gl.drawArrays(gl.LINES, 0, revealedLineData.length / 2);
                 }
             }
 
@@ -998,44 +909,6 @@ GRAPH_HTML = """
 
                     labelCtx.fillStyle = 'rgba(255,255,255,0.7)';
                     labelCtx.fillText(label, pos.x, pos.y + screenSize / 2 + 14);
-                }
-
-                // BADGE MODE: Draw connection count badges
-                if (renderMode === 'badge') {
-                    labelCtx.font = 'bold 10px -apple-system, sans-serif';
-                    labelCtx.textAlign = 'center';
-                    labelCtx.textBaseline = 'middle';
-
-                    for (const node of nodes) {
-                        if (!isNodeVisible(node) || !isInViewport(node.x, node.y)) continue;
-                        if (node.conn < 1) continue;
-
-                        const pos = worldToScreen(node.x, node.y);
-                        const baseSize = Math.max(24, Math.min(96, Math.sqrt(node.conn || 1) * 16));
-                        const screenSize = Math.max(4, baseSize * scale);
-
-                        // Badge position (top-right of node)
-                        const badgeX = pos.x + screenSize / 2 + 8;
-                        const badgeY = pos.y - screenSize / 2 - 4;
-
-                        // Badge background
-                        const badgeText = node.conn > 999 ? (node.conn / 1000).toFixed(1) + 'k' : String(node.conn);
-                        const badgeWidth = labelCtx.measureText(badgeText).width + 8;
-
-                        // Color based on connection count
-                        let badgeColor;
-                        if (node.conn > 1000) badgeColor = '#f472b6'; // pink for supernodes
-                        else if (node.conn > 100) badgeColor = '#fbbf24'; // yellow for hubs
-                        else badgeColor = '#5eead4'; // teal for normal
-
-                        labelCtx.fillStyle = badgeColor + '40'; // semi-transparent bg
-                        labelCtx.beginPath();
-                        labelCtx.roundRect(badgeX - badgeWidth/2, badgeY - 8, badgeWidth, 16, 4);
-                        labelCtx.fill();
-
-                        labelCtx.fillStyle = badgeColor;
-                        labelCtx.fillText(badgeText, badgeX, badgeY);
-                    }
                 }
 
                 labelCtx.restore();
