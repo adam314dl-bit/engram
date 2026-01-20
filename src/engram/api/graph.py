@@ -123,7 +123,6 @@ async def get_neighbors(request: Request, node_id: str = Query(...)) -> dict:
                    ELSE 'episodic'
                END as type,
                neighbor.layout_x as x, neighbor.layout_y as y
-        LIMIT 50
         """,
         node_id=node_id
     )
