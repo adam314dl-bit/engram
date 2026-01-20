@@ -552,6 +552,7 @@ GRAPH_HTML = """
         let selectedNode = null, hoveredNode = null;
         let highlightedNodes = new Set();
         let neighborNodes = new Set();
+        let neighborPositions = {}; // Store positions of ALL neighbors (not just loaded ones)
         let activatedNodes = new Set(); // Nodes activated by chat
         let showClusters = false, showBundling = false, showConstellation = false;
         let clusterCenters = {}; // { clusterId: { x, y, name, nodeCount } }
@@ -821,12 +822,12 @@ GRAPH_HTML = """
                 // NODES_ONLY MODE: Draw ALL edges when a node is clicked
                 const revealedLineData = [];
                 for (const neighborId of neighborNodes) {
-                    const neighbor = nodeMap[neighborId];
-                    // Draw edge to all neighbors (even if not in viewport)
-                    if (neighbor) {
+                    // Use neighborPositions (fetched from server) - includes ALL neighbors
+                    const pos = neighborPositions[neighborId];
+                    if (pos) {
                         revealedLineData.push(
                             clickRevealedNode.x, clickRevealedNode.y,
-                            neighbor.x, neighbor.y
+                            pos.x, pos.y
                         );
                     }
                 }
@@ -1109,7 +1110,12 @@ GRAPH_HTML = """
                 const data = await res.json();
 
                 neighborNodes.clear();
-                data.neighbors.forEach(n => neighborNodes.add(n.id));
+                neighborPositions = {};
+                data.neighbors.forEach(n => {
+                    neighborNodes.add(n.id);
+                    // Store position for ALL neighbors (apply spread factor)
+                    neighborPositions[n.id] = { x: n.x * spreadFactor, y: n.y * spreadFactor };
+                });
                 render();
 
                 if (data.neighbors.length > 0) {
@@ -1172,6 +1178,7 @@ GRAPH_HTML = """
             selectedNode = null;
             clickRevealedNode = null;
             neighborNodes.clear();
+            neighborPositions = {};
             render();
         }
 
