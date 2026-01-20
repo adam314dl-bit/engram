@@ -1461,6 +1461,7 @@ GRAPH_HTML = """
 
         function toggleDebugMode() {
             debugMode = !debugMode;
+            console.log('Debug mode toggled to:', debugMode);
             document.getElementById('debug-btn').classList.toggle('active', debugMode);
             document.getElementById('debug-panel').classList.toggle('visible', debugMode);
         }
@@ -1814,6 +1815,21 @@ GRAPH_HTML = """
                 document.getElementById('mode-indicator').textContent = modeNames[renderMode] || 'WebGL';
             }, 500);
         }
+
+        // Expose functions to global scope for onclick handlers
+        window.toggleDebugMode = toggleDebugMode;
+        window.toggleChat = toggleChat;
+        window.clearChat = clearChat;
+        window.showLastActivation = showLastActivation;
+        window.sendChat = sendChat;
+        window.closeNodeInfo = closeNodeInfo;
+        window.toggleTypeFilter = toggleTypeFilter;
+        window.toggleClusters = toggleClusters;
+        window.toggleBundling = toggleBundling;
+        window.toggleConstellation = toggleConstellation;
+        window.highlightDebugNode = highlightDebugNode;
+        window.toggleForceInclude = toggleForceInclude;
+        window.toggleForceExclude = toggleForceExclude;
 
         init();
     </script>
