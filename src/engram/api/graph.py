@@ -806,8 +806,8 @@ GRAPH_HTML = """
                 color = typeColors[node.type] || typeColors.concept;
             }
 
-            // Add glow (alpha > 0.95) for important nodes
-            const importance = connCount > 10 ? 1.0 : 0.9;
+            // Slightly brighter for well-connected nodes
+            const importance = (node.conn || 0) > 10 ? 1.0 : 0.9;
             return [color[0], color[1], color[2], importance];
         }
 
