@@ -150,6 +150,7 @@ async def get_graph_data(
     min_y: Optional[float] = Query(None),
     max_y: Optional[float] = Query(None),
     sample: int = Query(1, description="Load every Nth node (1=all, 10=every 10th)"),
+    min_conn_pct: float = Query(0, description="Min connections as % of max (0-1, e.g. 0.1 = 10%)"),
 ) -> dict:
     db = get_db(request)
     nodes = []
@@ -228,6 +229,12 @@ async def get_graph_data(
             "x": e["x"], "y": e["y"],
             "cluster": e["cluster"] or 0, "conn": e["conn"] or 0,
         })
+
+    # Filter nodes by connection percentage if specified
+    if min_conn_pct > 0 and nodes:
+        max_conn = max(n["conn"] for n in nodes)
+        min_conn_threshold = max_conn * min_conn_pct
+        nodes = [n for n in nodes if n["conn"] >= min_conn_threshold]
 
     node_ids = {n["id"] for n in nodes}
 
@@ -557,6 +564,7 @@ GRAPH_HTML = """
         let animationFrameId = null;
         let loadingViewport = false, lastViewport = null, viewportDebounceTimer = null;
         let currentSampleRate = 10; // Start with sampling (every 10th node)
+        let currentMinConnPct = 0.1; // Start filtering to 10% of max connections
 
         // WebGL shaders
         const vertexShaderSrc = `
@@ -691,23 +699,24 @@ GRAPH_HTML = """
 
             // Determine sample rate based on zoom level
             // More granular: load more nodes as user zooms in
-            let newSampleRate;
-            if (scale < 0.001) newSampleRate = 20;      // very zoomed out: every 20th
-            else if (scale < 0.005) newSampleRate = 10; // zoomed out: every 10th
-            else if (scale < 0.01) newSampleRate = 5;   // medium-out: every 5th
-            else if (scale < 0.05) newSampleRate = 3;   // medium: every 3rd
-            else if (scale < 0.1) newSampleRate = 2;    // medium-in: every 2nd
-            else newSampleRate = 1;                      // zoomed in: all nodes
+            let newSampleRate, newMinConnPct;
+            if (scale < 0.001) { newSampleRate = 20; newMinConnPct = 0.1; }       // very zoomed out
+            else if (scale < 0.005) { newSampleRate = 10; newMinConnPct = 0.1; }  // zoomed out
+            else if (scale < 0.01) { newSampleRate = 5; newMinConnPct = 0.05; }   // medium-out
+            else if (scale < 0.05) { newSampleRate = 3; newMinConnPct = 0.02; }   // medium
+            else if (scale < 0.1) { newSampleRate = 2; newMinConnPct = 0; }       // medium-in
+            else { newSampleRate = 1; newMinConnPct = 0; }                         // zoomed in: all
 
-            // Skip if viewport hasn't changed AND sample rate is same
-            if (!viewportChanged(vp, lastViewport) && newSampleRate === currentSampleRate) return;
+            // Skip if viewport hasn't changed AND settings are same
+            if (!viewportChanged(vp, lastViewport) && newSampleRate === currentSampleRate && newMinConnPct === currentMinConnPct) return;
 
             loadingViewport = true;
             lastViewport = vp;
             currentSampleRate = newSampleRate;
+            currentMinConnPct = newMinConnPct;
 
             try {
-                const url = `/admin/graph/data?min_x=${vp.min_x}&max_x=${vp.max_x}&min_y=${vp.min_y}&max_y=${vp.max_y}&sample=${currentSampleRate}`;
+                const url = `/admin/graph/data?min_x=${vp.min_x}&max_x=${vp.max_x}&min_y=${vp.min_y}&max_y=${vp.max_y}&sample=${currentSampleRate}&min_conn_pct=${currentMinConnPct}`;
                 const data = await (await fetch(url)).json();
 
                 nodes = data.nodes;
@@ -715,7 +724,7 @@ GRAPH_HTML = """
                 nodeMap = {};
                 nodes.forEach(n => nodeMap[n.id] = n);
 
-                console.log(`Loaded ${nodes.length} nodes (sample=${currentSampleRate}, scale=${scale.toFixed(4)})`);
+                console.log(`Loaded ${nodes.length} nodes (sample=${currentSampleRate}, minConn=${currentMinConnPct}, scale=${scale.toFixed(4)})`);
                 render();
             } catch (e) {
                 console.error('Failed to load:', e);
