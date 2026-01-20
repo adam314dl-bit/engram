@@ -1643,6 +1643,7 @@ GRAPH_HTML = """
         }
 
         async function sendChat() {
+            console.log('sendChat called, debugMode:', debugMode);
             const input = document.getElementById('chat-input');
             const sendBtn = document.getElementById('chat-send');
             const messages = document.getElementById('chat-messages');
