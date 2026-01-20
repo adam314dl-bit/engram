@@ -1852,7 +1852,7 @@ GRAPH_HTML = """
                 console.warn('No cluster metadata available, run compute_layout.py');
             }
 
-            updateLoadingStatus('Loading nodes...');
+            updateLoadingStatus('Loading data...');
             await loadViewportData();
             document.getElementById('loading').style.display = 'none';
 
