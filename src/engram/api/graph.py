@@ -564,7 +564,7 @@ GRAPH_HTML = """
         let animationFrameId = null;
         let loadingViewport = false, lastViewport = null, viewportDebounceTimer = null;
         let nodesLoaded = false;
-        const spreadFactor = 0.5; // Compress node positions (0.5 = half spread)
+        const spreadFactor = 3.0; // Spread out node positions
 
         // WebGL shaders
         const vertexShaderSrc = `
@@ -850,14 +850,13 @@ GRAPH_HTML = """
 
                 for (const node of nodes) {
                     const color = getNodeColor(node);
-                    // Node sizes: base by connections, scale with zoom for visibility
-                    // Size strongly based on connection count - larger multiplier
+                    // Node sizes: strongly based on connection count
                     const connCount = node.conn || 1;
-                    const baseSize = Math.max(20, Math.min(500, 10 + Math.sqrt(connCount) * 50));
-                    // Scale up when zoomed in (larger dots at higher zoom) - very aggressive
-                    const zoomBoost = Math.max(1, Math.min(100, scale * 150));
-                    // At low zoom, ensure min 10px on screen
-                    const minScreenSize = 10 / scale;
+                    const baseSize = Math.max(3, Math.min(300, 2 + Math.sqrt(connCount) * 25));
+                    // Scale up when zoomed in (limited)
+                    const zoomBoost = Math.max(1, Math.min(10, scale * 200));
+                    // At low zoom, ensure min 4px on screen
+                    const minScreenSize = 4 / scale;
                     const size = Math.max(minScreenSize, baseSize * zoomBoost);
 
                     let finalColor = color;
@@ -1156,11 +1155,12 @@ GRAPH_HTML = """
             // Add click handlers for neighbors
             content.querySelectorAll('.neighbor-item').forEach(item => {
                 item.addEventListener('click', () => {
-                    const x = parseFloat(item.dataset.x);
-                    const y = parseFloat(item.dataset.y);
+                    const x = parseFloat(item.dataset.x) * spreadFactor;
+                    const y = parseFloat(item.dataset.y) * spreadFactor;
                     const id = item.dataset.id;
                     viewX = x;
                     viewY = y;
+                    scale = 0.01; // Zoom in to see the node
                     if (nodeMap[id]) {
                         selectedNode = nodeMap[id];
                         showNodeInfo(selectedNode);
@@ -1315,15 +1315,33 @@ GRAPH_HTML = """
             }
         }
 
-        searchResults.addEventListener('click', (e) => {
+        searchResults.addEventListener('click', async (e) => {
             const result = e.target.closest('.search-result');
             if (result) {
-                viewX = parseFloat(result.dataset.x);
-                viewY = parseFloat(result.dataset.y);
-                scale = 2;
+                const x = parseFloat(result.dataset.x) * spreadFactor;
+                const y = parseFloat(result.dataset.y) * spreadFactor;
+                const id = result.dataset.id;
+                const name = result.querySelector('.search-result-name').textContent;
+                const type = result.querySelector('.search-result-type').textContent;
+
+                viewX = x;
+                viewY = y;
+                scale = 0.01;
                 searchResults.classList.remove('visible');
+
+                // Create node object if not in nodeMap
+                let node = nodeMap[id];
+                if (!node) {
+                    node = { id, name, type, x, y, conn: 1 };
+                    nodes.push(node);
+                    nodeMap[id] = node;
+                }
+
+                // Select and show info (like clicking)
+                selectedNode = node;
+                clickRevealedNode = node;
+                await showNodeInfo(node);
                 render();
-                scheduleViewportLoad();
             }
         });
 
@@ -1371,7 +1389,7 @@ GRAPH_HTML = """
             e.preventDefault();
             const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
             const mouseWorld = screenToWorld(e.clientX, e.clientY);
-            scale = Math.max(0.0001, Math.min(10, scale * zoomFactor));
+            scale = Math.max(0.0001, Math.min(0.05, scale * zoomFactor));
             const newMouseWorld = screenToWorld(e.clientX, e.clientY);
             viewX += mouseWorld.x - newMouseWorld.x;
             viewY += mouseWorld.y - newMouseWorld.y;
