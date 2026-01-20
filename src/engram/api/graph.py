@@ -1025,12 +1025,17 @@ GRAPH_HTML = """
                 labelCtx.save();
                 labelCtx.scale(dpr, dpr);
 
+                // Find max node count and filter clusters to show only >10% of max
+                const maxNodeCount = Math.max(...clusterMeta.centers.map(c => c.nodeCount));
+                const minThreshold = maxNodeCount * 0.1;
+                const visibleClusters = clusterMeta.centers.filter(c => c.nodeCount >= minThreshold);
+
                 const centerMap = {};
-                for (const c of clusterMeta.centers) {
+                for (const c of visibleClusters) {
                     centerMap[c.id] = c;
                 }
 
-                // Draw cluster-to-cluster edges (dashed, bright)
+                // Draw cluster-to-cluster edges (dashed, bright) - only between visible clusters
                 labelCtx.strokeStyle = 'rgba(94, 234, 212, 0.5)';
                 labelCtx.lineWidth = 2;
                 labelCtx.setLineDash([8, 12]);
@@ -1058,7 +1063,7 @@ GRAPH_HTML = """
                 labelCtx.setLineDash([]);
 
                 // Draw cluster centers as small dots (constellation style, no glow)
-                for (const center of clusterMeta.centers) {
+                for (const center of visibleClusters) {
                     const pos = worldToScreen(center.x, center.y);
                     if (pos.x < -100 || pos.x > w + 100 || pos.y < -100 || pos.y > h + 100) continue;
 
@@ -1684,7 +1689,7 @@ GRAPH_HTML = """
             viewX = (bounds.min_x + bounds.max_x) / 2;
             viewY = (bounds.min_y + bounds.max_y) / 2;
             // Start at max zoom out
-            scale = 0.0001;
+            scale = 0.0005;
             console.log(`Initial scale: ${scale}`);
 
             const stats = await (await fetch('/admin/graph/stats')).json();
