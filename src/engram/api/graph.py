@@ -565,6 +565,7 @@ GRAPH_HTML = """
         let loadingViewport = false, lastViewport = null, viewportDebounceTimer = null;
         let currentSampleRate = 10; // Start with sampling (every 10th node)
         let currentMinConnPct = 0.1; // Start filtering to 10% of max connections
+        const spreadFactor = 0.5; // Compress node positions (0.5 = half spread)
 
         // WebGL shaders
         const vertexShaderSrc = `
@@ -725,6 +726,8 @@ GRAPH_HTML = """
 
                 nodes = data.nodes;
                 links = data.links;
+                // Apply spread factor to compress positions
+                nodes.forEach(n => { n.x *= spreadFactor; n.y *= spreadFactor; });
                 nodeMap = {};
                 nodes.forEach(n => nodeMap[n.id] = n);
 
@@ -1704,6 +1707,11 @@ GRAPH_HTML = """
             }
 
             bounds = boundsData;
+            // Apply spread factor to bounds
+            bounds.min_x *= spreadFactor;
+            bounds.max_x *= spreadFactor;
+            bounds.min_y *= spreadFactor;
+            bounds.max_y *= spreadFactor;
             viewX = (bounds.min_x + bounds.max_x) / 2;
             viewY = (bounds.min_y + bounds.max_y) / 2;
             // Start at max zoom out
@@ -1719,6 +1727,8 @@ GRAPH_HTML = """
             // Load cluster metadata for cluster-level rendering
             try {
                 clusterMeta = await (await fetch('/admin/graph/cluster-meta')).json();
+                // Apply spread factor to cluster centers
+                clusterMeta.centers.forEach(c => { c.x *= spreadFactor; c.y *= spreadFactor; });
                 console.log(`Loaded ${clusterMeta.centers.length} cluster centers, ${clusterMeta.edges.length} cluster edges`);
             } catch (e) {
                 console.warn('No cluster metadata available, run compute_layout.py');
