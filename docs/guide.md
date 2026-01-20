@@ -32,34 +32,6 @@ User Query → Spreading Activation → Retrieve Relevant Memories
 
 ---
 
-## Quick Start
-
-### Prerequisites
-
-- Docker (for Neo4j)
-- Python 3.11+
-- uv package manager
-
-### Start the System
-
-```bash
-# 1. Start Neo4j
-docker start engram-neo4j
-
-# 2. Start API server
-uv run python -m engram.api.main
-```
-
-### Access Points
-
-| URL | Description |
-|-----|-------------|
-| `http://localhost:8000/constellation` | Graph visualization |
-| `http://localhost:8000/health` | Health check |
-| `http://localhost:8000/v1/chat/completions` | Chat API |
-
----
-
 ## Constellation Mode
 
 Interactive graph visualization at `/constellation`.

@@ -352,7 +352,46 @@ GRAPH_HTML = """
         .search-result-type { font-size: 10px; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; }
 
         #stats { position: absolute; top: 16px; right: 16px; background: rgba(10,10,18,0.95); padding: 12px 16px; border-radius: 6px; border: 1px solid #1a1a2e; font-size: 11px; color: #8b8ba0; z-index: 10; }
-        #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #5eead4; z-index: 10; }
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #5eead4; z-index: 10; text-align: center;
+        }
+        #loading .neural-network {
+            width: 120px; height: 120px; margin: 0 auto 20px;
+            position: relative;
+        }
+        #loading .neuron {
+            position: absolute; width: 12px; height: 12px;
+            background: #5eead4; border-radius: 50%;
+            animation: neuronPulse 1.5s ease-in-out infinite;
+        }
+        #loading .neuron:nth-child(1) { top: 10%; left: 50%; transform: translateX(-50%); animation-delay: 0s; }
+        #loading .neuron:nth-child(2) { top: 35%; left: 15%; animation-delay: 0.2s; }
+        #loading .neuron:nth-child(3) { top: 35%; left: 85%; transform: translateX(-100%); animation-delay: 0.3s; }
+        #loading .neuron:nth-child(4) { top: 60%; left: 30%; animation-delay: 0.4s; }
+        #loading .neuron:nth-child(5) { top: 60%; left: 70%; transform: translateX(-100%); animation-delay: 0.5s; }
+        #loading .neuron:nth-child(6) { top: 85%; left: 50%; transform: translateX(-50%); animation-delay: 0.7s; }
+        #loading .synapse {
+            position: absolute; height: 2px; background: linear-gradient(90deg, transparent, #5eead4, transparent);
+            transform-origin: left center; opacity: 0.3;
+            animation: synapseFire 1.5s ease-in-out infinite;
+        }
+        #loading .synapse:nth-child(7) { top: 18%; left: 50%; width: 35px; transform: rotate(50deg); animation-delay: 0.1s; }
+        #loading .synapse:nth-child(8) { top: 18%; left: 42%; width: 35px; transform: rotate(130deg); animation-delay: 0.15s; }
+        #loading .synapse:nth-child(9) { top: 42%; left: 22%; width: 30px; transform: rotate(40deg); animation-delay: 0.3s; }
+        #loading .synapse:nth-child(10) { top: 42%; left: 72%; width: 30px; transform: rotate(140deg); animation-delay: 0.35s; }
+        #loading .synapse:nth-child(11) { top: 67%; left: 38%; width: 25px; transform: rotate(50deg); animation-delay: 0.5s; }
+        #loading .synapse:nth-child(12) { top: 67%; left: 58%; width: 25px; transform: rotate(130deg); animation-delay: 0.55s; }
+        #loading .loading-text { font-size: 14px; color: #5eead4; margin-top: 10px; }
+        #loading .loading-status { font-size: 11px; color: #6b6b8a; margin-top: 5px; }
+        @keyframes neuronPulse {
+            0%, 100% { transform: translateX(-50%) scale(1); opacity: 0.4; box-shadow: 0 0 5px #5eead4; }
+            50% { transform: translateX(-50%) scale(1.3); opacity: 1; box-shadow: 0 0 20px #5eead4, 0 0 40px #5eead480; }
+        }
+        @keyframes synapseFire {
+            0%, 100% { opacity: 0.2; }
+            50% { opacity: 0.8; }
+        }
 
         #tooltip {
             position: absolute; pointer-events: none; z-index: 1000;
@@ -532,7 +571,24 @@ GRAPH_HTML = """
     </div>
 
     <div id="stats">Loading...</div>
-    <div id="loading">Loading graph...</div>
+    <div id="loading">
+        <div class="neural-network">
+            <div class="neuron"></div>
+            <div class="neuron"></div>
+            <div class="neuron"></div>
+            <div class="neuron"></div>
+            <div class="neuron"></div>
+            <div class="neuron"></div>
+            <div class="synapse"></div>
+            <div class="synapse"></div>
+            <div class="synapse"></div>
+            <div class="synapse"></div>
+            <div class="synapse"></div>
+            <div class="synapse"></div>
+        </div>
+        <div class="loading-text">Loading Memory Graph</div>
+        <div class="loading-status" id="loading-status">Initializing...</div>
+    </div>
     <div id="mode-indicator">WebGL</div>
 
     <button id="chat-toggle" onclick="toggleChat()">💬</button>
@@ -1750,10 +1806,16 @@ GRAPH_HTML = """
             this.style.height = Math.min(this.scrollHeight, 100) + 'px';
         });
 
+        function updateLoadingStatus(text) {
+            const el = document.getElementById('loading-status');
+            if (el) el.textContent = text;
+        }
+
         async function init() {
             resize();
             window.addEventListener('resize', resize);
 
+            updateLoadingStatus('Fetching graph bounds...');
             const boundsData = await (await fetch('/constellation/bounds')).json();
             if (!boundsData.has_layout) {
                 document.getElementById('loading').innerHTML = 'No layout. Run: uv run python scripts/compute_layout.py';
@@ -1772,12 +1834,14 @@ GRAPH_HTML = """
             scale = 0.00015;
             console.log(`Initial scale: ${scale}`);
 
+            updateLoadingStatus('Loading statistics...');
             const stats = await (await fetch('/constellation/stats')).json();
             document.getElementById('c-count').textContent = stats.concepts;
             document.getElementById('s-count').textContent = stats.semantic;
             document.getElementById('e-count').textContent = stats.episodic;
             document.getElementById('stats').innerHTML = `<div>Total: <strong style="color:#5eead4">${stats.total}</strong></div><div>Clusters: <strong style="color:#a78bfa">${stats.clusters}</strong></div>`;
 
+            updateLoadingStatus('Loading cluster data...');
             // Load cluster metadata for cluster-level rendering
             try {
                 clusterMeta = await (await fetch('/constellation/cluster-meta')).json();
@@ -1788,8 +1852,9 @@ GRAPH_HTML = """
                 console.warn('No cluster metadata available, run compute_layout.py');
             }
 
-            document.getElementById('loading').style.display = 'none';
+            updateLoadingStatus('Loading nodes...');
             await loadViewportData();
+            document.getElementById('loading').style.display = 'none';
 
             // Update mode indicator periodically
             setInterval(() => {
