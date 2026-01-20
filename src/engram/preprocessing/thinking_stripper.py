@@ -20,21 +20,15 @@ class ThinkingStripper:
     """
     Strips thinking/reasoning content from LLM output.
     Designed for Kimi K2 Thinking model with Russian content.
+
+    SAFE version - only strips COMPLETE tag pairs, never truncates valid content.
     """
 
-    # Primary thinking tag patterns
+    # SAFE: Only complete tag pairs (no dangerous end-of-string patterns)
     THINKING_PATTERNS = [
-        # Standard tags (greedy to handle nested)
         re.compile(r'<think>[\s\S]*?</think>', re.DOTALL),
         re.compile(r'<thinking>[\s\S]*?</thinking>', re.DOTALL),
-
-        # Kimi-specific tokens
         re.compile(r'<\|im_thinking\|>[\s\S]*?<\|im_end\|>', re.DOTALL),
-
-        # Incomplete tags (model stopped mid-thought)
-        re.compile(r'<think>[\s\S]*$', re.DOTALL),
-        re.compile(r'<thinking>[\s\S]*$', re.DOTALL),
-        re.compile(r'<\|im_thinking\|>[\s\S]*$', re.DOTALL),
     ]
 
     # System prompt leak patterns
@@ -44,21 +38,17 @@ class ThinkingStripper:
         re.compile(r'<\|im_start\|>system[\s\S]*?<\|im_end\|>', re.DOTALL),
     ]
 
-    # Reasoning phrases (Russian + English) - for aggressive mode
+    # Reasoning phrases - anchored to line start to avoid mid-sentence matches
     REASONING_PHRASES_RU = [
-        re.compile(r'Дай(?:те)? (?:мне )?подумать[\s\S]*?(?=\n\n|\Z)', re.DOTALL | re.IGNORECASE),
-        re.compile(r'Мне нужно (?:по)?думать[\s\S]*?(?=\n\n|\Z)', re.DOTALL | re.IGNORECASE),
-        re.compile(r'Давай(?:те)? разберём[\s\S]*?(?=\n\n|\Z)', re.DOTALL | re.IGNORECASE),
-        re.compile(r'Сначала (?:я )?(?:должен|нужно)[\s\S]*?(?=\n\n|\Z)', re.DOTALL | re.IGNORECASE),
-        re.compile(r'Рассмотрим[\s\S]*?(?=\n\n|\Z)', re.DOTALL | re.IGNORECASE),
-        re.compile(r'Анализируя[\s\S]*?(?=\n\n|\Z)', re.DOTALL | re.IGNORECASE),
+        re.compile(r'^Дай(?:те)? (?:мне )?подумать[.:]?\s*', re.MULTILINE | re.IGNORECASE),
+        re.compile(r'^Мне нужно (?:по)?думать[.:]?\s*', re.MULTILINE | re.IGNORECASE),
+        re.compile(r'^Давай(?:те)? разберём[.:]?\s*', re.MULTILINE | re.IGNORECASE),
     ]
 
     REASONING_PHRASES_EN = [
-        re.compile(r'Let me think[\s\S]*?(?=\n\n|\Z)', re.DOTALL | re.IGNORECASE),
-        re.compile(r'I need to think[\s\S]*?(?=\n\n|\Z)', re.DOTALL | re.IGNORECASE),
-        re.compile(r"Let's break (?:this )?down[\s\S]*?(?=\n\n|\Z)", re.DOTALL | re.IGNORECASE),
-        re.compile(r'First,? I (?:need to|should|must)[\s\S]*?(?=\n\n|\Z)', re.DOTALL | re.IGNORECASE),
+        re.compile(r'^Let me think[.:]?\s*', re.MULTILINE | re.IGNORECASE),
+        re.compile(r'^I need to think[.:]?\s*', re.MULTILINE | re.IGNORECASE),
+        re.compile(r"^Let's break (?:this )?down[.:]?\s*", re.MULTILINE | re.IGNORECASE),
     ]
 
     @classmethod
@@ -69,41 +59,46 @@ class ThinkingStripper:
         preserve_structure: bool = True
     ) -> str:
         """
-        Strip thinking content from text.
+        Strip thinking content from text SAFELY.
 
         Args:
             text: Raw LLM output
-            aggressive: Also strip reasoning-like phrases
+            aggressive: Also strip reasoning-like phrases (use carefully)
             preserve_structure: Try to preserve paragraph structure
 
         Returns:
-            Cleaned text
+            Cleaned text - never truncates valid content
         """
         if not text:
             return ""
 
         result = text
 
-        # 1. Strip thinking tags (always)
+        # 1. Strip COMPLETE thinking tags only (safe)
         for pattern in cls.THINKING_PATTERNS:
             result = pattern.sub('', result)
 
-        # 2. Strip system prompt leaks (always)
+        # 2. Strip system prompt leaks (safe - specific patterns)
         for pattern in cls.SYSTEM_LEAK_PATTERNS:
             result = pattern.sub('', result)
 
-        # 3. Aggressive mode: strip reasoning phrases
+        # 3. Handle orphan opening/closing tags SAFELY
+        # Only remove the tag itself, NOT the content after it
+        result = re.sub(r'<think>', '', result)
+        result = re.sub(r'<thinking>', '', result)
+        result = re.sub(r'</think>', '', result)
+        result = re.sub(r'</thinking>', '', result)
+
+        # 4. Aggressive mode: strip reasoning phrases (optional)
         if aggressive:
             for pattern in cls.REASONING_PHRASES_RU + cls.REASONING_PHRASES_EN:
                 result = pattern.sub('', result)
 
-        # 4. Clean up whitespace
+        # 5. Clean up whitespace
         if preserve_structure:
-            # Keep paragraph breaks but normalize
             result = re.sub(r'\n{3,}', '\n\n', result)
             result = re.sub(r'[ \t]+', ' ', result)
         else:
-            # Collapse all whitespace
             result = re.sub(r'\s+', ' ', result)
 
         return result.strip()
