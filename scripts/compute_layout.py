@@ -280,28 +280,46 @@ async def compute_and_store_layout():
 
     print("Storing positions and clusters in Neo4j...")
 
-    # Store positions and clusters back to Neo4j in batches
-    batch_size = 500
-    node_list = list(positions.items())
+    # Build node type mapping
+    concept_ids = {n["id"] for n in concepts}
+    semantic_ids = {n["id"] for n in semantic}
+    episodic_ids = {n["id"] for n in episodic}
 
-    for i in range(0, len(node_list), batch_size):
-        batch = node_list[i : i + batch_size]
+    # Group nodes by type for per-label indexed writes (much faster)
+    by_type = {"Concept": [], "SemanticMemory": [], "EpisodicMemory": []}
+    for node_id, (x, y) in positions.items():
+        cluster_id = node_clusters.get(node_id, 0)
+        data = {"id": node_id, "x": float(x), "y": float(y), "cluster": cluster_id}
+        if node_id in concept_ids:
+            by_type["Concept"].append(data)
+        elif node_id in semantic_ids:
+            by_type["SemanticMemory"].append(data)
+        elif node_id in episodic_ids:
+            by_type["EpisodicMemory"].append(data)
 
-        for node_id, (x, y) in batch:
-            cluster_id = node_clusters.get(node_id, 0)
+    # Write each type separately using UNWIND batching (much faster)
+    batch_size = 2000
+    total = len(positions)
+    written = 0
+
+    for label, nodes_data in by_type.items():
+        if not nodes_data:
+            continue
+
+        for i in range(0, len(nodes_data), batch_size):
+            batch = nodes_data[i : i + batch_size]
+
             await db.execute_query(
-                """
-                MATCH (n) WHERE n.id = $id
-                SET n.layout_x = $x, n.layout_y = $y, n.cluster = $cluster
+                f"""
+                UNWIND $batch AS row
+                MATCH (n:{label}) WHERE n.id = row.id
+                SET n.layout_x = row.x, n.layout_y = row.y, n.cluster = row.cluster
                 """,
-                id=node_id,
-                x=float(x),
-                y=float(y),
-                cluster=cluster_id,
+                batch=batch,
             )
 
-        progress = min(i + batch_size, len(node_list))
-        print(f"  Stored {progress}/{len(node_list)} positions...")
+            written += len(batch)
+            print(f"  Stored {written}/{total} positions...")
 
     # Store cluster metadata
     print("Storing cluster metadata...")
@@ -309,37 +327,39 @@ async def compute_and_store_layout():
     # Clear old cluster metadata
     await db.execute_query("MATCH (c:ClusterMeta) DETACH DELETE c")
 
-    # Create ClusterMeta nodes
-    for cluster_id, center in cluster_centers.items():
-        await db.execute_query(
-            """
-            CREATE (c:ClusterMeta {
-                cluster_id: $cluster_id,
-                center_x: $x,
-                center_y: $y,
-                node_count: $node_count
-            })
-            """,
-            cluster_id=cluster_id,
-            x=center["x"],
-            y=center["y"],
-            node_count=center["node_count"],
-        )
-
+    # Create ClusterMeta nodes using UNWIND
+    cluster_data = [
+        {"cluster_id": cid, "x": c["x"], "y": c["y"], "node_count": c["node_count"]}
+        for cid, c in cluster_centers.items()
+    ]
+    await db.execute_query(
+        """
+        UNWIND $batch AS row
+        CREATE (c:ClusterMeta {
+            cluster_id: row.cluster_id,
+            center_x: row.x,
+            center_y: row.y,
+            node_count: row.node_count
+        })
+        """,
+        batch=cluster_data,
+    )
     print(f"  Created {len(cluster_centers)} ClusterMeta nodes")
 
-    # Create inter-cluster edges
-    for (src_cluster, dst_cluster), edge_count in cluster_edges.items():
+    # Create inter-cluster edges using UNWIND
+    edge_data = [
+        {"src": src, "dst": dst, "count": count}
+        for (src, dst), count in cluster_edges.items()
+    ]
+    if edge_data:
         await db.execute_query(
             """
-            MATCH (c1:ClusterMeta {cluster_id: $src}), (c2:ClusterMeta {cluster_id: $dst})
-            CREATE (c1)-[:CLUSTER_EDGE {count: $count}]->(c2)
+            UNWIND $batch AS row
+            MATCH (c1:ClusterMeta {cluster_id: row.src}), (c2:ClusterMeta {cluster_id: row.dst})
+            CREATE (c1)-[:CLUSTER_EDGE {count: row.count}]->(c2)
             """,
-            src=src_cluster,
-            dst=dst_cluster,
-            count=edge_count,
+            batch=edge_data,
         )
-
     print(f"  Created {len(cluster_edges)} inter-cluster edges")
 
     # Compute bounding box
