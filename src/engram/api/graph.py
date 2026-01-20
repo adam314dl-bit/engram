@@ -772,7 +772,7 @@ GRAPH_HTML = """
 
         function determineRenderMode() {
             // Force cluster mode when very zoomed out
-            if (scale < 0.01) {
+            if (scale < 0.001) {
                 return 'cluster';
             }
 
@@ -1466,7 +1466,7 @@ GRAPH_HTML = """
             e.preventDefault();
             const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
             const mouseWorld = screenToWorld(e.clientX, e.clientY);
-            scale = Math.max(0.001, Math.min(10, scale * zoomFactor));
+            scale = Math.max(0.0001, Math.min(10, scale * zoomFactor));
             const newMouseWorld = screenToWorld(e.clientX, e.clientY);
             viewX += mouseWorld.x - newMouseWorld.x;
             viewY += mouseWorld.y - newMouseWorld.y;
@@ -1684,7 +1684,7 @@ GRAPH_HTML = """
             viewX = (bounds.min_x + bounds.max_x) / 2;
             viewY = (bounds.min_y + bounds.max_y) / 2;
             // Start at max zoom out
-            scale = 0.001;
+            scale = 0.0001;
             console.log(`Initial scale: ${scale}`);
 
             const stats = await (await fetch('/admin/graph/stats')).json();
