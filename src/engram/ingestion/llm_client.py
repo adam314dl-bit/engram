@@ -165,7 +165,7 @@ class LLMClient:
         prompt: str,
         system_prompt: str | None = None,
         temperature: float = 0.7,
-        max_tokens: int = 2048,
+        max_tokens: int = 8192,
         **kwargs: Any,
     ) -> str:
         """Generate a completion from the LLM."""
@@ -185,7 +185,7 @@ class LLMClient:
         self,
         messages: list[dict[str, str]],
         temperature: float = 0.7,
-        max_tokens: int = 2048,
+        max_tokens: int = 8192,
         return_response: bool = False,
         aggressive_strip: bool = False,
         **kwargs: Any,
@@ -217,7 +217,7 @@ class LLMClient:
         prompt: str,
         system_prompt: str | None = None,
         temperature: float = 0.3,  # Lower for structured output
-        max_tokens: int = 2048,
+        max_tokens: int = 8192,
         fallback: Any = None,
         **kwargs: Any,
     ) -> dict[str, Any] | list[Any] | Any:
@@ -243,7 +243,7 @@ class LLMClient:
         prompt: str,
         system_prompt: str | None = None,
         temperature: float = 0.7,
-        max_tokens: int = 2048,
+        max_tokens: int = 8192,
         separator: str = "auto",
         **kwargs: Any,
     ) -> list[str]:
