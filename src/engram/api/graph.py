@@ -760,10 +760,9 @@ GRAPH_HTML = """
                 return [1.0, 0.95, 0.3, pulse]; // Golden glow for activated
             }
 
-            // Sun nodes - brighter cyan
+            // Sun nodes - regular cyan, same as concepts
             if (isSun) {
-                // Bright white-cyan for sun nodes
-                return [0.7, 1.0, 0.95, 1.0];
+                return [0.37, 0.92, 0.83, 1.0];
             }
 
             if (!isHighlighted && !isNeighbor && !isSelected && highlightedNodes.size > 0) {
