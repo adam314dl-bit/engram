@@ -126,6 +126,39 @@ class LLMClient:
         if raw_content is None:
             raw_content = choices[0].get("text")
 
+        # For thinking models like kimi-k2-thinking, content may be None
+        # but the actual response is in reasoning field
+        if raw_content is None and reasoning_content:
+            logger.info("Content is None, extracting answer from reasoning field")
+            # Try to find final answer markers in Russian/English
+            answer_patterns = [
+                r'(?:Ответ|Итог|Результат|Вывод)[\s:：]+(.+?)(?:\n\n|\Z)',
+                r'(?:Answer|Result|Conclusion|Output)[\s:：]+(.+?)(?:\n\n|\Z)',
+                r'```json\s*([\s\S]*?)\s*```',  # JSON in code block
+                r'(\{[\s\S]*\})\s*$',  # JSON at end
+                r'(\[[\s\S]*\])\s*$',  # Array at end
+            ]
+            extracted = None
+            for pattern in answer_patterns:
+                match = re.search(pattern, reasoning_content, re.DOTALL | re.IGNORECASE)
+                if match:
+                    extracted = match.group(1).strip()
+                    if extracted:
+                        logger.info(f"Extracted answer from reasoning: {extracted[:100]}...")
+                        break
+
+            if extracted:
+                raw_content = extracted
+            else:
+                # Fallback: use last substantial paragraph as answer
+                paragraphs = [p.strip() for p in reasoning_content.split('\n\n') if p.strip()]
+                if paragraphs:
+                    raw_content = paragraphs[-1]
+                    logger.warning(f"No answer marker found, using last paragraph: {raw_content[:100]}...")
+                else:
+                    raw_content = reasoning_content
+            reasoning_content = None  # Already processed
+
         if raw_content is None:
             logger.error(f"LLM returned None content. Full response: {data}")
             raise ValueError(f"LLM returned None content: {data}")
