@@ -722,7 +722,7 @@ GRAPH_HTML = """
                 nodeMap = {};
                 nodes.forEach(n => nodeMap[n.id] = n);
 
-                console.log(`Loaded ${nodes.length} nodes (10% sample)`);
+                console.log(`Loaded ${nodes.length} nodes`);
                 render();
             } catch (e) {
                 console.error('Failed to load:', e);
