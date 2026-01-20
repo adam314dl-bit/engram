@@ -918,9 +918,9 @@ GRAPH_HTML = """
                 labelCtx.save();
                 labelCtx.scale(dpr, dpr);
 
-                // Find max node count and filter clusters to show only >30% of max
+                // Find max node count and filter clusters to show only >10% of max
                 const maxNodeCount = Math.max(...clusterMeta.centers.map(c => c.nodeCount));
-                const minThreshold = maxNodeCount * 0.3;
+                const minThreshold = maxNodeCount * 0.1;
                 const visibleClusters = clusterMeta.centers.filter(c => c.nodeCount >= minThreshold);
 
                 const centerMap = {};
@@ -1389,7 +1389,7 @@ GRAPH_HTML = """
             e.preventDefault();
             const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
             const mouseWorld = screenToWorld(e.clientX, e.clientY);
-            scale = Math.max(0.0001, Math.min(0.05, scale * zoomFactor));
+            scale = Math.max(0.00003, Math.min(0.05, scale * zoomFactor));
             const newMouseWorld = screenToWorld(e.clientX, e.clientY);
             viewX += mouseWorld.x - newMouseWorld.x;
             viewY += mouseWorld.y - newMouseWorld.y;
