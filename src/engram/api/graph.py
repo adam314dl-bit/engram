@@ -781,11 +781,8 @@ GRAPH_HTML = """
         }
 
         function determineRenderMode() {
-            // Simple mode: cluster view when zoomed out, otherwise show nodes only
-            // Connections only shown when clicking a node
-            if (scale < 0.005) {
-                return 'cluster';
-            }
+            // Always nodes_only mode - connections only shown when clicking a node
+            // Constellation mode is manual via button
             return 'nodes_only';
         }
 
@@ -853,9 +850,9 @@ GRAPH_HTML = """
                 for (const node of nodes) {
                     const color = getNodeColor(node);
                     // Node sizes: base by connections, scale with zoom for visibility
-                    // Size strongly based on connection count
+                    // Size strongly based on connection count - larger multiplier
                     const connCount = node.conn || 1;
-                    const baseSize = Math.max(20, Math.min(300, 10 + Math.sqrt(connCount) * 25));
+                    const baseSize = Math.max(20, Math.min(500, 10 + Math.sqrt(connCount) * 50));
                     // Scale up when zoomed in (larger dots at higher zoom) - very aggressive
                     const zoomBoost = Math.max(1, Math.min(100, scale * 150));
                     // At low zoom, ensure min 10px on screen
