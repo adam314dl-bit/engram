@@ -383,7 +383,6 @@ GRAPH_HTML = """
         #loading .synapse:nth-child(11) { top: 67%; left: 38%; width: 25px; transform: rotate(50deg); animation-delay: 0.5s; }
         #loading .synapse:nth-child(12) { top: 67%; left: 58%; width: 25px; transform: rotate(130deg); animation-delay: 0.55s; }
         #loading .loading-text { font-size: 14px; color: #5eead4; margin-top: 10px; }
-        #loading .loading-status { font-size: 11px; color: #6b6b8a; margin-top: 5px; }
         @keyframes neuronPulse {
             0%, 100% { transform: translateX(-50%) scale(1); opacity: 0.4; box-shadow: 0 0 5px #5eead4; }
             50% { transform: translateX(-50%) scale(1.3); opacity: 1; box-shadow: 0 0 20px #5eead4, 0 0 40px #5eead480; }
@@ -587,7 +586,6 @@ GRAPH_HTML = """
             <div class="synapse"></div>
         </div>
         <div class="loading-text">Loading Memory Graph</div>
-        <div class="loading-status" id="loading-status">Initializing...</div>
     </div>
     <div id="mode-indicator">WebGL</div>
 
@@ -1806,16 +1804,10 @@ GRAPH_HTML = """
             this.style.height = Math.min(this.scrollHeight, 100) + 'px';
         });
 
-        function updateLoadingStatus(text) {
-            const el = document.getElementById('loading-status');
-            if (el) el.textContent = text;
-        }
-
         async function init() {
             resize();
             window.addEventListener('resize', resize);
 
-            updateLoadingStatus('Fetching graph bounds...');
             const boundsData = await (await fetch('/constellation/bounds')).json();
             if (!boundsData.has_layout) {
                 document.getElementById('loading').innerHTML = 'No layout. Run: uv run python scripts/compute_layout.py';
@@ -1834,14 +1826,12 @@ GRAPH_HTML = """
             scale = 0.00015;
             console.log(`Initial scale: ${scale}`);
 
-            updateLoadingStatus('Loading statistics...');
             const stats = await (await fetch('/constellation/stats')).json();
             document.getElementById('c-count').textContent = stats.concepts;
             document.getElementById('s-count').textContent = stats.semantic;
             document.getElementById('e-count').textContent = stats.episodic;
             document.getElementById('stats').innerHTML = `<div>Total: <strong style="color:#5eead4">${stats.total}</strong></div><div>Clusters: <strong style="color:#a78bfa">${stats.clusters}</strong></div>`;
 
-            updateLoadingStatus('Loading cluster data...');
             // Load cluster metadata for cluster-level rendering
             try {
                 clusterMeta = await (await fetch('/constellation/cluster-meta')).json();
@@ -1852,7 +1842,6 @@ GRAPH_HTML = """
                 console.warn('No cluster metadata available, run compute_layout.py');
             }
 
-            updateLoadingStatus('Loading data...');
             await loadViewportData();
             document.getElementById('loading').style.display = 'none';
 
