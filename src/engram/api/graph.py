@@ -688,9 +688,15 @@ GRAPH_HTML = """
 
         function viewportChanged(v1, v2) {
             if (!v1 || !v2) return true;
-            const threshold = 100 / scale;
-            return Math.abs(v1.min_x - v2.min_x) > threshold ||
-                   Math.abs(v1.max_x - v2.max_x) > threshold;
+            // Use percentage of viewport size as threshold (10% change triggers reload)
+            const vw = Math.abs(v2.max_x - v2.min_x);
+            const vh = Math.abs(v2.max_y - v2.min_y);
+            const thresholdX = vw * 0.1;
+            const thresholdY = vh * 0.1;
+            return Math.abs(v1.min_x - v2.min_x) > thresholdX ||
+                   Math.abs(v1.max_x - v2.max_x) > thresholdX ||
+                   Math.abs(v1.min_y - v2.min_y) > thresholdY ||
+                   Math.abs(v1.max_y - v2.max_y) > thresholdY;
         }
 
         async function loadViewportData() {
@@ -707,8 +713,9 @@ GRAPH_HTML = """
             else if (scale < 0.1) { newSampleRate = 2; newMinConnPct = 0; }       // medium-in
             else { newSampleRate = 1; newMinConnPct = 0; }                         // zoomed in: all
 
-            // Skip if viewport hasn't changed AND settings are same
-            if (!viewportChanged(vp, lastViewport) && newSampleRate === currentSampleRate && newMinConnPct === currentMinConnPct) return;
+            // Reload if viewport changed OR sample settings changed
+            const settingsChanged = newSampleRate !== currentSampleRate || newMinConnPct !== currentMinConnPct;
+            if (!viewportChanged(vp, lastViewport) && !settingsChanged) return;
 
             loadingViewport = true;
             lastViewport = vp;
