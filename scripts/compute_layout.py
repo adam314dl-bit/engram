@@ -146,12 +146,18 @@ def compute_layout_networkx(nodes, edges, scale=3000):
     return {k: (float(v[0]), float(v[1])) for k, v in positions.items()}
 
 
-def resolve_collisions(positions, node_degrees, iterations=50, min_distance_factor=0.5):
-    """Push apart overlapping nodes based on their degree (connection count).
+def create_solar_system_layout(positions, node_degrees, edges, hub_threshold=50):
+    """Create solar system layout - hubs as suns with smaller nodes orbiting.
 
-    Nodes with more connections get larger effective radius.
+    1. Spread out hub nodes (repulsion)
+    2. Position each non-hub in orbit around its PRIMARY hub (most connections)
+    3. Apply collision resolution for overlaps
     """
     import math
+    import random
+    from collections import defaultdict, Counter
+
+    random.seed(42)
 
     node_ids = list(positions.keys())
     n = len(node_ids)
@@ -159,51 +165,163 @@ def resolve_collisions(positions, node_degrees, iterations=50, min_distance_fact
     if n < 2:
         return positions
 
-    print(f"Resolving collisions for {n} nodes...")
+    print(f"Creating solar system layout for {n} nodes...")
 
-    # Compute effective radius for each node based on degree
-    # Similar to screen pixel formula: 2 + log10(conn+1)^2 * 8
+    # Identify hubs
+    hubs = {nid for nid, deg in node_degrees.items() if deg >= hub_threshold}
+    print(f"  Found {len(hubs)} hub nodes (>={hub_threshold} connections)")
+
+    # First: spread out hubs using strong repulsion
+    print("  Spreading out hub nodes...")
+    hub_list = list(hubs)
+    hub_positions = {h: list(positions[h]) for h in hub_list}
+
+    # Hub radii based on connection count
+    hub_radii = {}
+    for hub_id in hub_list:
+        degree = node_degrees.get(hub_id, 1)
+        hub_radii[hub_id] = (2 + math.pow(math.log10(degree + 1), 2) * 4) * 800
+
+    # Repulsion iterations for hubs only
+    for iteration in range(100):
+        moved = 0
+        for i, h1 in enumerate(hub_list):
+            for j, h2 in enumerate(hub_list[i+1:], i+1):
+                dx = hub_positions[h2][0] - hub_positions[h1][0]
+                dy = hub_positions[h2][1] - hub_positions[h1][1]
+                dist = math.sqrt(dx * dx + dy * dy) + 0.001
+
+                # Minimum distance based on both radii
+                min_dist = (hub_radii[h1] + hub_radii[h2]) * 2.5
+
+                if dist < min_dist:
+                    overlap = min_dist - dist
+                    nx, ny = dx / dist, dy / dist
+                    push = overlap * 0.3
+
+                    hub_positions[h1][0] -= nx * push
+                    hub_positions[h1][1] -= ny * push
+                    hub_positions[h2][0] += nx * push
+                    hub_positions[h2][1] += ny * push
+                    moved += 1
+
+        if moved == 0:
+            print(f"    Hub repulsion converged after {iteration + 1} iterations")
+            break
+
+    # Update positions with spread hubs
+    for hub_id in hub_list:
+        positions[hub_id] = tuple(hub_positions[hub_id])
+
+    if not hubs:
+        return positions
+
+    # Find primary hub for each non-hub node (hub with most connections to it)
+    node_hub_connections = defaultdict(Counter)  # node -> {hub: count}
+    for src, dst in edges:
+        if src in hubs and dst not in hubs:
+            node_hub_connections[dst][src] += 1
+        if dst in hubs and src not in hubs:
+            node_hub_connections[src][dst] += 1
+
+    # Assign each non-hub to its primary hub
+    primary_hub = {}
+    hub_satellites = defaultdict(list)  # hub -> list of satellite nodes
+    for nid in node_ids:
+        if nid in hubs:
+            continue
+        if nid in node_hub_connections and node_hub_connections[nid]:
+            # Pick hub with most connections
+            best_hub = node_hub_connections[nid].most_common(1)[0][0]
+            primary_hub[nid] = best_hub
+            hub_satellites[best_hub].append(nid)
+
+    # Position satellites in orbits around their primary hub (use hub_radii from above)
+    new_positions = dict(positions)  # Start with original positions
+
+    for hub_id, satellites in hub_satellites.items():
+        if not satellites:
+            continue
+
+        hub_x, hub_y = positions[hub_id]
+        hub_radius = hub_radii[hub_id]
+        num_satellites = len(satellites)
+
+        # Place satellites in concentric rings
+        satellites_per_ring = max(8, int(math.sqrt(num_satellites) * 3))
+        ring = 0
+        angle_offset = random.uniform(0, 2 * math.pi)
+
+        for i, sat_id in enumerate(satellites):
+            ring_idx = i // satellites_per_ring
+            pos_in_ring = i % satellites_per_ring
+
+            # Orbit distance increases with each ring
+            orbit_dist = hub_radius * (1.5 + ring_idx * 0.8)
+
+            # Angle within ring (spread evenly with some randomness)
+            base_angle = (pos_in_ring / satellites_per_ring) * 2 * math.pi
+            angle = base_angle + angle_offset + random.uniform(-0.2, 0.2)
+
+            # Position
+            new_x = hub_x + orbit_dist * math.cos(angle)
+            new_y = hub_y + orbit_dist * math.sin(angle)
+            new_positions[sat_id] = (new_x, new_y)
+
+    # Nodes without hub connection keep original positions
+    print(f"  Positioned {sum(len(s) for s in hub_satellites.values())} satellites around hubs")
+
+    # Light collision resolution pass (just for satellites)
+    print("  Running collision resolution...")
+    new_positions = resolve_satellite_collisions(new_positions, node_degrees, hubs, iterations=20)
+
+    return new_positions
+
+
+def resolve_satellite_collisions(positions, node_degrees, hubs, iterations=20):
+    """Light collision resolution - only push apart non-hub nodes."""
+    import math
+
+    node_ids = [nid for nid in positions.keys() if nid not in hubs]
+    n = len(node_ids)
+
+    if n < 2:
+        return positions
+
+    # Small radii for collision
     radii = {}
     for nid in node_ids:
         degree = node_degrees.get(nid, 1)
-        # Scale factor to convert screen pixels to world units
-        radii[nid] = (2 + math.pow(math.log10(degree + 1), 2) * 8) * 500
+        radii[nid] = (2 + math.pow(math.log10(degree + 1), 2) * 4) * 100
 
-    # Convert to list for faster access
     pos_list = [[positions[nid][0], positions[nid][1]] for nid in node_ids]
     rad_list = [radii[nid] for nid in node_ids]
 
     for iteration in range(iterations):
-        moved = 0
         for i in range(n):
             for j in range(i + 1, n):
                 dx = pos_list[j][0] - pos_list[i][0]
                 dy = pos_list[j][1] - pos_list[i][1]
                 dist = math.sqrt(dx * dx + dy * dy) + 0.001
 
-                min_dist = (rad_list[i] + rad_list[j]) * min_distance_factor
+                min_dist = (rad_list[i] + rad_list[j]) * 0.3
 
                 if dist < min_dist:
-                    # Push apart
                     overlap = min_dist - dist
                     nx, ny = dx / dist, dy / dist
-                    push = overlap * 0.5
+                    push = overlap * 0.3
 
                     pos_list[i][0] -= nx * push
                     pos_list[i][1] -= ny * push
                     pos_list[j][0] += nx * push
                     pos_list[j][1] += ny * push
-                    moved += 1
 
-        if moved == 0:
-            print(f"  Converged after {iteration + 1} iterations")
-            break
+    # Update positions
+    result = dict(positions)
+    for i, nid in enumerate(node_ids):
+        result[nid] = (pos_list[i][0], pos_list[i][1])
 
-    if moved > 0:
-        print(f"  Completed {iterations} iterations, {moved} adjustments in last iteration")
-
-    # Convert back to dict
-    return {node_ids[i]: (pos_list[i][0], pos_list[i][1]) for i in range(n)}
+    return result
 
 
 def compute_layout(nodes, edges, scale=3000):
@@ -240,8 +358,8 @@ def compute_layout(nodes, edges, scale=3000):
         degree_count[src] += 1
         degree_count[dst] += 1
 
-    # Resolve collisions - push apart nodes based on their size
-    positions = resolve_collisions(positions, degree_count)
+    # Create solar system layout - place satellites in orbits around hubs
+    positions = create_solar_system_layout(positions, degree_count, edges, hub_threshold=50)
 
     return positions
 

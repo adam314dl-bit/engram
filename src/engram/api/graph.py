@@ -853,13 +853,13 @@ GRAPH_HTML = """
                     // Node sizes in SCREEN pixels (always visible regardless of zoom)
                     const connCount = node.conn || 1;
                     // Screen pixel size: 2px min, scales with connections
-                    // 1 conn = 2px, 10 = 5px, 100 = 10px, 1000 = 20px, 5000 = 35px
-                    let screenPixels = 2 + Math.pow(Math.log10(connCount + 1), 2) * 8;
+                    // 1 conn = 2px, 10 = 4px, 100 = 7px, 1000 = 12px, 5000 = 18px
+                    let screenPixels = 2 + Math.pow(Math.log10(connCount + 1), 2) * 4;
 
                     // Boost size for activated nodes (from chat)
                     const isActivated = activatedNodes.has(node.id);
                     if (isActivated) {
-                        screenPixels = Math.max(screenPixels * 2, 15); // At least 15px, or 2x normal
+                        screenPixels = Math.max(screenPixels * 3, 8); // At least 8px, or 3x normal
                     }
 
                     // Convert to world size (divide by scale)
