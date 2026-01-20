@@ -208,9 +208,9 @@ Engram includes an interactive WebGL graph visualization of the memory network, 
 
 **Features:**
 - **Integrated Chat**: Chat panel with memory activation visualization
-- **Live Activation**: See which nodes are used when answering questions (golden glow)
+- **Debug Mode**: See retrieved memories with scores, sources, and force include/exclude
+- **Live Activation**: See which nodes are used when answering questions (cyan highlight)
 - **Cluster Coloring**: Toggle to color nodes by community
-- **Edge Bundling**: Curved edges for cleaner visualization
 - **Search**: Find and focus on specific nodes by name or content
 - **Type Filtering**: Click legend items to filter by node type
 - **Neighbor Highlighting**: Click node to see its connections highlighted
@@ -218,19 +218,26 @@ Engram includes an interactive WebGL graph visualization of the memory network, 
 
 **Controls:**
 - **💬 Button**: Toggle chat panel
+- **🔍 Debug**: Toggle debug panel showing retrieval details
 - **Click node**: Select and show info panel with connections
 - **Click legend item**: Filter by type (click again to clear)
 - **"Clusters" button**: Toggle cluster-based coloring
-- **"Bundle" button**: Toggle edge bundling
 - **"Show Activation" button**: Re-highlight last chat response nodes
 - **Search box**: Type 2+ characters to search, click result to focus
 - **Escape**: Clear all selections, filters, and highlights
 - **Mouse wheel**: Zoom in/out
 - **Drag**: Pan the view
 
+**Debug Panel:**
+- Shows retrieved memories with scores (0-1) and sources (V=Vector, B=BM25, G=Graph, F=Forced)
+- Shows activated concepts with activation levels
+- **+ button**: Force include node in next query
+- **− button**: Force exclude node from next query
+- Click node name to highlight in graph
+
 **Chat Integration:**
 - Ask questions directly in the graph interface
-- Activated concepts and memories glow golden with pulsing animation
+- Activated concepts and memories highlighted in cyan
 - Click "Activated: X concepts, Y memories" to re-highlight
 - View pans to center of activated nodes
 
@@ -318,10 +325,11 @@ uv run ruff check src/engram
 - [x] **WebGL rendering** — Hardware-accelerated for 30k+ nodes
 - [x] **Louvain clustering** — Community detection stored in Neo4j
 - [x] **Integrated chat** — Chat with memory activation visualization
+- [x] **Debug mode** — View retrieval scores, sources, force include/exclude nodes
+- [x] **Level-based lazy loading** — Hierarchical drill-down (L0→L1→L2→nodes)
 
 ### Planned
 
-- [ ] **Hierarchical clustering** — Level 0 (cluster reps), Level 1 (sub-clusters), Level 2 (nodes)
 - [ ] **Spatial indexing** — Neo4j point indexes for faster viewport queries
 - [ ] **Feedback in chat** — 👍/👎 buttons to strengthen/weaken memories
 - [ ] **Path finder** — Find shortest path between two nodes
