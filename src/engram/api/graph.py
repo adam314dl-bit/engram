@@ -659,6 +659,10 @@ GRAPH_HTML = """
         let nodesLoaded = false;
         const spreadFactor = 3.0; // Spread out node positions
 
+        // Node buffer caching for performance - pre-allocated typed array
+        let nodeDataArray = null;  // Pre-allocated Float32Array
+        let nodeDataSize = 0;      // Current number of nodes * 7
+
         // WebGL shaders
         const vertexShaderSrc = `
             attribute vec2 a_position;
@@ -764,6 +768,14 @@ GRAPH_HTML = """
                 x: (wx - viewX) * scale * 2 + window.innerWidth / 2,
                 y: -(wy - viewY) * scale * 2 + window.innerHeight / 2
             };
+        }
+
+        function ensureNodeDataArray(nodeCount) {
+            const requiredSize = nodeCount * 7;
+            if (!nodeDataArray || nodeDataArray.length < requiredSize) {
+                nodeDataArray = new Float32Array(requiredSize);
+                nodeDataSize = requiredSize;
+            }
         }
 
         function getViewportBounds() {
@@ -935,10 +947,13 @@ GRAPH_HTML = """
                 gl.uniform2f(gl.getUniformLocation(nodeProgram, 'u_view'), viewX, viewY);
                 gl.uniform1f(gl.getUniformLocation(nodeProgram, 'u_scale'), scale);
 
-                const nodeData = [];
+                // Use pre-allocated array to avoid GC pressure
+                ensureNodeDataArray(nodes.length);
                 const labelsToRender = [];
+                let idx = 0;
 
-                for (const node of nodes) {
+                for (let i = 0; i < nodes.length; i++) {
+                    const node = nodes[i];
                     const color = getNodeColor(node);
                     // Node sizes in SCREEN pixels (always visible regardless of zoom)
                     const connCount = node.conn || 1;
@@ -955,16 +970,22 @@ GRAPH_HTML = """
                     // Convert to world size (divide by scale)
                     const size = screenPixels / scale;
 
-                    let finalColor = color;
+                    let r = color[0], g = color[1], b = color[2], a = color[3];
                     if (node === selectedNode) {
-                        finalColor = [1, 1, 1, 1];
+                        r = g = b = a = 1;
                     } else if (node === hoveredNode) {
-                        finalColor = [1, 1, 1, 0.9];
+                        r = g = b = 1; a = 0.9;
                     } else if (neighborNodes.has(node.id)) {
-                        finalColor = [color[0] * 1.2, color[1] * 1.2, color[2] * 1.2, 1];
+                        r *= 1.2; g *= 1.2; b *= 1.2; a = 1;
                     }
 
-                    nodeData.push(node.x, node.y, finalColor[0], finalColor[1], finalColor[2], finalColor[3], size);
+                    nodeDataArray[idx++] = node.x;
+                    nodeDataArray[idx++] = node.y;
+                    nodeDataArray[idx++] = r;
+                    nodeDataArray[idx++] = g;
+                    nodeDataArray[idx++] = b;
+                    nodeDataArray[idx++] = a;
+                    nodeDataArray[idx++] = size;
 
                     // Collect labels for high-connection nodes
                     if (isNodeVisible(node) && node.conn > 5 && scale > 0.3) {
@@ -974,7 +995,7 @@ GRAPH_HTML = """
                 }
 
                 gl.bindBuffer(gl.ARRAY_BUFFER, nodeBuffer);
-                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(nodeData), gl.DYNAMIC_DRAW);
+                gl.bufferData(gl.ARRAY_BUFFER, nodeDataArray.subarray(0, idx), gl.DYNAMIC_DRAW);
 
                 const stride = 7 * 4;
                 const posLoc = gl.getAttribLocation(nodeProgram, 'a_position');
