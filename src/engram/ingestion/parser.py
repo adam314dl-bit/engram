@@ -63,6 +63,59 @@ def extract_confluence_metadata(content: str) -> tuple[str | None, str | None]:
     return title, url
 
 
+def strip_confluence_metadata(content: str) -> str:
+    """
+    Strip Confluence metadata header from content.
+
+    Removes everything before "## Описание" (or similar content marker).
+    Metadata fields that are stripped:
+        - Навигация:
+        - ID страницы:
+        - Заголовок страницы:
+        - URL страницы:
+        - Автор страницы:
+        - Дата создания страницы:
+        - Редактор страницы:
+        - Дата последнего редактирования страницы:
+
+    Returns:
+        Content without metadata header, starting from ## Описание
+    """
+    # Try to find "## Описание" marker - content starts there
+    match = re.search(r"^(##\s*Описание.*)$", content, re.MULTILINE | re.DOTALL)
+    if match:
+        return match.group(1).strip()
+
+    # Fallback: strip known metadata lines from the beginning
+    lines = content.split("\n")
+    content_started = False
+    result_lines = []
+
+    metadata_prefixes = (
+        "Навигация:",
+        "ID страницы:",
+        "Заголовок страницы:",
+        "URL страницы:",
+        "Автор страницы:",
+        "Дата создания страницы:",
+        "Редактор страницы:",
+        "Дата последнего редактирования страницы:",
+    )
+
+    for line in lines:
+        stripped = line.strip()
+
+        if content_started:
+            result_lines.append(line)
+        elif stripped.startswith("##") or (stripped and not any(stripped.startswith(p) for p in metadata_prefixes)):
+            # Content starts at first heading or non-metadata line
+            content_started = True
+            result_lines.append(line)
+        # Skip empty lines and metadata lines before content starts
+
+    return "\n".join(result_lines).strip()
+
+
 def extract_title_from_markdown(content: str) -> str:
     """Extract title from markdown content (first h1 or filename)."""
     # First try Confluence format
@@ -167,6 +220,8 @@ async def parse_file(path: Path) -> Document:
     else:
         # For txt files, prefer Confluence title, fallback to filename
         title = confluence_title or path.stem
+        # Strip Confluence metadata, keep only actual content
+        content = strip_confluence_metadata(content)
 
     # Use Confluence URL if available, otherwise use local file path
     source_path = confluence_url or str(path.absolute())
