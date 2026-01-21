@@ -55,5 +55,7 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local
 CLAUDE.md
 uv.lock

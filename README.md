@@ -17,7 +17,11 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 ## Features
 
 - **Spreading Activation**: Brain-like associative retrieval through concept networks
-- **Hybrid Search**: Combines graph traversal, vector similarity, and BM25
+- **Hybrid Search**: Combines graph traversal, vector similarity, and BM25 with RRF fusion
+- **Cross-Encoder Reranking**: BGE-reranker-v2-m3 for improved retrieval precision
+- **Russian NLP**: PyMorphy3 lemmatization and stopword removal for Russian content
+- **ACT-R Memory Model**: Cognitive-inspired forgetting with base-level activation
+- **Contradiction Detection**: LLM-based detection and auto-resolution
 - **Learning from Feedback**: Positive feedback strengthens memories, negative triggers re-reasoning
 - **Memory Consolidation**: Successful episodes crystallize into semantic memories
 - **OpenAI-Compatible API**: Works with Open WebUI and other clients
@@ -31,6 +35,8 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 | Graph DB | Neo4j 5 (Docker) |
 | API | FastAPI |
 | Embeddings | sentence-transformers (local HuggingFace) |
+| Reranker | FlagEmbedding BGE-reranker-v2-m3 |
+| Russian NLP | PyMorphy3 |
 | LLM | OpenAI-compatible endpoint (remote) |
 
 ## Quick Start
@@ -177,7 +183,7 @@ POST /v1/feedback
 | `GET /admin/episodes` | List episodes |
 | `POST /admin/calibrate` | Run memory calibration |
 | `POST /admin/reset?confirm=true` | Reset database (delete all data) |
-| `GET /admin/graph` | Interactive memory graph visualization |
+| `GET /constellation` | Interactive memory graph visualization |
 
 #### Reset Database
 
@@ -191,9 +197,9 @@ curl -X POST "http://localhost:8000/admin/reset?confirm=true"
 uv run python scripts/run_ingestion.py
 ```
 
-## Memory Graph Visualization
+## Constellation (Memory Graph Visualization)
 
-Engram includes an interactive WebGL graph visualization of the memory network, accessible at `/admin/graph`. Optimized for large graphs (30k+ nodes) with pre-computed layouts.
+Engram includes an interactive WebGL graph visualization of the memory network, accessible at `/constellation`. Optimized for large graphs (30k+ nodes) with pre-computed layouts.
 
 **Architecture:**
 - **WebGL Rendering**: Hardware-accelerated graphics for smooth performance
@@ -320,20 +326,29 @@ uv run ruff check src/engram
 
 ### Completed
 
-- [x] **Pre-computed layout** — Server-side layout using igraph (CPU) or cuGraph (GPU)
-- [x] **Viewport culling** — Client requests nodes by viewport bounds
-- [x] **WebGL rendering** — Hardware-accelerated for 30k+ nodes
-- [x] **Louvain clustering** — Community detection stored in Neo4j
-- [x] **Integrated chat** — Chat with memory activation visualization
-- [x] **Debug mode** — View retrieval scores, sources, force include/exclude nodes
-- [x] **Level-based lazy loading** — Hierarchical drill-down (L0→L1→L2→nodes)
+**Constellation:**
+- [x] Pre-computed layout (igraph/cuGraph)
+- [x] Viewport culling
+- [x] WebGL rendering (30k+ nodes)
+- [x] Louvain clustering
+- [x] Integrated chat with activation visualization
+- [x] Debug mode (retrieval scores, sources, force include/exclude)
+
+**v3 Retrieval & Memory:**
+- [x] RRF fusion with configurable k parameter
+- [x] BGE cross-encoder reranking
+- [x] Russian NLP (PyMorphy3 lemmatization, stopwords)
+- [x] ACT-R base-level activation for memory decay
+- [x] Memory status lifecycle (active → deprioritized → archived)
+- [x] LLM-based contradiction detection (Russian prompts)
+- [x] Calibration CLI (`scripts/calibrate.py`)
 
 ### Planned
 
-- [ ] **Spatial indexing** — Neo4j point indexes for faster viewport queries
-- [ ] **Feedback in chat** — 👍/👎 buttons to strengthen/weaken memories
-- [ ] **Path finder** — Find shortest path between two nodes
-- [ ] **Export subgraph** — Export selected nodes to markdown
+- [ ] Spatial indexing (Neo4j point indexes)
+- [ ] Feedback buttons in chat (👍/👎)
+- [ ] Permanent graph fixes (add edges, boost weights, aliases)
+- [ ] Test query collection (save/replay, pass/fail tracking)
 
 ## License
 
