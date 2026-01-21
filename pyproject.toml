@@ -22,6 +22,8 @@ dependencies = [
     "networkx>=3.0",
     "igraph>=0.11.0",
     "python-dotenv>=1.0.0",
+    "pymorphy3>=2.0.0",
+    "FlagEmbedding>=1.2.0",
 ]
 
 [project.optional-dependencies]
@@ -65,7 +67,7 @@ disallow_untyped_defs = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["sentence_transformers.*", "neo4j.*"]
+module = ["sentence_transformers.*", "neo4j.*", "pymorphy3.*", "FlagEmbedding.*"]
 ignore_missing_imports = true
 
 [tool.uv]

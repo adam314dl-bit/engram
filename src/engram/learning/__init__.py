@@ -5,11 +5,34 @@ from engram.learning.consolidation import (
     ConsolidationResult,
     maybe_consolidate,
 )
+from engram.learning.contradiction import (
+    ContradictionResult,
+    ResolutionResult,
+    batch_check_contradictions,
+    check_and_resolve,
+    detect_contradiction,
+    find_potential_contradictions,
+    resolve_contradiction,
+)
 from engram.learning.feedback_handler import (
     FeedbackHandler,
     FeedbackResult,
     FeedbackType,
     handle_feedback,
+)
+from engram.learning.forgetting import (
+    STATUS_ACTIVE,
+    STATUS_ARCHIVED,
+    STATUS_DEPRIORITIZED,
+    ActivationInfo,
+    batch_update_activations,
+    compute_base_level_activation,
+    compute_retrieval_probability,
+    determine_memory_status,
+    get_memories_by_status,
+    restore_memory,
+    run_forgetting_cycle,
+    update_memory_activation,
 )
 from engram.learning.hebbian import (
     create_or_strengthen_link,
@@ -57,4 +80,25 @@ __all__ = [
     "FeedbackResult",
     "FeedbackType",
     "handle_feedback",
+    # Forgetting (ACT-R)
+    "ActivationInfo",
+    "compute_base_level_activation",
+    "compute_retrieval_probability",
+    "determine_memory_status",
+    "update_memory_activation",
+    "batch_update_activations",
+    "restore_memory",
+    "get_memories_by_status",
+    "run_forgetting_cycle",
+    "STATUS_ACTIVE",
+    "STATUS_DEPRIORITIZED",
+    "STATUS_ARCHIVED",
+    # Contradiction detection
+    "ContradictionResult",
+    "ResolutionResult",
+    "detect_contradiction",
+    "resolve_contradiction",
+    "check_and_resolve",
+    "find_potential_contradictions",
+    "batch_check_contradictions",
 ]

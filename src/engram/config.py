@@ -1,7 +1,17 @@
 """Configuration management using Pydantic Settings."""
 
+from enum import Enum
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Environment(str, Enum):
+    """Deployment environment presets."""
+
+    DEV = "dev"
+    PROD = "prod"
+    TEST = "test"
 
 
 class Settings(BaseSettings):
@@ -62,6 +72,10 @@ class Settings(BaseSettings):
     # Prod: ai-sage/Giga-Embeddings-instruct (2048 dims)
     embedding_model: str = "all-MiniLM-L6-v2"
     embedding_dimensions: int = 384
+    embedding_query_prefix: str = Field(
+        default="",
+        description="Query prefix for asymmetric embedding models (e.g., 'Instruct: ' for GigaEmbeddings)"
+    )
 
     # Spreading Activation Parameters
     activation_decay: float = 0.85
@@ -77,14 +91,119 @@ class Settings(BaseSettings):
     reflection_importance_threshold: float = 150.0
 
     # Retrieval Parameters
-    retrieval_top_k: int = 10
-    retrieval_bm25_k: int = 20
-    retrieval_vector_k: int = 20
+    retrieval_top_k: int = 5
+    retrieval_bm25_k: int = 100
+    retrieval_vector_k: int = 100
+
+    # RRF Fusion Parameters
+    rrf_k: int = Field(
+        default=60,
+        description="RRF constant k, higher values reduce top rank dominance"
+    )
+
+    # Reranker Parameters
+    reranker_enabled: bool = Field(
+        default=True,
+        description="Enable BGE cross-encoder reranking"
+    )
+    reranker_model: str = Field(
+        default="BAAI/bge-reranker-v2-m3",
+        description="Cross-encoder model for reranking"
+    )
+    reranker_candidates: int = Field(
+        default=30,
+        description="Number of candidates to pass to reranker"
+    )
+
+    # BM25 Parameters
+    bm25_lemmatize: bool = Field(
+        default=True,
+        description="Use PyMorphy3 lemmatization for Russian BM25"
+    )
+    bm25_remove_stopwords: bool = Field(
+        default=True,
+        description="Remove Russian stopwords from BM25 queries"
+    )
 
     # API Configuration
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     api_debug: bool = False
+
+    # SM-2 Spaced Repetition Parameters
+    sm2_initial_ef: float = Field(
+        default=2.5,
+        description="Initial easiness factor for new memories"
+    )
+    sm2_ef_min: float = Field(
+        default=1.3,
+        description="Minimum easiness factor"
+    )
+    sm2_ef_max: float = Field(
+        default=3.0,
+        description="Maximum easiness factor"
+    )
+
+    # ACT-R Base-Level Learning Parameters
+    actr_decay_d: float = Field(
+        default=0.5,
+        description="ACT-R decay parameter d (higher = faster forgetting)"
+    )
+    actr_threshold_tau: float = Field(
+        default=-2.0,
+        description="ACT-R retrieval threshold tau (log scale)"
+    )
+
+    # Forgetting/Archival Parameters
+    forgetting_deprioritize_threshold: float = Field(
+        default=-1.0,
+        description="Base-level activation below which memories are deprioritized"
+    )
+    forgetting_archive_threshold: float = Field(
+        default=-2.5,
+        description="Base-level activation below which memories are archived"
+    )
+
+    # Contradiction Detection Parameters
+    contradiction_auto_resolve_gap: float = Field(
+        default=0.3,
+        description="Confidence gap required for auto-resolution (higher confidence wins)"
+    )
+
+
+def get_dev_settings() -> Settings:
+    """Get development environment settings."""
+    return Settings(
+        embedding_model="all-MiniLM-L6-v2",
+        embedding_dimensions=384,
+        embedding_query_prefix="",
+        reranker_enabled=False,
+        bm25_lemmatize=False,
+    )
+
+
+def get_prod_settings() -> Settings:
+    """Get production environment settings."""
+    return Settings(
+        embedding_model="ai-sage/Giga-Embeddings-instruct",
+        embedding_dimensions=2048,
+        embedding_query_prefix="Instruct: Найди релевантные факты для ответа на вопрос\nQuery: ",
+        reranker_enabled=True,
+        bm25_lemmatize=True,
+        bm25_remove_stopwords=True,
+    )
+
+
+def get_test_settings() -> Settings:
+    """Get test environment settings."""
+    return Settings(
+        embedding_model="all-MiniLM-L6-v2",
+        embedding_dimensions=384,
+        embedding_query_prefix="",
+        reranker_enabled=False,
+        bm25_lemmatize=False,
+        neo4j_database="neo4j_test",
+    )
 
 
 # Global settings instance

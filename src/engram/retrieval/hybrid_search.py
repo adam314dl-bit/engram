@@ -10,6 +10,7 @@ from datetime import datetime
 from engram.config import settings
 from engram.models import EpisodicMemory, SemanticMemory
 from engram.retrieval.embeddings import cosine_similarity
+from engram.retrieval.fusion import rrf_scores_only
 from engram.storage.neo4j_client import Neo4jClient
 
 logger = logging.getLogger(__name__)
@@ -30,32 +31,6 @@ class ScoredEpisode:
 
     episode: EpisodicMemory
     score: float
-
-
-def reciprocal_rank_fusion(
-    ranked_lists: list[list[tuple[str, float]]],
-    k: int = 60,
-) -> dict[str, float]:
-    """
-    Combine multiple ranked lists using Reciprocal Rank Fusion.
-
-    RRF score = sum(1 / (k + rank)) for each list where item appears.
-
-    Args:
-        ranked_lists: List of [(item_id, score)] lists, each sorted by score desc
-        k: Constant to prevent high scores for top-ranked items (default 60)
-
-    Returns:
-        Dictionary of item_id -> fused_score
-    """
-    fused_scores: dict[str, float] = {}
-
-    for ranked_list in ranked_lists:
-        for rank, (item_id, _score) in enumerate(ranked_list):
-            rrf_score = 1.0 / (k + rank + 1)  # +1 because rank is 0-indexed
-            fused_scores[item_id] = fused_scores.get(item_id, 0) + rrf_score
-
-    return fused_scores
 
 
 def hours_since(dt: datetime | None) -> float:
@@ -136,9 +111,9 @@ class HybridSearch:
             ]
             graph_ranked.sort(key=lambda x: x[1], reverse=True)
 
-        # Combine using RRF
+        # Combine using RRF (uses settings.rrf_k)
         ranked_lists = [r for r in [vector_ranked, bm25_ranked, graph_ranked] if r]
-        fused_scores = reciprocal_rank_fusion(ranked_lists)
+        fused_scores = rrf_scores_only(ranked_lists)
 
         # Build memory lookup
         all_memories: dict[str, SemanticMemory] = {}

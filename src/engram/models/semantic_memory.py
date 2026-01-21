@@ -5,7 +5,13 @@ from datetime import datetime
 from typing import Any, Literal
 
 MemoryType = Literal["fact", "procedure", "relationship"]
-MemoryStatus = Literal["active", "superseded", "invalid"]
+# Extended status for ACT-R forgetting system:
+# - active: Normal retrieval, high activation
+# - deprioritized: Reduced retrieval weight, low activation
+# - archived: Excluded from retrieval, very low activation (can be restored)
+# - superseded: Replaced by newer information
+# - invalid: Marked as incorrect
+MemoryStatus = Literal["active", "deprioritized", "archived", "superseded", "invalid"]
 
 
 def parse_datetime(value: Any) -> datetime | None:
@@ -65,6 +71,15 @@ class SemanticMemory:
     valid_until: datetime | None = None
     status: MemoryStatus = "active"
 
+    # ACT-R base-level activation fields
+    base_level_activation: float | None = None  # Computed B_i value
+    activation_updated_at: datetime | None = None  # When activation was last computed
+    access_history: list[datetime] = field(default_factory=list)  # Full access history for ACT-R
+
+    # Supersession tracking (for contradiction resolution)
+    superseded_by: str | None = None  # ID of memory that supersedes this one
+    superseded_at: datetime | None = None
+
     # Embedding for semantic search
     embedding: list[float] | None = None
 
@@ -89,12 +104,28 @@ class SemanticMemory:
             "valid_from": self.valid_from.isoformat() if self.valid_from else None,
             "valid_until": self.valid_until.isoformat() if self.valid_until else None,
             "status": self.status,
+            "base_level_activation": self.base_level_activation,
+            "activation_updated_at": (
+                self.activation_updated_at.isoformat() if self.activation_updated_at else None
+            ),
+            "access_history": [t.isoformat() for t in self.access_history],
+            "superseded_by": self.superseded_by,
+            "superseded_at": self.superseded_at.isoformat() if self.superseded_at else None,
             "embedding": self.embedding,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "SemanticMemory":
         """Create from dictionary (Neo4j record)."""
+        # Parse access_history
+        access_history_raw = data.get("access_history", [])
+        access_history = []
+        if access_history_raw:
+            for t in access_history_raw:
+                parsed = parse_datetime(t)
+                if parsed:
+                    access_history.append(parsed)
+
         return cls(
             id=data["id"],
             content=data["content"],
@@ -114,6 +145,11 @@ class SemanticMemory:
             valid_from=parse_datetime(data.get("valid_from")),
             valid_until=parse_datetime(data.get("valid_until")),
             status=data.get("status", "active"),
+            base_level_activation=data.get("base_level_activation"),
+            activation_updated_at=parse_datetime(data.get("activation_updated_at")),
+            access_history=access_history,
+            superseded_by=data.get("superseded_by"),
+            superseded_at=parse_datetime(data.get("superseded_at")),
             embedding=data.get("embedding"),
         )
 
