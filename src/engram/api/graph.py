@@ -357,39 +357,46 @@ GRAPH_HTML = """
             color: #5eead4; z-index: 10; text-align: center;
         }
         #loading .neural-network {
-            width: 120px; height: 120px; margin: 0 auto 20px;
+            width: 140px; height: 140px; margin: 0 auto 20px;
             position: relative;
         }
-        #loading .neuron {
-            position: absolute; width: 12px; height: 12px;
-            background: #5eead4; border-radius: 50%;
-            animation: neuronPulse 1.5s ease-in-out infinite;
+        #loading .neural-network svg {
+            width: 100%; height: 100%;
+            filter: drop-shadow(0 0 10px #5eead480);
         }
-        #loading .neuron:nth-child(1) { top: 10%; left: 50%; transform: translateX(-50%); animation-delay: 0s; }
-        #loading .neuron:nth-child(2) { top: 35%; left: 15%; animation-delay: 0.2s; }
-        #loading .neuron:nth-child(3) { top: 35%; left: 85%; transform: translateX(-100%); animation-delay: 0.3s; }
-        #loading .neuron:nth-child(4) { top: 60%; left: 30%; animation-delay: 0.4s; }
-        #loading .neuron:nth-child(5) { top: 60%; left: 70%; transform: translateX(-100%); animation-delay: 0.5s; }
-        #loading .neuron:nth-child(6) { top: 85%; left: 50%; transform: translateX(-50%); animation-delay: 0.7s; }
-        #loading .synapse {
-            position: absolute; height: 2px; background: linear-gradient(90deg, transparent, #5eead4, transparent);
-            transform-origin: left center; opacity: 0.3;
-            animation: synapseFire 1.5s ease-in-out infinite;
+        #loading .neural-network .edge {
+            stroke: #5eead4; stroke-width: 2; fill: none;
+            stroke-dasharray: 30; stroke-dashoffset: 30;
+            animation: edgePulse 2s ease-in-out infinite;
         }
-        #loading .synapse:nth-child(7) { top: 18%; left: 50%; width: 35px; transform: rotate(50deg); animation-delay: 0.1s; }
-        #loading .synapse:nth-child(8) { top: 18%; left: 42%; width: 35px; transform: rotate(130deg); animation-delay: 0.15s; }
-        #loading .synapse:nth-child(9) { top: 42%; left: 22%; width: 30px; transform: rotate(40deg); animation-delay: 0.3s; }
-        #loading .synapse:nth-child(10) { top: 42%; left: 72%; width: 30px; transform: rotate(140deg); animation-delay: 0.35s; }
-        #loading .synapse:nth-child(11) { top: 67%; left: 38%; width: 25px; transform: rotate(50deg); animation-delay: 0.5s; }
-        #loading .synapse:nth-child(12) { top: 67%; left: 58%; width: 25px; transform: rotate(130deg); animation-delay: 0.55s; }
+        #loading .neural-network .edge:nth-child(1) { animation-delay: 0s; }
+        #loading .neural-network .edge:nth-child(2) { animation-delay: 0.15s; }
+        #loading .neural-network .edge:nth-child(3) { animation-delay: 0.3s; }
+        #loading .neural-network .edge:nth-child(4) { animation-delay: 0.45s; }
+        #loading .neural-network .edge:nth-child(5) { animation-delay: 0.6s; }
+        #loading .neural-network .edge:nth-child(6) { animation-delay: 0.75s; }
+        #loading .neural-network .edge:nth-child(7) { animation-delay: 0.9s; }
+        #loading .neural-network .edge:nth-child(8) { animation-delay: 1.05s; }
+        #loading .neural-network .node {
+            fill: #5eead4;
+            animation: nodePulse 2s ease-in-out infinite;
+        }
+        #loading .neural-network .node:nth-child(9) { animation-delay: 0s; }
+        #loading .neural-network .node:nth-child(10) { animation-delay: 0.2s; }
+        #loading .neural-network .node:nth-child(11) { animation-delay: 0.4s; }
+        #loading .neural-network .node:nth-child(12) { animation-delay: 0.2s; }
+        #loading .neural-network .node:nth-child(13) { animation-delay: 0.4s; }
+        #loading .neural-network .node:nth-child(14) { animation-delay: 0.6s; }
+        #loading .neural-network .node:nth-child(15) { animation-delay: 0.6s; }
         #loading .loading-text { font-size: 14px; color: #5eead4; margin-top: 10px; }
-        @keyframes neuronPulse {
-            0%, 100% { transform: translateX(-50%) scale(1); opacity: 0.4; box-shadow: 0 0 5px #5eead4; }
-            50% { transform: translateX(-50%) scale(1.3); opacity: 1; box-shadow: 0 0 20px #5eead4, 0 0 40px #5eead480; }
+        @keyframes edgePulse {
+            0% { stroke-dashoffset: 30; opacity: 0.3; }
+            50% { stroke-dashoffset: 0; opacity: 1; }
+            100% { stroke-dashoffset: -30; opacity: 0.3; }
         }
-        @keyframes synapseFire {
-            0%, 100% { opacity: 0.2; }
-            50% { opacity: 0.8; }
+        @keyframes nodePulse {
+            0%, 100% { opacity: 0.4; filter: drop-shadow(0 0 2px #5eead4); }
+            50% { opacity: 1; filter: drop-shadow(0 0 8px #5eead4); }
         }
 
         #tooltip {
@@ -572,18 +579,25 @@ GRAPH_HTML = """
     <div id="stats">Loading...</div>
     <div id="loading">
         <div class="neural-network">
-            <div class="neuron"></div>
-            <div class="neuron"></div>
-            <div class="neuron"></div>
-            <div class="neuron"></div>
-            <div class="neuron"></div>
-            <div class="neuron"></div>
-            <div class="synapse"></div>
-            <div class="synapse"></div>
-            <div class="synapse"></div>
-            <div class="synapse"></div>
-            <div class="synapse"></div>
-            <div class="synapse"></div>
+            <svg viewBox="0 0 100 100">
+                <!-- Edges (synapses) - drawn first so nodes appear on top -->
+                <line class="edge" x1="50" y1="10" x2="25" y2="35"/>
+                <line class="edge" x1="50" y1="10" x2="75" y2="35"/>
+                <line class="edge" x1="25" y1="35" x2="25" y2="65"/>
+                <line class="edge" x1="75" y1="35" x2="75" y2="65"/>
+                <line class="edge" x1="25" y1="35" x2="50" y2="50"/>
+                <line class="edge" x1="75" y1="35" x2="50" y2="50"/>
+                <line class="edge" x1="25" y1="65" x2="50" y2="90"/>
+                <line class="edge" x1="75" y1="65" x2="50" y2="90"/>
+                <!-- Nodes (neurons) -->
+                <circle class="node" cx="50" cy="10" r="6"/>
+                <circle class="node" cx="25" cy="35" r="5"/>
+                <circle class="node" cx="75" cy="35" r="5"/>
+                <circle class="node" cx="50" cy="50" r="4"/>
+                <circle class="node" cx="25" cy="65" r="5"/>
+                <circle class="node" cx="75" cy="65" r="5"/>
+                <circle class="node" cx="50" cy="90" r="6"/>
+            </svg>
         </div>
         <div class="loading-text">Loading Memory Graph</div>
     </div>
