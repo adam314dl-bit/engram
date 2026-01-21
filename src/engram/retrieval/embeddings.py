@@ -55,6 +55,7 @@ class EmbeddingService:
         self.model_name = model_name or settings.embedding_model
         self._model: SentenceTransformer | None = None
         self._model_lock = threading.Lock()
+        self._encode_lock = threading.Lock()  # Serialize encode calls (model not thread-safe)
         self._pool = None  # Multi-process pool for multi-GPU
         self._initialized = True
 
@@ -114,13 +115,15 @@ class EmbeddingService:
     def embed_sync(self, text: str) -> list[float]:
         """Generate embedding for a single text (synchronous)."""
         model = self._get_model()
-        embedding = model.encode(text, convert_to_numpy=True)
+        with self._encode_lock:
+            embedding = model.encode(text, convert_to_numpy=True)
         return embedding.tolist()
 
     def embed_batch_sync(self, texts: Sequence[str]) -> list[list[float]]:
         """Generate embeddings for multiple texts (synchronous).
 
         Uses multi-GPU pool if available, otherwise single GPU with batching.
+        Thread-safe: serializes encode calls to avoid model concurrency issues.
         """
         if not texts:
             return []
@@ -130,23 +133,25 @@ class EmbeddingService:
         # Replace empty strings with placeholder (some models fail on empty input)
         texts_cleaned = [t if t.strip() else " " for t in texts_list]
 
-        # Use multi-GPU pool if available
-        if self._pool is not None:
-            embeddings = model.encode_multi_process(
-                texts_cleaned,
-                self._pool,
-                batch_size=settings.embedding_batch_size,
-            )
-        else:
-            # Single GPU with configured batch size
-            embeddings = model.encode(
-                texts_cleaned,
-                convert_to_numpy=True,
-                batch_size=settings.embedding_batch_size,
-                show_progress_bar=len(texts_cleaned) > 100,  # Show progress for large batches
-            )
+        # Serialize encode calls - SentenceTransformer is not thread-safe
+        with self._encode_lock:
+            # Use multi-GPU pool if available
+            if self._pool is not None:
+                embeddings = model.encode_multi_process(
+                    texts_cleaned,
+                    self._pool,
+                    batch_size=settings.embedding_batch_size,
+                )
+            else:
+                # Single GPU with configured batch size
+                embeddings = model.encode(
+                    texts_cleaned,
+                    convert_to_numpy=True,
+                    batch_size=settings.embedding_batch_size,
+                    show_progress_bar=False,  # Disable in concurrent context
+                )
 
-        result = embeddings.tolist()
+            result = embeddings.tolist()
 
         # Sanity check: ensure output count matches input count
         if len(result) != len(texts_list):
