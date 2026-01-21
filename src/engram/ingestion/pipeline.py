@@ -9,14 +9,20 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from typing import TYPE_CHECKING
+
 from engram.config import settings
 from engram.ingestion.concept_extractor import ConceptExtractor
 from engram.ingestion.memory_extractor import MemoryExtractor
 from engram.ingestion.parser import DocumentParser
 from engram.ingestion.relationship_extractor import RelationshipExtractor
-from engram.models import Concept, Document
+from engram.models import Concept, Document, SemanticMemory
+from engram.preprocessing.table_parser import extract_tables, remove_tables_from_text
 from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
 from engram.storage.neo4j_client import Neo4jClient
+
+if TYPE_CHECKING:
+    from engram.preprocessing.table_enricher import TableEnricher
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +58,7 @@ class IngestionPipeline:
         memory_extractor: MemoryExtractor | None = None,
         relationship_extractor: RelationshipExtractor | None = None,
         embedding_service: EmbeddingService | None = None,
+        table_enricher: TableEnricher | None = None,
     ) -> None:
         self.db = neo4j_client
         self.parser = parser or DocumentParser()
@@ -63,6 +70,11 @@ class IngestionPipeline:
         self.relationship_extractor = relationship_extractor or RelationshipExtractor(
             embedding_service=self.embeddings
         )
+        # Lazy import to avoid circular dependency
+        if table_enricher is None:
+            from engram.preprocessing.table_enricher import TableEnricher
+            table_enricher = TableEnricher()
+        self.table_enricher = table_enricher
 
     async def ingest_file(self, path: Path | str) -> IngestionResult:
         """Ingest a single file."""
@@ -92,12 +104,45 @@ class IngestionPipeline:
             document.status = "processing"
             await self.db.save_document(document)
 
-            # Extract concepts and memories in parallel
+            # --- Phase 1: Extract and process tables ---
+            tables = extract_tables(document.content)
+            table_memories: list[SemanticMemory] = []
+
+            if tables:
+                logger.debug(f"Found {len(tables)} tables in: {document.title}")
+
+                # Lazy import to avoid circular dependency
+                from engram.preprocessing.table_enricher import create_memories_from_table
+
+                # Enrich tables in parallel
+                enriched_tables = await asyncio.gather(
+                    *[self.table_enricher.enrich(table) for table in tables],
+                    return_exceptions=True,
+                )
+
+                # Create memories from enriched tables
+                for enriched in enriched_tables:
+                    if isinstance(enriched, Exception):
+                        logger.warning(f"Failed to enrich table: {enriched}")
+                        continue
+                    memories_from_table = create_memories_from_table(
+                        enriched,
+                        doc_id=document.id,
+                    )
+                    table_memories.extend(memories_from_table)
+
+                logger.debug(f"Created {len(table_memories)} memories from tables")
+
+            # Remove tables from content for text processing
+            # (tables are already processed separately)
+            text_content = remove_tables_from_text(document.content) if tables else document.content
+
+            # --- Phase 2: Extract concepts and memories from text ---
             logger.debug(f"Extracting concepts and memories from: {document.title}")
             concept_result, memory_result = await asyncio.gather(
-                self.concept_extractor.extract(document.content),
+                self.concept_extractor.extract(text_content),
                 self.memory_extractor.extract(
-                    document.content,
+                    text_content,
                     document.title,
                     document.id,
                 ),
@@ -112,7 +157,9 @@ class IngestionPipeline:
                     all_concepts[c.name] = c
 
             concepts = list(all_concepts.values())
-            memories = memory_result.memories
+
+            # Combine text memories and table memories
+            memories = memory_result.memories + table_memories
 
             # Extract enhanced relationships with embeddings
             logger.debug(f"Extracting relationships for {len(concepts)} concepts")

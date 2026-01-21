@@ -8,6 +8,7 @@ from pathlib import Path
 import aiofiles
 
 from engram.models import Document, DocumentChunk, DocumentType
+from engram.preprocessing.normalizer import normalize_full
 
 
 def generate_id() -> str:
@@ -139,6 +140,8 @@ def clean_markdown(content: str) -> str:
     content = re.sub(r"^---\n.*?\n---\n", "", content, flags=re.DOTALL)
     # Normalize whitespace
     content = re.sub(r"\n{3,}", "\n\n", content)
+    # Apply full normalization (unicode, whitespace, bullets, table cells)
+    content = normalize_full(content)
     return content.strip()
 
 
@@ -216,6 +219,8 @@ async def parse_file(path: Path) -> Document:
         title = confluence_title or path.stem
         # Strip Confluence metadata, keep only actual content
         content = strip_confluence_metadata(content)
+        # Apply full normalization (unicode, whitespace, bullets, table cells)
+        content = normalize_full(content)
 
     # Use Confluence URL if available, otherwise use local file path
     source_path = confluence_url or str(path.absolute())
