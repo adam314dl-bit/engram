@@ -23,6 +23,7 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 - **ACT-R Memory Model**: Cognitive-inspired forgetting with base-level activation
 - **Contradiction Detection**: LLM-based detection and auto-resolution
 - **Source Attribution**: Shows document sources (title + URL) in responses
+- **Table Extraction**: Detects markdown tables, normalizes +/- to да/нет, creates searchable memories
 - **Confluence Integration**: Extracts metadata from Confluence exports, strips headers
 - **Learning from Feedback**: Positive feedback strengthens memories, negative triggers re-reasoning
 - **Memory Consolidation**: Successful episodes crystallize into semantic memories
@@ -364,6 +365,15 @@ uv run ruff check src/engram
 - [x] Ingestion `--clear` flag for database reset
 - [x] Thread-safe embedding service
 - [x] Configurable LLM timeout
+
+**v3.2 Table & List Extraction:**
+- [x] Symbol normalizer (Unicode NFC, whitespace, bullets)
+- [x] Table cell normalization (+/- → да/нет, checkmarks → да)
+- [x] Markdown table detection and parsing
+- [x] Comparison table detection (feature matrices)
+- [x] LLM-based table enrichment (descriptions, key facts)
+- [x] Automatic memory creation from tables
+- [x] Tables processed separately, removed from text before LLM
 
 ### Planned
 
