@@ -379,6 +379,8 @@ GRAPH_HTML = """
         #loading .neural-network .edge:nth-child(8) { animation-delay: 1.05s; }
         #loading .neural-network .node {
             fill: #5eead4;
+            stroke: #0a0a12;
+            stroke-width: 3;
             animation: nodePulse 2s ease-in-out infinite;
         }
         #loading .neural-network .node:nth-child(9) { animation-delay: 0s; }
