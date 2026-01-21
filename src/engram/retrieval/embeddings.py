@@ -127,23 +127,42 @@ class EmbeddingService:
         model = self._get_model()
         texts_list = list(texts)
 
+        # Replace empty strings with placeholder (some models fail on empty input)
+        texts_cleaned = [t if t.strip() else " " for t in texts_list]
+
         # Use multi-GPU pool if available
         if self._pool is not None:
             embeddings = model.encode_multi_process(
-                texts_list,
+                texts_cleaned,
                 self._pool,
                 batch_size=settings.embedding_batch_size,
             )
         else:
             # Single GPU with configured batch size
             embeddings = model.encode(
-                texts_list,
+                texts_cleaned,
                 convert_to_numpy=True,
                 batch_size=settings.embedding_batch_size,
-                show_progress_bar=len(texts_list) > 100,  # Show progress for large batches
+                show_progress_bar=len(texts_cleaned) > 100,  # Show progress for large batches
             )
 
-        return embeddings.tolist()
+        result = embeddings.tolist()
+
+        # Sanity check: ensure output count matches input count
+        if len(result) != len(texts_list):
+            logger.error(
+                f"Embedding count mismatch: got {len(result)} embeddings for {len(texts_list)} texts"
+            )
+            # Pad or truncate to match (fallback, shouldn't happen)
+            if len(result) < len(texts_list):
+                # Pad with zero vectors
+                dim = len(result[0]) if result else self.dimensions
+                while len(result) < len(texts_list):
+                    result.append([0.0] * dim)
+            else:
+                result = result[:len(texts_list)]
+
+        return result
 
     async def embed(self, text: str) -> list[float]:
         """Generate embedding for a single text (async)."""
