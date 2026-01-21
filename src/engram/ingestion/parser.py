@@ -67,7 +67,7 @@ def strip_confluence_metadata(content: str) -> str:
     """
     Strip Confluence metadata header from content.
 
-    Removes everything before "## Описание" (or similar content marker).
+    Removes metadata lines from the beginning until actual content starts.
     Metadata fields that are stripped:
         - Навигация:
         - ID страницы:
@@ -79,14 +79,8 @@ def strip_confluence_metadata(content: str) -> str:
         - Дата последнего редактирования страницы:
 
     Returns:
-        Content without metadata header, starting from ## Описание
+        Content without metadata header
     """
-    # Try to find "## Описание" marker - content starts there
-    match = re.search(r"^(##\s*Описание.*)$", content, re.MULTILINE | re.DOTALL)
-    if match:
-        return match.group(1).strip()
-
-    # Fallback: strip known metadata lines from the beginning
     lines = content.split("\n")
     content_started = False
     result_lines = []
@@ -107,8 +101,8 @@ def strip_confluence_metadata(content: str) -> str:
 
         if content_started:
             result_lines.append(line)
-        elif stripped.startswith("##") or (stripped and not any(stripped.startswith(p) for p in metadata_prefixes)):
-            # Content starts at first heading or non-metadata line
+        elif stripped and not any(stripped.startswith(p) for p in metadata_prefixes):
+            # Content starts at first non-empty, non-metadata line
             content_started = True
             result_lines.append(line)
         # Skip empty lines and metadata lines before content starts
