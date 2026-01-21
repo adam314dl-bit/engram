@@ -22,6 +22,8 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 - **Russian NLP**: PyMorphy3 lemmatization and stopword removal for Russian content
 - **ACT-R Memory Model**: Cognitive-inspired forgetting with base-level activation
 - **Contradiction Detection**: LLM-based detection and auto-resolution
+- **Source Attribution**: Shows document sources (title + URL) in responses
+- **Confluence Integration**: Extracts metadata from Confluence exports, strips headers
 - **Learning from Feedback**: Positive feedback strengthens memories, negative triggers re-reasoning
 - **Memory Consolidation**: Successful episodes crystallize into semantic memories
 - **OpenAI-Compatible API**: Works with Open WebUI and other clients
@@ -280,7 +282,19 @@ uv run python scripts/generate_mock_docs.py
 
 # Ingest documents
 uv run python scripts/run_ingestion.py
+
+# Ingest from custom directory
+uv run python scripts/run_ingestion.py /path/to/docs
+
+# Reset database and re-ingest (clears all data first)
+uv run python scripts/run_ingestion.py --clear /path/to/docs
 ```
+
+**Confluence Export Support:**
+- Extracts title from `Заголовок страницы:` field
+- Extracts URL from `URL страницы:` field
+- Strips metadata header before sending content to LLM
+- Sources displayed in chat responses with clickable links
 
 ## Project Structure
 
@@ -342,6 +356,14 @@ uv run ruff check src/engram
 - [x] Memory status lifecycle (active → deprioritized → archived)
 - [x] LLM-based contradiction detection (Russian prompts)
 - [x] Calibration CLI (`scripts/calibrate.py`)
+
+**v3.1 Sources & Ingestion:**
+- [x] Source attribution in responses (title + URL)
+- [x] Confluence metadata extraction (title, URL)
+- [x] Metadata stripping before LLM processing
+- [x] Ingestion `--clear` flag for database reset
+- [x] Thread-safe embedding service
+- [x] Configurable LLM timeout
 
 ### Planned
 
