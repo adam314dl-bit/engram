@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from engram.api.graph import router as graph_router
 from engram.api.routes import router
 from engram.config import settings
+from engram.retrieval.embeddings import preload_embedding_model
 from engram.storage.neo4j_client import Neo4jClient
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     db = Neo4jClient()
     await db.connect()
     logger.info("Connected to Neo4j")
+
+    # Preload embedding model to avoid race conditions on first parallel requests
+    logger.info("Preloading embedding model...")
+    preload_embedding_model()
+    logger.info("Embedding model ready")
 
     # Store db in app state for routes
     app.state.db = db

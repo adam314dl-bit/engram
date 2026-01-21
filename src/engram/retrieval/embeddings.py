@@ -2,8 +2,8 @@
 
 import asyncio
 import logging
+import threading
 from collections.abc import Sequence
-from functools import lru_cache
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -14,16 +14,38 @@ logger = logging.getLogger(__name__)
 
 
 class EmbeddingService:
-    """Service for generating text embeddings using local models."""
+    """Service for generating text embeddings using local models.
+
+    Thread-safe singleton that loads the model once and reuses it.
+    """
+
+    _instance: "EmbeddingService | None" = None
+    _instance_lock = threading.Lock()
+
+    def __new__(cls, model_name: str | None = None) -> "EmbeddingService":
+        """Ensure only one instance exists (singleton pattern)."""
+        with cls._instance_lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance._initialized = False
+            return cls._instance
 
     def __init__(self, model_name: str | None = None) -> None:
+        # Skip re-initialization if already done
+        if getattr(self, "_initialized", False):
+            return
+
         self.model_name = model_name or settings.embedding_model
         self._model: SentenceTransformer | None = None
-        self._lock = asyncio.Lock()
+        self._model_lock = threading.Lock()
+        self._initialized = True
 
-    def _get_model(self) -> SentenceTransformer:
-        """Get or load the embedding model."""
-        if self._model is None:
+    def load_model(self) -> None:
+        """Explicitly load the embedding model. Thread-safe."""
+        with self._model_lock:
+            if self._model is not None:
+                return  # Already loaded
+
             import torch
             logger.info(f"Loading embedding model: {self.model_name}")
 
@@ -40,6 +62,11 @@ class EmbeddingService:
             )
 
             logger.info(f"Embedding model loaded on {target_device}. Dimensions: {self._model.get_sentence_embedding_dimension()}")
+
+    def _get_model(self) -> SentenceTransformer:
+        """Get the embedding model, loading it if necessary."""
+        if self._model is None:
+            self.load_model()
         return self._model
 
     @property
@@ -98,14 +125,15 @@ def cosine_similarity_batch(
     return similarities.tolist()
 
 
-# Global service instance
-_embedding_service: EmbeddingService | None = None
-
-
-@lru_cache(maxsize=1)
 def get_embedding_service() -> EmbeddingService:
-    """Get or create the global embedding service."""
+    """Get the global embedding service (singleton)."""
     return EmbeddingService()
+
+
+def preload_embedding_model() -> None:
+    """Preload the embedding model at startup. Call this during app initialization."""
+    service = get_embedding_service()
+    service.load_model()
 
 
 async def embed(text: str) -> list[float]:
