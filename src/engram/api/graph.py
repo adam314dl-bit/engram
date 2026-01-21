@@ -366,7 +366,7 @@ GRAPH_HTML = """
         }
         #loading .neural-network .edge {
             stroke: #5eead4; stroke-width: 2; fill: none;
-            stroke-dasharray: 30; stroke-dashoffset: 30;
+            stroke-dasharray: 40; stroke-dashoffset: 40;
             animation: edgePulse 2s ease-in-out infinite;
         }
         #loading .neural-network .edge:nth-child(1) { animation-delay: 0s; }
@@ -392,9 +392,9 @@ GRAPH_HTML = """
         #loading .neural-network .node:nth-child(15) { animation-delay: 0.6s; }
         #loading .loading-text { font-size: 14px; color: #5eead4; margin-top: 10px; }
         @keyframes edgePulse {
-            0% { stroke-dashoffset: 30; opacity: 0.3; }
+            0% { stroke-dashoffset: 40; opacity: 0; }
             50% { stroke-dashoffset: 0; opacity: 1; }
-            100% { stroke-dashoffset: -30; opacity: 0.3; }
+            100% { stroke-dashoffset: -40; opacity: 0; }
         }
         @keyframes nodePulse {
             0%, 100% { opacity: 0.4; filter: drop-shadow(0 0 2px #5eead4); }
