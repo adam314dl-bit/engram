@@ -332,7 +332,7 @@ async def chat_completions(
 # ============================================================================
 
 
-@router.post("/v1/feedback", response_model=FeedbackResponse)
+@router.post("/v1/feedback", response_model=FeedbackResponse, include_in_schema=False)
 async def submit_feedback(
     request: Request,
     body: FeedbackRequest,
@@ -397,7 +397,7 @@ async def submit_feedback(
 # ============================================================================
 
 
-@router.get("/health", response_model=HealthResponse)
+@router.get("/health", response_model=HealthResponse, include_in_schema=False)
 async def health_check(request: Request) -> HealthResponse:
     """Health check endpoint."""
     try:
@@ -414,8 +414,8 @@ async def health_check(request: Request) -> HealthResponse:
     )
 
 
-@router.get("/models")
-@router.get("/v1/models")
+@router.get("/models", include_in_schema=False)
+@router.get("/v1/models", include_in_schema=False)
 async def list_models() -> dict:
     """
     List available models (OpenAI compatibility).
@@ -435,7 +435,7 @@ async def list_models() -> dict:
     }
 
 
-@router.get("/admin/stats", response_model=StatsResponse)
+@router.get("/admin/stats", response_model=StatsResponse, include_in_schema=False)
 async def get_stats(request: Request) -> StatsResponse:
     """Get system statistics."""
     db = get_db(request)
@@ -475,7 +475,7 @@ async def get_stats(request: Request) -> StatsResponse:
         )
 
 
-@router.get("/admin/concepts", response_model=list[ConceptInfo])
+@router.get("/admin/concepts", response_model=list[ConceptInfo], include_in_schema=False)
 async def list_concepts(
     request: Request,
     limit: int = 50,
@@ -515,7 +515,7 @@ async def list_concepts(
         )
 
 
-@router.get("/admin/memories", response_model=list[MemoryInfo])
+@router.get("/admin/memories", response_model=list[MemoryInfo], include_in_schema=False)
 async def list_memories(
     request: Request,
     limit: int = 50,
@@ -570,7 +570,7 @@ async def list_memories(
         )
 
 
-@router.get("/admin/episodes", response_model=list[EpisodeInfo])
+@router.get("/admin/episodes", response_model=list[EpisodeInfo], include_in_schema=False)
 async def list_episodes(
     request: Request,
     limit: int = 50,
@@ -625,7 +625,7 @@ async def list_episodes(
         )
 
 
-@router.delete("/admin/episodes/{episode_id}")
+@router.delete("/admin/episodes/{episode_id}", include_in_schema=False)
 async def delete_episode(
     request: Request,
     episode_id: str,
@@ -659,7 +659,7 @@ async def delete_episode(
         )
 
 
-@router.post("/admin/calibrate")
+@router.post("/admin/calibrate", include_in_schema=False)
 async def calibrate_memories(
     request: Request,
     decay_factor: float = 0.99,
@@ -696,7 +696,7 @@ async def calibrate_memories(
         )
 
 
-@router.post("/admin/reset")
+@router.post("/admin/reset", include_in_schema=False)
 async def reset_database(
     request: Request,
     confirm: bool = False,
