@@ -365,6 +365,33 @@ class Neo4jClient:
                 docs.append(Document.from_dict(dict(record["d"])))
         return docs
 
+    async def get_source_documents_for_memories(
+        self,
+        memory_ids: list[str],
+    ) -> list[Document]:
+        """
+        Get source documents for a list of memory IDs.
+
+        Follows: Memory -[:EXTRACTED_FROM]-> Document
+        Returns deduplicated documents.
+        """
+        if not memory_ids:
+            return []
+
+        query = """
+        MATCH (s:SemanticMemory)-[:EXTRACTED_FROM]->(d:Document)
+        WHERE s.id IN $memory_ids
+        RETURN DISTINCT d
+        """
+
+        documents: list[Document] = []
+        async with self.session() as session:
+            result = await session.run(query, memory_ids=memory_ids)
+            async for record in result:
+                documents.append(Document.from_dict(dict(record["d"])))
+
+        return documents
+
     # ==========================================================================
     # Vector search operations
     # ==========================================================================

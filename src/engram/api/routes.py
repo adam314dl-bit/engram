@@ -96,6 +96,12 @@ class DebugInfo(BaseModel):
     thresholds: dict = {}
 
 
+class SourceDocument(BaseModel):
+    """A source document used in the response."""
+    title: str
+    url: str | None = None
+
+
 class ChatCompletionResponse(BaseModel):
     """OpenAI-compatible chat completion response."""
 
@@ -112,6 +118,10 @@ class ChatCompletionResponse(BaseModel):
     concepts_activated: list[str] = []  # Concept IDs
     memories_used: list[str] = []  # Memory IDs
     memories_count: int = 0
+    sources_used: list[SourceDocument] = Field(
+        default_factory=list,
+        description="Deduplicated list of source documents (title + URL) used in the answer"
+    )
 
     # Debug info (only when debug=true)
     debug_info: DebugInfo | None = None
@@ -257,10 +267,53 @@ async def chat_completions(
             force_exclude_nodes=body.force_exclude_nodes if body.force_exclude_nodes else None,
         )
 
-        # Append confidence to response content for visibility in Open WebUI
+        # Fetch source documents for memories used
+        source_documents = await db.get_source_documents_for_memories(
+            memory_ids=result.synthesis.memories_used
+        )
+
+        # Build deduplicated sources list with title + URL
+        sources_used: list[SourceDocument] = []
+        seen_urls: set[str] = set()
+
+        for doc in source_documents:
+            # Use source_path as URL (should be Confluence URL)
+            url = doc.source_path
+
+            # Skip duplicates (by URL or title)
+            dedup_key = url or doc.title
+            if dedup_key in seen_urls:
+                continue
+            seen_urls.add(dedup_key)
+
+            # Get title (fallback to filename from path if no title)
+            title = doc.title
+            if not title and url:
+                # Extract page name from URL as fallback
+                title = url.split("/")[-1].replace("-", " ").replace("+", " ")
+
+            if title:  # Only add if we have at least a title
+                sources_used.append(SourceDocument(
+                    title=title,
+                    url=url,
+                ))
+
+        # Append confidence and sources to response content for visibility in Open WebUI
         memories_count = len(result.synthesis.memories_used)
         confidence_pct = int(result.confidence * 100)
-        stats_footer = f"\n\n---\n**Confidence: {confidence_pct}%**"
+
+        # Format sources for display (markdown links)
+        if sources_used:
+            sources_lines = []
+            for src in sources_used:
+                if src.url:
+                    sources_lines.append(f"• [{src.title}]({src.url})")
+                else:
+                    sources_lines.append(f"• {src.title}")
+            sources_text = "\n".join(sources_lines)
+            stats_footer = f"\n\n---\n**Confidence: {confidence_pct}%**\n\n**Sources:**\n{sources_text}"
+        else:
+            stats_footer = f"\n\n---\n**Confidence: {confidence_pct}%**"
 
         content_with_stats = result.answer + stats_footer
 
@@ -316,6 +369,7 @@ async def chat_completions(
             concepts_activated=result.synthesis.concepts_activated[:50],  # Concept IDs
             memories_used=result.synthesis.memories_used[:50],  # Memory IDs
             memories_count=memories_count,
+            sources_used=sources_used,
             debug_info=debug_info,
         )
 

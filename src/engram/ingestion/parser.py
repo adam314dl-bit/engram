@@ -34,8 +34,42 @@ def detect_doc_type(path: Path) -> DocumentType:
     return type_map.get(suffix, "text")
 
 
+def extract_confluence_metadata(content: str) -> tuple[str | None, str | None]:
+    """
+    Extract title and URL from Confluence export format.
+
+    Format:
+        Навигация: ...
+        ID страницы: 123456
+        Заголовок страницы: Page Title
+        URL страницы: https://confluence.example.com/...
+
+    Returns:
+        (title, url) tuple, either can be None if not found
+    """
+    title = None
+    url = None
+
+    # Extract title from "Заголовок страницы:"
+    match = re.search(r"^Заголовок страницы:\s*(.+)$", content, re.MULTILINE)
+    if match:
+        title = match.group(1).strip()
+
+    # Extract URL from "URL страницы:"
+    match = re.search(r"^URL страницы:\s*(https?://\S+)", content, re.MULTILINE)
+    if match:
+        url = match.group(1).strip()
+
+    return title, url
+
+
 def extract_title_from_markdown(content: str) -> str:
     """Extract title from markdown content (first h1 or filename)."""
+    # First try Confluence format
+    title, _ = extract_confluence_metadata(content)
+    if title:
+        return title
+
     # Look for # heading
     match = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
     if match:
@@ -124,18 +158,25 @@ async def parse_file(path: Path) -> Document:
 
     doc_type = detect_doc_type(path)
 
+    # Try to extract Confluence metadata (title and URL)
+    confluence_title, confluence_url = extract_confluence_metadata(content)
+
     if doc_type == "markdown":
         title = extract_title_from_markdown(content)
         content = clean_markdown(content)
     else:
-        title = path.stem
+        # For txt files, prefer Confluence title, fallback to filename
+        title = confluence_title or path.stem
+
+    # Use Confluence URL if available, otherwise use local file path
+    source_path = confluence_url or str(path.absolute())
 
     return Document(
         id=generate_id(),
         title=title,
         content=content,
         doc_type=doc_type,
-        source_path=str(path.absolute()),
+        source_path=source_path,
         source_hash=compute_hash(content),
     )
 

@@ -3,11 +3,16 @@
 
 Usage:
     python scripts/run_ingestion.py [directory]
+    python scripts/run_ingestion.py --clear [directory]
 
 If no directory is specified, uses tests/fixtures/mock_docs.
 Recursively finds all .md and .txt files in the directory.
+
+Options:
+    --clear     Reset database before ingesting (deletes all data)
 """
 
+import argparse
 import asyncio
 import logging
 import sys
@@ -22,7 +27,51 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def run_ingestion(docs_dir: Path | None = None):
+async def reset_database(db) -> bool:
+    """Reset the database by deleting all nodes, relationships, and indexes."""
+    print("\n" + "=" * 60)
+    print("RESETTING DATABASE")
+    print("=" * 60)
+
+    try:
+        # Drop vector indexes (they have dimension locked in)
+        vector_indexes = [
+            "concept_embeddings",
+            "semantic_embeddings",
+            "episodic_embeddings",
+        ]
+        for idx in vector_indexes:
+            try:
+                await db.execute_query(f"DROP INDEX {idx} IF EXISTS")
+                print(f"  Dropped index: {idx}")
+            except Exception as e:
+                logger.warning(f"Could not drop index {idx}: {e}")
+
+        # Drop fulltext index
+        try:
+            await db.execute_query("DROP INDEX semantic_content IF EXISTS")
+            print("  Dropped index: semantic_content")
+        except Exception:
+            pass
+
+        # Delete all nodes and relationships
+        print("  Deleting all nodes and relationships...")
+        await db.execute_query("MATCH (n) DETACH DELETE n")
+
+        # Recreate schema (including vector indexes with correct dimensions)
+        print("  Recreating schema...")
+        await db.setup_schema()
+
+        print("Database reset completed")
+        print("=" * 60 + "\n")
+        return True
+
+    except Exception as e:
+        logger.exception(f"Error resetting database: {e}")
+        return False
+
+
+async def run_ingestion(docs_dir: Path | None = None, clear: bool = False):
     """Ingest all documents from directory."""
     from engram.ingestion.pipeline import IngestionPipeline
     from engram.storage.neo4j_client import Neo4jClient
@@ -35,21 +84,28 @@ async def run_ingestion(docs_dir: Path | None = None):
         print(f"Documents directory not found: {docs_dir}")
         return False
 
-    print(f"Scanning directory (recursive): {docs_dir}")
-
-    # Count documents (recursive)
-    extensions = [".md", ".txt", ".markdown"]
-    all_files = []
-    for ext in extensions:
-        all_files.extend(docs_dir.rglob(f"*{ext}"))
-    print(f"Found {len(all_files)} documents to ingest")
-
-    # Connect to Neo4j
+    # Connect to Neo4j first (needed for reset)
     db = Neo4jClient()
     await db.connect()
 
     try:
-        # Setup schema if needed
+        # Reset database if requested
+        if clear:
+            success = await reset_database(db)
+            if not success:
+                print("Database reset failed, aborting ingestion")
+                return False
+
+        print(f"Scanning directory (recursive): {docs_dir}")
+
+        # Count documents (recursive)
+        extensions = [".md", ".txt", ".markdown"]
+        all_files = []
+        for ext in extensions:
+            all_files.extend(docs_dir.rglob(f"*{ext}"))
+        print(f"Found {len(all_files)} documents to ingest")
+
+        # Setup schema if needed (in case not already done by reset)
         await db.setup_schema()
 
         # Create pipeline
@@ -108,16 +164,38 @@ async def run_ingestion(docs_dir: Path | None = None):
 
 async def main():
     """Main entry point."""
-    # Parse command line argument
-    docs_dir = None
-    if len(sys.argv) > 1:
-        docs_dir = Path(sys.argv[1])
-        if not docs_dir.exists():
-            print(f"Error: Directory not found: {docs_dir}")
-            return False
+    parser = argparse.ArgumentParser(
+        description="Ingest documents into Engram",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    python scripts/run_ingestion.py                    # Ingest from default directory
+    python scripts/run_ingestion.py /path/to/docs     # Ingest from custom directory
+    python scripts/run_ingestion.py --clear           # Reset database, then ingest
+    python scripts/run_ingestion.py --clear /path     # Reset database, then ingest from path
+        """,
+    )
+    parser.add_argument(
+        "directory",
+        nargs="?",
+        type=Path,
+        help="Directory containing documents to ingest (default: tests/fixtures/mock_docs)",
+    )
+    parser.add_argument(
+        "--clear",
+        action="store_true",
+        help="Reset database before ingesting (deletes ALL data)",
+    )
+
+    args = parser.parse_args()
+
+    # Validate directory if provided
+    if args.directory and not args.directory.exists():
+        print(f"Error: Directory not found: {args.directory}")
+        return False
 
     try:
-        success = await run_ingestion(docs_dir)
+        success = await run_ingestion(args.directory, clear=args.clear)
         return success
     except Exception as e:
         logger.exception(f"Ingestion failed: {e}")
