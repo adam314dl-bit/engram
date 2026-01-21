@@ -4,6 +4,7 @@ import asyncio
 import logging
 import threading
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -11,6 +12,22 @@ from sentence_transformers import SentenceTransformer
 from engram.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Shared thread pool for async operations (sized for high-core servers)
+_executor: ThreadPoolExecutor | None = None
+_executor_lock = threading.Lock()
+
+
+def get_executor() -> ThreadPoolExecutor:
+    """Get shared thread pool executor."""
+    global _executor
+    with _executor_lock:
+        if _executor is None:
+            # Use more workers for high-core servers
+            max_workers = min(32, (settings.ingestion_max_concurrent * 2))
+            _executor = ThreadPoolExecutor(max_workers=max_workers)
+            logger.info(f"Created thread pool with {max_workers} workers")
+        return _executor
 
 
 class EmbeddingService:
@@ -38,6 +55,7 @@ class EmbeddingService:
         self.model_name = model_name or settings.embedding_model
         self._model: SentenceTransformer | None = None
         self._model_lock = threading.Lock()
+        self._pool = None  # Multi-process pool for multi-GPU
         self._initialized = True
 
     def load_model(self) -> None:
@@ -49,8 +67,12 @@ class EmbeddingService:
             import torch
             logger.info(f"Loading embedding model: {self.model_name}")
 
+            # Check GPU availability
+            cuda_available = torch.cuda.is_available()
+            gpu_count = torch.cuda.device_count() if cuda_available else 0
+
             # Determine target device
-            target_device = "cuda" if torch.cuda.is_available() else "cpu"
+            target_device = "cuda" if cuda_available else "cpu"
 
             # Load model with low_cpu_mem_usage=False to avoid meta tensor issues
             # Some models (e.g., Giga-Embeddings-instruct) fail with meta tensors on GPU
@@ -61,7 +83,22 @@ class EmbeddingService:
                 model_kwargs={"low_cpu_mem_usage": False}
             )
 
-            logger.info(f"Embedding model loaded on {target_device}. Dimensions: {self._model.get_sentence_embedding_dimension()}")
+            # Setup multi-GPU pool if enabled and multiple GPUs available
+            if settings.embedding_multi_gpu and gpu_count > 1:
+                target_gpus = settings.embedding_gpu_count if settings.embedding_gpu_count > 0 else gpu_count
+                target_gpus = min(target_gpus, gpu_count)
+                target_devices = [f"cuda:{i}" for i in range(target_gpus)]
+                logger.info(f"Starting multi-GPU pool with {target_gpus} GPUs: {target_devices}")
+                self._pool = self._model.start_multi_process_pool(target_devices)
+                logger.info(f"Multi-GPU pool started successfully")
+            else:
+                logger.info(f"Single GPU mode (multi_gpu={settings.embedding_multi_gpu}, gpus={gpu_count})")
+
+            logger.info(
+                f"Embedding model loaded on {target_device}. "
+                f"Dimensions: {self._model.get_sentence_embedding_dimension()}, "
+                f"Batch size: {settings.embedding_batch_size}"
+            )
 
     def _get_model(self) -> SentenceTransformer:
         """Get the embedding model, loading it if necessary."""
@@ -81,24 +118,44 @@ class EmbeddingService:
         return embedding.tolist()
 
     def embed_batch_sync(self, texts: Sequence[str]) -> list[list[float]]:
-        """Generate embeddings for multiple texts (synchronous)."""
+        """Generate embeddings for multiple texts (synchronous).
+
+        Uses multi-GPU pool if available, otherwise single GPU with batching.
+        """
         if not texts:
             return []
         model = self._get_model()
-        embeddings = model.encode(list(texts), convert_to_numpy=True)
+        texts_list = list(texts)
+
+        # Use multi-GPU pool if available
+        if self._pool is not None:
+            embeddings = model.encode_multi_process(
+                texts_list,
+                self._pool,
+                batch_size=settings.embedding_batch_size,
+            )
+        else:
+            # Single GPU with configured batch size
+            embeddings = model.encode(
+                texts_list,
+                convert_to_numpy=True,
+                batch_size=settings.embedding_batch_size,
+                show_progress_bar=len(texts_list) > 100,  # Show progress for large batches
+            )
+
         return embeddings.tolist()
 
     async def embed(self, text: str) -> list[float]:
         """Generate embedding for a single text (async)."""
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.embed_sync, text)
+        return await loop.run_in_executor(get_executor(), self.embed_sync, text)
 
     async def embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
         """Generate embeddings for multiple texts (async)."""
         if not texts:
             return []
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.embed_batch_sync, list(texts))
+        return await loop.run_in_executor(get_executor(), self.embed_batch_sync, list(texts))
 
 
 def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
@@ -128,6 +185,16 @@ def cosine_similarity_batch(
 def get_embedding_service() -> EmbeddingService:
     """Get the global embedding service (singleton)."""
     return EmbeddingService()
+
+
+def shutdown_embedding_service() -> None:
+    """Shutdown the embedding service and release GPU resources."""
+    service = get_embedding_service()
+    if service._pool is not None:
+        logger.info("Stopping multi-GPU pool...")
+        service._model.stop_multi_process_pool(service._pool)
+        service._pool = None
+        logger.info("Multi-GPU pool stopped")
 
 
 def preload_embedding_model() -> None:

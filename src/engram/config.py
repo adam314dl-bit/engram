@@ -76,6 +76,18 @@ class Settings(BaseSettings):
         default="",
         description="Query prefix for asymmetric embedding models (e.g., 'Instruct: ' for GigaEmbeddings)"
     )
+    embedding_batch_size: int = Field(
+        default=64,
+        description="Batch size for embedding generation (increase for H100/H200)"
+    )
+    embedding_multi_gpu: bool = Field(
+        default=False,
+        description="Use multiple GPUs for embedding (requires CUDA)"
+    )
+    embedding_gpu_count: int = Field(
+        default=1,
+        description="Number of GPUs to use for embedding (0=all available)"
+    )
 
     # Spreading Activation Parameters
     activation_decay: float = 0.85
@@ -183,11 +195,19 @@ def get_dev_settings() -> Settings:
 
 
 def get_prod_settings() -> Settings:
-    """Get production environment settings."""
+    """Get production environment settings.
+
+    Optimized for high-core servers with multiple GPUs (e.g., H100/H200).
+    """
     return Settings(
         embedding_model="ai-sage/Giga-Embeddings-instruct",
         embedding_dimensions=2048,
         embedding_query_prefix="Instruct: Найди релевантные факты для ответа на вопрос\nQuery: ",
+        embedding_batch_size=128,  # Larger batches for H100/H200
+        embedding_multi_gpu=True,  # Use all available GPUs
+        embedding_gpu_count=0,  # 0 = use all available
+        ingestion_max_concurrent=32,  # Higher parallelism for 128+ cores
+        llm_max_concurrent=32,  # Higher LLM concurrency
         reranker_enabled=True,
         bm25_lemmatize=True,
         bm25_remove_stopwords=True,
