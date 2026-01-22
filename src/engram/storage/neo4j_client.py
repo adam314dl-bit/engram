@@ -21,6 +21,21 @@ from engram.storage.schema import get_all_schema_queries
 logger = logging.getLogger(__name__)
 
 
+def escape_lucene_query(query: str) -> str:
+    """Escape special characters for Lucene fulltext search.
+
+    Lucene special characters: + - && || ! ( ) { } [ ] ^ " ~ * ? : \\ /
+    """
+    special_chars = r'+-&|!(){}[]^"~*?:\/'
+    escaped = []
+    for char in query:
+        if char in special_chars:
+            escaped.append(f"\\{char}")
+        else:
+            escaped.append(char)
+    return "".join(escaped)
+
+
 class Neo4jClient:
     """Async Neo4j client for Engram graph operations."""
 
@@ -452,6 +467,8 @@ class Neo4jClient:
         self, query_text: str, k: int = 20
     ) -> list[tuple[SemanticMemory, float]]:
         """Search semantic memories using full-text (BM25)."""
+        # Escape Lucene special characters to prevent query parsing errors
+        escaped_query = escape_lucene_query(query_text)
         query = """
         CALL db.index.fulltext.queryNodes('semantic_content', $query_text)
         YIELD node, score
@@ -461,7 +478,7 @@ class Neo4jClient:
         """
         results: list[tuple[SemanticMemory, float]] = []
         async with self.session() as session:
-            result = await session.run(query, query_text=query_text, k=k)
+            result = await session.run(query, query_text=escaped_query, k=k)
             async for record in result:
                 memory = SemanticMemory.from_dict(dict(record["node"]))
                 results.append((memory, record["score"]))
