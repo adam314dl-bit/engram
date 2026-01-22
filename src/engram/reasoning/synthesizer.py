@@ -198,7 +198,7 @@ class ResponseSynthesizer:
         self,
         query: str,
         retrieval: RetrievalResult,
-        temperature: float = 0.7,
+        temperature: float = 0.4,
     ) -> SynthesisResult:
         """
         Generate response using retrieved context.
