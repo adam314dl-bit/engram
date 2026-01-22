@@ -19,11 +19,17 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 - **Spreading Activation**: Brain-like associative retrieval through concept networks
 - **Hybrid Search**: Combines graph traversal, vector similarity, and BM25 with RRF fusion
 - **Cross-Encoder Reranking**: BGE-reranker-v2-m3 for improved retrieval precision
+- **MMR Diversity**: Maximal Marginal Relevance prevents redundant results
+- **Dynamic top_k**: Query complexity classification adjusts retrieval depth
 - **Russian NLP**: PyMorphy3 lemmatization and stopword removal for Russian content
+- **Transliteration**: Handles mixed Cyrillic/Latin content with query expansion
+- **Person Extraction**: Natasha NER extracts people, roles, and team affiliations
 - **ACT-R Memory Model**: Cognitive-inspired forgetting with base-level activation
 - **Contradiction Detection**: LLM-based detection and auto-resolution
 - **Source Attribution**: Shows document sources (title + URL) in responses
-- **Table Extraction**: Detects markdown tables, normalizes +/- to да/нет, creates searchable memories
+- **Table Extraction**: Multi-vector strategy with searchable summaries and raw tables
+- **List Extraction**: Structure-aware extraction of definitions, procedures, bullets
+- **Quality Filtering**: Chunk scoring and source weighting for cleaner retrieval
 - **Confluence Integration**: Extracts metadata from Confluence exports, strips headers
 - **Learning from Feedback**: Positive feedback strengthens memories, negative triggers re-reasoning
 - **Memory Consolidation**: Successful episodes crystallize into semantic memories
@@ -39,7 +45,8 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 | API | FastAPI |
 | Embeddings | sentence-transformers (local HuggingFace) |
 | Reranker | FlagEmbedding BGE-reranker-v2-m3 |
-| Russian NLP | PyMorphy3 |
+| Russian NLP | PyMorphy3, Natasha NER |
+| Transliteration | cyrtranslit |
 | LLM | OpenAI-compatible endpoint (remote) |
 
 ## Quick Start
@@ -374,6 +381,16 @@ uv run ruff check src/engram
 - [x] LLM-based table enrichment (descriptions, key facts)
 - [x] Automatic memory creation from tables
 - [x] Tables processed separately, removed from text before LLM
+
+**v3.3 Retrieval Quality:**
+- [x] Quality filtering with chunk scoring and source weights
+- [x] MMR (Maximal Marginal Relevance) for result diversity
+- [x] Dynamic top_k based on query complexity classification
+- [x] Reranker integration in hybrid search pipeline
+- [x] Structure-aware list extraction (definition, procedure, bullet)
+- [x] Multi-vector table retrieval (summary for search, raw for generation)
+- [x] Russian/Latin transliteration with query expansion
+- [x] Person/role extraction using Natasha NER
 
 ### Planned
 
