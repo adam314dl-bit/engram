@@ -394,7 +394,9 @@ uv run ruff check src/engram
 - [x] Person/role extraction using Natasha NER
 
 **v3.4 Response & Extraction Improvements:**
-- [x] Current date context in response synthesis for time-aware answers
+- [x] Current date context in system prompt for time-aware answers
+- [x] Lower synthesis temperature (0.4) for more factual RAG responses
+- [x] Table enricher merges surrounding context into unified summary
 - [x] PyMorphy3 validation for person extraction (reduces false positives)
 - [x] Reranker preloading at startup (faster first query)
 - [x] Reranker single GPU mode (avoids conflicts with vLLM on multi-GPU setups)
