@@ -49,10 +49,15 @@ MEMORY|содержание|тип|концепты|важность
 Концепты: список через запятую
 Важность: 1-10
 
+Также выведи упомянутых людей (только настоящие имена людей, НЕ должности и НЕ общие слова):
+PERSON|имя|роль|команда
+
 Пример:
 MEMORY|Docker использует контейнеры для изоляции приложений|fact|docker,контейнер|8
 MEMORY|Команда docker system prune освобождает место на диске|procedure|docker,диск|7
 MEMORY|Kubernetes требует Docker или containerd для работы|relationship|kubernetes,docker|9
+PERSON|Иван Петров|тимлид|backend
+PERSON|Мария Сидорова|разработчик|frontend
 """ + PROMPT_ENDING_RU
 
 

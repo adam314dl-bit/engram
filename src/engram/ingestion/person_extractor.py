@@ -2,6 +2,8 @@
 
 Extracts people, their roles, and team affiliations from documents
 to answer queries like "кто тимлид?" or "чем занимается Артур?".
+
+v3.3.1: Added pymorphy3 validation to filter out false positives.
 """
 
 from __future__ import annotations
@@ -10,6 +12,8 @@ import logging
 import re
 from dataclasses import dataclass, field
 from enum import Enum
+
+from engram.preprocessing.russian import get_morph_analyzer
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +33,44 @@ try:
 except ImportError:
     HAS_NATASHA = False
     logger.info("Natasha not available, using regex-based person extraction")
+
+
+def is_valid_person_name(name: str, min_score: float = 0.5) -> bool:
+    """
+    Validate that a string is likely a person name using morphological analysis.
+
+    Uses pymorphy3 grammemes to check if word is tagged as:
+    - Name (first name)
+    - Surn (surname)
+    - Patr (patronymic)
+
+    Also checks the parse score to filter out low-confidence matches
+    (e.g., "Тимлид" being parsed as form of rare name "Тимлида").
+
+    Args:
+        name: Candidate name string
+        min_score: Minimum pymorphy3 parse score to accept (default 0.5)
+
+    Returns:
+        True if any word in name is morphologically tagged as a proper name
+        with sufficient confidence
+    """
+    morph = get_morph_analyzer()
+    words = name.strip().split()
+
+    if not words:
+        return False
+
+    name_tags = {"Name", "Surn", "Patr"}
+
+    for word in words:
+        parses = morph.parse(word)
+        for parse in parses:
+            # Check both that it's a name tag AND that the score is high enough
+            if parse.tag.grammemes & name_tags and parse.score >= min_score:
+                return True
+
+    return False
 
 
 class PersonQueryType(str, Enum):
@@ -315,7 +357,7 @@ class PersonExtractor:
         )
 
     def _extract_with_natasha(self, text: str) -> list[str]:
-        """Extract person names using Natasha NER."""
+        """Extract person names using Natasha NER with pymorphy3 validation."""
         if not self.use_natasha or not self._segmenter:
             return []
 
@@ -325,13 +367,18 @@ class PersonExtractor:
             doc.tag_morph(self._morph_tagger)
             doc.tag_ner(self._ner_tagger)
 
-            # Extract PER (person) entities
+            # Extract PER (person) entities with validation
             persons = []
             for span in doc.spans:
                 if span.type == PER:
                     # Normalize the span text
                     span.normalize(self._morph_vocab)
-                    persons.append(span.normal or span.text)
+                    name = span.normal or span.text
+                    # Validate using pymorphy3 grammemes
+                    if is_valid_person_name(name):
+                        persons.append(name)
+                    else:
+                        logger.debug(f"Filtered false positive name from Natasha: {name}")
 
             return persons
         except Exception as e:
@@ -339,7 +386,7 @@ class PersonExtractor:
             return []
 
     def _extract_with_regex(self, text: str) -> list[tuple[str, str]]:
-        """Extract person-role pairs using regex patterns."""
+        """Extract person-role pairs using regex patterns with pymorphy3 validation."""
         results: list[tuple[str, str]] = []
 
         for pattern in ROLE_PATTERNS:
@@ -353,7 +400,11 @@ class PersonExtractor:
                     # Swap if role appears before name in pattern
                     if re.match(r"(тимлид|лид|руководитель)", groups[0], re.IGNORECASE):
                         name, role = groups[1], groups[0]
-                    results.append((name.strip(), role.strip().lower()))
+                    # Validate using pymorphy3 grammemes
+                    if is_valid_person_name(name):
+                        results.append((name.strip(), role.strip().lower()))
+                    else:
+                        logger.debug(f"Filtered false positive name from regex: {name}")
 
         return results
 

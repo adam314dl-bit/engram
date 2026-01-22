@@ -36,6 +36,11 @@ class MemoryExtractionResult:
 
     memories: list[SemanticMemory]
     concepts: list[Concept]  # Concepts referenced by memories
+    persons: list[tuple[str, str | None, str | None]] = None  # (name, role, team)
+
+    def __post_init__(self) -> None:
+        if self.persons is None:
+            self.persons = []
 
 
 class MemoryExtractor:
@@ -89,55 +94,65 @@ class MemoryExtractor:
         text: str,
         doc_id: str | None,
     ) -> MemoryExtractionResult:
-        """Parse MEMORY|content|type|concepts|importance lines."""
+        """Parse MEMORY|... and PERSON|... lines."""
         memories: list[SemanticMemory] = []
         all_concepts: dict[str, Concept] = {}  # name -> Concept
+        persons: list[tuple[str, str | None, str | None]] = []
 
         for line in text.split("\n"):
             line = line.strip()
-            if not line.startswith("MEMORY|"):
-                continue
 
-            parts = line.split("|")
-            if len(parts) < 4:
-                continue
+            if line.startswith("MEMORY|"):
+                parts = line.split("|")
+                if len(parts) < 4:
+                    continue
 
-            content = parts[1].strip()
-            if not content or len(content) < 10:
-                continue
+                content = parts[1].strip()
+                if not content or len(content) < 10:
+                    continue
 
-            memory_type = validate_memory_type(parts[2]) if len(parts) > 2 else "fact"
+                memory_type = validate_memory_type(parts[2]) if len(parts) > 2 else "fact"
 
-            # Parse concepts (comma-separated)
-            concept_ids: list[str] = []
-            if len(parts) > 3:
-                concept_names = [c.strip() for c in parts[3].split(",")]
-                for name in concept_names:
-                    normalized = normalize_concept_name(name)
-                    if not normalized:
-                        continue
+                # Parse concepts (comma-separated)
+                concept_ids: list[str] = []
+                if len(parts) > 3:
+                    concept_names = [c.strip() for c in parts[3].split(",")]
+                    for name in concept_names:
+                        normalized = normalize_concept_name(name)
+                        if not normalized:
+                            continue
 
-                    if normalized not in all_concepts:
-                        concept = self.concept_extractor.get_or_create_concept(normalized)
-                        all_concepts[normalized] = concept
+                        if normalized not in all_concepts:
+                            concept = self.concept_extractor.get_or_create_concept(normalized)
+                            all_concepts[normalized] = concept
 
-                    concept_ids.append(all_concepts[normalized].id)
+                        concept_ids.append(all_concepts[normalized].id)
 
-            importance = validate_importance(parts[4]) if len(parts) > 4 else 5.0
+                importance = validate_importance(parts[4]) if len(parts) > 4 else 5.0
 
-            memory = SemanticMemory(
-                id=generate_id(),
-                content=content,
-                concept_ids=concept_ids,
-                source_doc_ids=[doc_id] if doc_id else [],
-                memory_type=memory_type,
-                importance=importance,
-            )
-            memories.append(memory)
+                memory = SemanticMemory(
+                    id=generate_id(),
+                    content=content,
+                    concept_ids=concept_ids,
+                    source_doc_ids=[doc_id] if doc_id else [],
+                    memory_type=memory_type,
+                    importance=importance,
+                )
+                memories.append(memory)
+
+            elif line.startswith("PERSON|"):
+                parts = line.split("|")
+                if len(parts) >= 2:
+                    name = parts[1].strip()
+                    role = parts[2].strip() if len(parts) > 2 and parts[2].strip() else None
+                    team = parts[3].strip() if len(parts) > 3 and parts[3].strip() else None
+                    if name and len(name) >= 2:  # Skip empty or single-char
+                        persons.append((name, role, team))
 
         return MemoryExtractionResult(
             memories=memories,
             concepts=list(all_concepts.values()),
+            persons=persons,
         )
 
     def _parse_memories(
@@ -216,6 +231,7 @@ class MemoryExtractor:
         return MemoryExtractionResult(
             memories=memory_result.memories,
             concepts=list(all_concepts.values()),
+            persons=memory_result.persons,
         )
 
 

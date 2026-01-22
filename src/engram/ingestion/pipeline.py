@@ -173,12 +173,13 @@ class IngestionPipeline:
 
                 logger.debug(f"Created {len(list_memories)} memories from lists")
 
-            # --- Phase 1.6 (v3.3): Extract persons ---
+            # --- Phase 1.6 (v3.3): Extract persons using regex/Natasha as backup ---
+            # Regex extraction runs first, LLM results (from memory extraction) will merge later
             person_result = self.person_extractor.extract(text_content, document.id)
             person_memories: list[SemanticMemory] = []
 
             if person_result.persons:
-                logger.debug(f"Found {len(person_result.persons)} persons in: {document.title}")
+                logger.debug(f"Found {len(person_result.persons)} persons via regex/Natasha in: {document.title}")
 
                 for person in person_result.persons:
                     # Create memory for person with their role
@@ -203,7 +204,7 @@ class IngestionPipeline:
                             },
                         ))
 
-                logger.debug(f"Created {len(person_memories)} memories from persons")
+                logger.debug(f"Created {len(person_memories)} memories from regex/Natasha persons")
 
             # --- Phase 2: Extract concepts and memories from text ---
             logger.debug(f"Extracting concepts and memories from: {document.title}")
@@ -225,6 +226,43 @@ class IngestionPipeline:
                     all_concepts[c.name] = c
 
             concepts = list(all_concepts.values())
+
+            # --- Phase 2.1 (v3.3.1): Merge LLM-extracted persons with regex/Natasha ---
+            # LLM persons (from PERSON| lines in memory extraction) take priority
+            if memory_result.persons:
+                logger.debug(f"Found {len(memory_result.persons)} persons via LLM in: {document.title}")
+                # Track existing person names to avoid duplicates
+                existing_names = {
+                    m.metadata.get("person_name", "").lower()
+                    for m in person_memories
+                    if m.metadata
+                }
+
+                for name, role, team in memory_result.persons:
+                    if name.lower() not in existing_names:
+                        if role:  # Only create memory if we have a role
+                            content = f"{name} — {role}"
+                            if team:
+                                content += f" (команда {team})"
+
+                            person_memories.append(SemanticMemory(
+                                id=generate_id(),
+                                content=content,
+                                concept_ids=[],
+                                source_doc_ids=[document.id],
+                                memory_type="fact",
+                                importance=6.0,
+                                metadata={
+                                    "source_type": "person",
+                                    "person_name": name,
+                                    "person_variants": [],  # LLM doesn't provide variants
+                                    "person_role": role,
+                                    "person_team": team,
+                                },
+                            ))
+                            existing_names.add(name.lower())
+
+                logger.debug(f"Total person memories after LLM merge: {len(person_memories)}")
 
             # Combine all memories: text + table + list + person
             memories = memory_result.memories + table_memories + list_memories + person_memories
