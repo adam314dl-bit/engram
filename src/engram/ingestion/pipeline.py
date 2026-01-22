@@ -1,24 +1,25 @@
 """Ingestion pipeline - orchestrates document processing.
 
+v3.6: Combined extraction - 1 LLM call per document (3x faster than v3.5).
+      Unified prompt extracts concepts, memories, relations, and persons together.
+
 v3.5: Simplified pipeline - removed table/list extraction (handled by LLM directly).
       Added batch Neo4j writes for 30-40% speedup.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import asyncio
 
 from engram.config import settings
-from engram.ingestion.concept_extractor import ConceptExtractor
-from engram.ingestion.memory_extractor import MemoryExtractor
 from engram.ingestion.parser import DocumentParser, generate_id
 from engram.ingestion.person_extractor import PersonExtractor
-from engram.ingestion.relationship_extractor import RelationshipExtractor
+from engram.ingestion.unified_extractor import UnifiedExtractor
 from engram.models import Concept, Document, SemanticMemory
 from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
 from engram.retrieval.quality_filter import is_quality_chunk
@@ -42,37 +43,28 @@ class IngestionPipeline:
     """
     Pipeline for ingesting documents into Engram.
 
-    v3.5 Simplified flow (3 LLM calls per document):
+    v3.6 Combined extraction (1 LLM call per document):
     1. Parse document
-    2. Extract persons (regex/Natasha - no LLM)
-    3. Extract concepts (1 LLM call)
-    4. Extract memories (1 LLM call - handles tables/lists)
-    5. Extract relationships (1 LLM call)
-    6. Apply quality filtering
-    7. Generate embeddings (batch)
-    8. Store in Neo4j (batch)
+    2. Extract persons (regex/Natasha - backup, no LLM)
+    3. Unified extraction (1 LLM call - concepts, memories, relations, persons)
+    4. Merge persons from regex and LLM
+    5. Apply quality filtering
+    6. Generate embeddings (batch)
+    7. Store in Neo4j (batch)
     """
 
     def __init__(
         self,
         neo4j_client: Neo4jClient,
         parser: DocumentParser | None = None,
-        concept_extractor: ConceptExtractor | None = None,
-        memory_extractor: MemoryExtractor | None = None,
-        relationship_extractor: RelationshipExtractor | None = None,
+        unified_extractor: UnifiedExtractor | None = None,
         embedding_service: EmbeddingService | None = None,
         person_extractor: PersonExtractor | None = None,
     ) -> None:
         self.db = neo4j_client
         self.parser = parser or DocumentParser()
-        self.concept_extractor = concept_extractor or ConceptExtractor()
-        self.memory_extractor = memory_extractor or MemoryExtractor(
-            concept_extractor=self.concept_extractor
-        )
+        self.unified_extractor = unified_extractor or UnifiedExtractor()
         self.embeddings = embedding_service or get_embedding_service()
-        self.relationship_extractor = relationship_extractor or RelationshipExtractor(
-            embedding_service=self.embeddings
-        )
         self.person_extractor = person_extractor or PersonExtractor()
 
     async def ingest_file(self, path: Path | str) -> IngestionResult:
@@ -94,8 +86,8 @@ class IngestionPipeline:
     async def ingest_document(self, document: Document) -> IngestionResult:
         """Ingest a parsed document.
 
-        v3.5 Simplified: 3 LLM calls (concept, memory, relationship).
-        Tables/lists are handled by the memory extraction prompt.
+        v3.6 Combined: 1 LLM call (unified extraction).
+        All extraction tasks in single prompt for maximum efficiency.
         """
         errors: list[str] = []
         concepts_created = 0
@@ -109,7 +101,7 @@ class IngestionPipeline:
 
             text_content = document.content
 
-            # --- Phase 1: Extract persons (regex/Natasha - no LLM) ---
+            # --- Phase 1: Extract persons (regex/Natasha - backup, no LLM) ---
             person_result = self.person_extractor.extract(text_content, document.id)
             person_memories: list[SemanticMemory] = []
 
@@ -138,37 +130,27 @@ class IngestionPipeline:
                             },
                         ))
 
-            # --- Phase 2: Extract concepts and memories (2 parallel LLM calls) ---
-            logger.debug(f"Extracting concepts and memories from: {document.title}")
-            concept_result, memory_result = await asyncio.gather(
-                self.concept_extractor.extract(text_content),
-                self.memory_extractor.extract(
-                    text_content,
-                    document.title,
-                    document.id,
-                ),
+            # --- Phase 2: Unified extraction (1 LLM call) ---
+            logger.debug(f"Unified extraction from: {document.title}")
+            extraction_result = await self.unified_extractor.extract(
+                text_content,
+                document.title,
+                document.id,
             )
 
-            # Merge concepts from both extractors
-            all_concepts: dict[str, Concept] = {}
-            for c in concept_result.concepts:
-                all_concepts[c.name] = c
-            for c in memory_result.concepts:
-                if c.name not in all_concepts:
-                    all_concepts[c.name] = c
-
-            concepts = list(all_concepts.values())
+            concepts = extraction_result.concepts
+            relations = extraction_result.relations
 
             # Merge LLM-extracted persons with regex/Natasha
-            if memory_result.persons:
-                logger.debug(f"Found {len(memory_result.persons)} persons via LLM in: {document.title}")
+            if extraction_result.persons:
+                logger.debug(f"Found {len(extraction_result.persons)} persons via LLM in: {document.title}")
                 existing_names = {
                     m.metadata.get("person_name", "").lower()
                     for m in person_memories
                     if m.metadata
                 }
 
-                for name, role, team in memory_result.persons:
+                for name, role, team in extraction_result.persons:
                     if name.lower() not in existing_names:
                         if role:
                             content = f"{name} — {role}"
@@ -193,7 +175,7 @@ class IngestionPipeline:
                             existing_names.add(name.lower())
 
             # Combine memories: text + person
-            memories = memory_result.memories + person_memories
+            memories = extraction_result.memories + person_memories
 
             # Apply quality filtering to text memories
             filtered_memories: list[SemanticMemory] = []
@@ -209,18 +191,7 @@ class IngestionPipeline:
             memories = filtered_memories
             logger.debug(f"After quality filtering: {len(memories)} memories")
 
-            # --- Phase 3: Extract relationships (1 LLM call) ---
-            logger.debug(f"Extracting relationships for {len(concepts)} concepts")
-            relations = await self.relationship_extractor.extract_relationships(
-                document.content, concepts
-            )
-
-            if not relations:
-                relations = await self.relationship_extractor.enhance_existing_relations(
-                    concept_result.relations, concepts
-                )
-
-            # --- Phase 4: Generate embeddings (combined batch) ---
+            # --- Phase 3: Generate embeddings (combined batch) ---
             all_texts: list[str] = []
             concept_count = len(concepts)
 
@@ -245,7 +216,7 @@ class IngestionPipeline:
                 for i, memory in enumerate(memories):
                     memory.embedding = all_embeddings[concept_count + i]
 
-            # --- Phase 5: Save to Neo4j (batch) ---
+            # --- Phase 4: Save to Neo4j (batch) ---
             # Save concepts batch
             if concepts:
                 await self.db.save_concepts_batch(concepts)
