@@ -220,11 +220,11 @@ class ResponseSynthesizer:
         )
 
         # Build prompt
-        prompt = self._build_prompt(query, memories_context, episodes_context)
+        system_prompt, user_prompt = self._build_prompt(query, memories_context, episodes_context)
 
         # Generate response
         logger.debug(f"Synthesizing response for: {query[:50]}...")
-        response = await self.llm.generate(prompt, temperature=temperature)
+        response = await self.llm.generate(user_prompt, system_prompt=system_prompt, temperature=temperature)
 
         # Extract behavior pattern
         behavior = extract_behavior(response, query)
@@ -250,15 +250,16 @@ class ResponseSynthesizer:
         query: str,
         memories_context: str,
         episodes_context: str,
-    ) -> str:
-        """Build the synthesis prompt."""
+    ) -> tuple[str, str]:
+        """Build the synthesis prompt. Returns (system_prompt, user_prompt)."""
         # Format current date in Russian
         now = datetime.now()
         current_date = f"{now.day} {RUSSIAN_MONTHS[now.month]} {now.year} года"
 
-        return f"""Текущая дата: {current_date}
+        system_prompt = f"""Ты — ассистент, отвечающий на вопросы на основе предоставленного контекста.
+Сегодня: {current_date}. Используй эту дату для вопросов о времени, сроках, актуальности и любых временных расчётов."""
 
-Вопрос пользователя: {query}
+        user_prompt = f"""Вопрос пользователя: {query}
 
 Релевантные знания:
 {memories_context}
@@ -270,13 +271,15 @@ class ResponseSynthesizer:
 1. Дай полезный ответ на основе предоставленных знаний.
 2. Если это вопрос "что такое X" — объясни концепцию.
 3. Если это проблема — предложи решение пошагово.
-4. Упомяни если уверенность в информации низкая.
-5. Не выдумывай информацию, которой нет в контексте.
+4. Используй текущую дату для вопросов о времени и актуальности информации.
+5. Упомяни если уверенность в информации низкая.
+6. Не выдумывай информацию, которой нет в контексте.
 
 В конце ответа добавь строку в формате:
 СТРАТЕГИЯ: [название_поведения] — [краткое описание твоего подхода к ответу]
 
 Ответ:"""
+        return system_prompt, user_prompt
 
     def _clean_answer(self, response: str) -> str:
         """Remove strategy line from response for clean answer."""

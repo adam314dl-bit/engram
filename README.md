@@ -23,7 +23,7 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 - **Dynamic top_k**: Query complexity classification adjusts retrieval depth
 - **Russian NLP**: PyMorphy3 lemmatization and stopword removal for Russian content
 - **Transliteration**: Handles mixed Cyrillic/Latin content with query expansion
-- **Person Extraction**: Natasha NER extracts people, roles, and team affiliations
+- **Person Extraction**: Natasha NER with PyMorphy3 validation extracts people, roles, and team affiliations
 - **ACT-R Memory Model**: Cognitive-inspired forgetting with base-level activation
 - **Contradiction Detection**: LLM-based detection and auto-resolution
 - **Source Attribution**: Shows document sources (title + URL) in responses
@@ -31,6 +31,7 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 - **List Extraction**: Structure-aware extraction of definitions, procedures, bullets
 - **Quality Filtering**: Chunk scoring and source weighting for cleaner retrieval
 - **Confluence Integration**: Extracts metadata from Confluence exports, strips headers
+- **Time-Aware Responses**: Current date context enables relevant temporal reasoning
 - **Learning from Feedback**: Positive feedback strengthens memories, negative triggers re-reasoning
 - **Memory Consolidation**: Successful episodes crystallize into semantic memories
 - **OpenAI-Compatible API**: Works with Open WebUI and other clients
@@ -391,6 +392,12 @@ uv run ruff check src/engram
 - [x] Multi-vector table retrieval (summary for search, raw for generation)
 - [x] Russian/Latin transliteration with query expansion
 - [x] Person/role extraction using Natasha NER
+
+**v3.4 Response & Extraction Improvements:**
+- [x] Current date context in response synthesis for time-aware answers
+- [x] PyMorphy3 validation for person extraction (reduces false positives)
+- [x] Reranker preloading at startup (faster first query)
+- [x] Reranker single GPU mode (avoids conflicts with vLLM on multi-GPU setups)
 
 ### Planned
 
