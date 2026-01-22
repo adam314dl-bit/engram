@@ -54,15 +54,18 @@ class MemorySelector:
 
     Takes a large pool of candidate memories and uses LLM to select
     which ones actually contain information needed for the query.
+
+    Note: Small LLMs (like qwen3:8b) struggle with long prompts,
+    so we process candidates in batches.
     """
 
     def __init__(
         self,
         llm_client: LLMClient | None = None,
-        max_candidates_per_batch: int = 50,
+        batch_size: int = 8,  # Small batches for local LLMs
     ) -> None:
         self.llm = llm_client or get_llm_client()
-        self.max_candidates_per_batch = max_candidates_per_batch
+        self.batch_size = batch_size
 
     async def select(
         self,
@@ -92,35 +95,44 @@ class MemorySelector:
         candidates = candidates[:max_candidates]
         all_ids = [sm.memory.id for sm in candidates]
 
-        # Format memories for LLM
-        memories_list = self._format_memories(candidates)
+        # Process in batches (small LLMs struggle with long prompts)
+        selected_ids: list[str] = []
+        for i in range(0, len(candidates), self.batch_size):
+            batch = candidates[i:i + self.batch_size]
+            batch_ids = [sm.memory.id for sm in batch]
 
-        # Build prompt
-        prompt = MEMORY_SELECTION_PROMPT.format(
-            query=query,
-            memories_list=memories_list,
-        )
+            # Format memories for LLM
+            memories_list = self._format_memories(batch)
 
-        # Call LLM
-        try:
-            response = await self.llm.generate(
-                prompt,
-                system_prompt="Ты отбираешь релевантные знания. Выводи только ID.",
-                temperature=0.1,  # Low temperature for deterministic selection
-                max_tokens=500,
-            )
-        except Exception as e:
-            logger.warning(f"LLM selection failed: {e}, returning top candidates")
-            # Fallback: return top 10 by score
-            top_ids = [sm.memory.id for sm in candidates[:10]]
-            return SelectionResult(
-                selected_ids=top_ids,
-                all_candidate_ids=all_ids,
-                selection_ratio=len(top_ids) / len(all_ids) if all_ids else 0.0,
+            # Build prompt
+            prompt = MEMORY_SELECTION_PROMPT.format(
+                query=query,
+                memories_list=memories_list,
             )
 
-        # Parse selected IDs
-        selected_ids = self._parse_selected_ids(response, all_ids)
+            logger.debug(f"Selection batch {i//self.batch_size + 1}: {len(batch)} memories, {len(prompt)} chars")
+
+            # Call LLM
+            try:
+                response = await self.llm.generate(
+                    prompt,
+                    system_prompt="Ты отбираешь релевантные знания. Выводи только ID.",
+                    temperature=0.1,  # Low temperature for deterministic selection
+                    max_tokens=500,
+                )
+                logger.debug(f"LLM batch response: {response[:200]}")
+            except Exception as e:
+                logger.warning(f"LLM selection failed for batch: {e}")
+                continue
+
+            # Parse selected IDs from this batch
+            batch_selected = self._parse_selected_ids(response, batch_ids)
+            selected_ids.extend(batch_selected)
+
+        # Fallback if nothing selected
+        if not selected_ids:
+            logger.warning("LLM selected nothing, falling back to top candidates by score")
+            selected_ids = [sm.memory.id for sm in candidates[:5]]
 
         logger.info(
             f"LLM selected {len(selected_ids)}/{len(candidates)} memories "
@@ -163,9 +175,10 @@ class MemorySelector:
             # Fallback: look for mem_ patterns anywhere in response
             ids_str = response
 
-        # Extract all mem_xxx patterns (alphanumeric IDs)
-        id_pattern = re.compile(r"mem_[a-zA-Z0-9]+")
-        found_ids = id_pattern.findall(ids_str)
+        # Extract all UUID patterns (with or without mem_ prefix)
+        # UUID format: 8-4-4-4-12 hex digits
+        uuid_pattern = re.compile(r"(?:mem_)?([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})", re.IGNORECASE)
+        found_ids = uuid_pattern.findall(ids_str)
 
         # Validate and deduplicate
         seen = set()

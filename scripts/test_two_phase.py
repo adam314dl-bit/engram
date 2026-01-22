@@ -18,13 +18,6 @@ async def test_two_phase_retrieval():
     await db.connect()
 
     try:
-        # Check if we have any data
-        stats = await db.get_stats()
-        logger.info(f"Database stats: {stats}")
-
-        if stats.get("semantic_memories", 0) == 0:
-            logger.warning("No memories in database. Run ingestion first.")
-            return
 
         # Create reasoning pipeline
         pipeline = ReasoningPipeline(db=db)
