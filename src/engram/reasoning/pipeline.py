@@ -84,7 +84,7 @@ class ReasoningPipeline:
         query: str,
         top_k_memories: int = 10,
         top_k_episodes: int = 3,
-        temperature: float = 0.5,
+        temperature: float = 0.4,
         force_include_nodes: list[str] | None = None,
         force_exclude_nodes: list[str] | None = None,
     ) -> ReasoningResult:
