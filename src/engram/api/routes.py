@@ -45,7 +45,7 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = False
 
     # Engram-specific options
-    top_k_memories: int = Field(default=5, ge=1, le=50)
+    top_k_memories: int = Field(default=10, ge=1, le=50)
     top_k_episodes: int = Field(default=3, ge=0, le=10)
 
     # Debug options
