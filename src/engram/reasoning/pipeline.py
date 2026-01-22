@@ -1,15 +1,20 @@
 """Complete reasoning pipeline orchestrating retrieval, synthesis, and episode storage.
 
 This is the main entry point for the reasoning system.
+
+Supports two modes:
+1. Standard mode: Retrieve memories -> Synthesize response
+2. Two-phase mode: Retrieve candidates -> LLM select -> Fetch documents -> Synthesize
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from engram.ingestion.llm_client import LLMClient, get_llm_client
-from engram.models import EpisodicMemory
+from engram.models import Document, EpisodicMemory
 from engram.reasoning.episode_manager import EpisodeManager
 from engram.reasoning.re_reasoning import ReReasoner, ReReasoningResult
+from engram.reasoning.selector import MemorySelector, SelectionResult
 from engram.reasoning.synthesizer import ResponseSynthesizer, SynthesisResult
 from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
 from engram.retrieval.pipeline import RetrievalPipeline, RetrievalResult
@@ -36,6 +41,10 @@ class ReasoningResult:
 
     # Metadata
     confidence: float
+
+    # Two-phase retrieval info (optional)
+    selection_result: SelectionResult | None = None
+    source_documents: list[Document] = field(default_factory=list)
 
     @property
     def episode_id(self) -> str:
@@ -73,6 +82,7 @@ class ReasoningPipeline:
             embedding_service=self.embeddings,
         )
         self.synthesizer = ResponseSynthesizer(llm_client=self.llm)
+        self.selector = MemorySelector(llm_client=self.llm)
         self.episode_manager = EpisodeManager(
             db=db,
             embedding_service=self.embeddings,
@@ -174,6 +184,90 @@ class ReasoningPipeline:
             confidence=synthesis.confidence,
         )
 
+    async def reason_with_documents(
+        self,
+        query: str,
+        top_k_candidates: int = 100,
+        temperature: float = 0.4,
+    ) -> ReasoningResult:
+        """
+        Execute two-phase retrieval with full document context.
+
+        Flow:
+        1. Retrieve 100+ memory summaries (candidates)
+        2. LLM selects which memories have needed info
+        3. Fetch full source documents for selected memories
+        4. Synthesize response using full documents
+
+        Args:
+            query: User query
+            top_k_candidates: Number of candidates to retrieve (default 100)
+            temperature: LLM temperature for synthesis
+
+        Returns:
+            ReasoningResult with answer, documents, and selection info
+        """
+        logger.info(f"Two-phase reasoning for query: {query[:50]}...")
+
+        # 1. Retrieve many candidates (summaries only)
+        retrieval_result = await self.retrieval.retrieve_candidates(
+            query=query,
+            top_k_memories=top_k_candidates,
+        )
+
+        logger.debug(f"Retrieved {len(retrieval_result.memories)} candidates")
+
+        # 2. LLM selects relevant memories
+        selection_result = await self.selector.select(
+            query=query,
+            candidates=retrieval_result.memories,
+            max_candidates=top_k_candidates,
+        )
+
+        logger.debug(
+            f"LLM selected {len(selection_result.selected_ids)} memories "
+            f"({selection_result.selection_ratio:.1%})"
+        )
+
+        # 3. Fetch full source documents for selected memories
+        source_documents: list[Document] = []
+        if selection_result.selected_ids:
+            source_documents = await self.db.get_source_documents_for_memories(
+                memory_ids=selection_result.selected_ids
+            )
+            logger.debug(f"Fetched {len(source_documents)} source documents")
+
+        # 4. Synthesize response using full documents
+        synthesis = await self.synthesizer.synthesize_from_documents(
+            query=query,
+            documents=source_documents,
+            retrieval=retrieval_result,
+            temperature=temperature,
+        )
+
+        logger.debug(f"Synthesized response with behavior: {synthesis.behavior.name}")
+
+        # 5. Create episode
+        episode = await self.episode_manager.create_episode(
+            synthesis=synthesis,
+        )
+
+        logger.info(
+            f"Two-phase reasoning complete: {episode.behavior_name} "
+            f"(confidence: {synthesis.confidence:.0%}, "
+            f"docs: {len(source_documents)})"
+        )
+
+        return ReasoningResult(
+            answer=synthesis.answer,
+            episode=episode,
+            retrieval=retrieval_result,
+            synthesis=synthesis,
+            confidence=synthesis.confidence,
+            selection_result=selection_result,
+            source_documents=source_documents,
+        )
+
     async def re_reason(
         self,
         episode_id: str,
@@ -236,3 +330,21 @@ async def reason(
     """Convenience function for reasoning."""
     pipeline = ReasoningPipeline(db=db)
     return await pipeline.reason(query=query, top_k_memories=top_k)
+
+
+async def reason_with_documents(
+    db: Neo4jClient,
+    query: str,
+    top_k_candidates: int = 100,
+) -> ReasoningResult:
+    """
+    Convenience function for two-phase reasoning with documents.
+
+    Uses LLM selection to pick relevant memories from a large candidate pool,
+    then fetches full source documents for context.
+    """
+    pipeline = ReasoningPipeline(db=db)
+    return await pipeline.reason_with_documents(
+        query=query,
+        top_k_candidates=top_k_candidates,
+    )

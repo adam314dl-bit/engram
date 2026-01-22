@@ -43,19 +43,22 @@ MEMORY_EXTRACTION_PROMPT = """Извлеки знания из этого док
 {content}
 
 Выведи 5-15 единиц знаний, по одной на строку:
-MEMORY|содержание|тип|концепты|важность
+MEMORY|краткое_описание|ключевые_слова|тип|концепты|важность
 
-Типы: fact, procedure, relationship
-Концепты: список через запятую
-Важность: 1-10
+Формат:
+- краткое_описание: 1-2 предложения о том, какая информация содержится (НЕ сама информация, а её описание)
+- ключевые_слова: термины, сущности, названия для поиска (через запятую)
+- тип: fact, procedure, relationship
+- концепты: связанные концепции через запятую
+- важность: 1-10
 
 Также выведи упомянутых людей (только настоящие имена людей, НЕ должности и НЕ общие слова):
 PERSON|имя|роль|команда
 
 Пример:
-MEMORY|Docker использует контейнеры для изоляции приложений|fact|docker,контейнер|8
-MEMORY|Команда docker system prune освобождает место на диске|procedure|docker,диск|7
-MEMORY|Kubernetes требует Docker или containerd для работы|relationship|kubernetes,docker|9
+MEMORY|Описание работы Docker с контейнерами и изоляцией приложений|docker, контейнер, изоляция, виртуализация|fact|docker,контейнер|8
+MEMORY|Инструкция по очистке дискового пространства в Docker|docker system prune, очистка диска, освобождение места|procedure|docker,диск|7
+MEMORY|Информация о зависимости Kubernetes от container runtime|kubernetes, docker, containerd, runtime, зависимость|relationship|kubernetes,docker|9
 PERSON|Иван Петров|тимлид|backend
 PERSON|Мария Сидорова|разработчик|frontend
 """ + PROMPT_ENDING_RU

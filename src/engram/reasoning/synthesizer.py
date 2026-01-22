@@ -20,7 +20,7 @@ RUSSIAN_MONTHS = {
 }
 
 from engram.ingestion.llm_client import LLMClient, get_llm_client
-from engram.models import EpisodicMemory, SemanticMemory
+from engram.models import Document, EpisodicMemory, SemanticMemory
 from engram.retrieval.hybrid_search import ScoredEpisode, ScoredMemory
 from engram.retrieval.pipeline import RetrievalResult
 
@@ -70,6 +70,35 @@ def format_memories_context(memories: list[ScoredMemory], max_memories: int = 10
             lines.append(f"{i}. [Связь]{confidence}: {memory.content}")
         else:
             lines.append(f"{i}. {memory.content}")
+
+    return "\n".join(lines)
+
+
+def format_documents_context(documents: list[Document], max_chars: int = 12000) -> str:
+    """Format source documents for LLM context."""
+    if not documents:
+        return "Нет релевантных документов."
+
+    lines = []
+    total_chars = 0
+
+    for i, doc in enumerate(documents, 1):
+        # Add document header
+        header = f"\n=== Документ {i}: {doc.title} ===\n"
+        content = doc.content
+
+        # Check if we'd exceed limit
+        if total_chars + len(header) + len(content) > max_chars:
+            # Truncate content to fit
+            remaining = max_chars - total_chars - len(header) - 100
+            if remaining > 500:
+                content = content[:remaining] + "\n[... документ сокращён ...]"
+            else:
+                break
+
+        lines.append(header)
+        lines.append(content)
+        total_chars += len(header) + len(content)
 
     return "\n".join(lines)
 
@@ -333,6 +362,95 @@ class ResponseSynthesizer:
             avg_confidence = min(1.0, avg_confidence + 0.1)
 
         return avg_confidence
+
+    async def synthesize_from_documents(
+        self,
+        query: str,
+        documents: list[Document],
+        retrieval: RetrievalResult,
+        temperature: float = 0.4,
+    ) -> SynthesisResult:
+        """
+        Generate response using full source documents (two-phase retrieval).
+
+        Args:
+            query: User query
+            documents: Full source documents (deduplicated)
+            retrieval: Original retrieval result (for metadata)
+            temperature: LLM temperature for response
+
+        Returns:
+            SynthesisResult with answer, behavior, and metadata
+        """
+        # Format documents for context
+        documents_context = format_documents_context(documents)
+
+        # Build prompt with documents instead of memory fragments
+        system_prompt, user_prompt = self._build_document_prompt(
+            query, documents_context
+        )
+
+        # Generate response
+        logger.debug(f"Synthesizing response from {len(documents)} documents for: {query[:50]}...")
+        response = await self.llm.generate(
+            user_prompt,
+            system_prompt=system_prompt,
+            temperature=temperature
+        )
+
+        # Extract behavior pattern
+        behavior = extract_behavior(response, query)
+
+        # Calculate importance
+        importance = self._estimate_importance(query, retrieval)
+
+        # Clean answer
+        answer = self._clean_answer(response)
+
+        # Confidence based on document count
+        confidence = min(0.9, 0.5 + len(documents) * 0.1)
+
+        return SynthesisResult(
+            answer=answer,
+            behavior=behavior,
+            memories_used=[sm.memory.id for sm in retrieval.memories[:10]],
+            concepts_activated=list(retrieval.activated_concepts.keys()),
+            confidence=confidence,
+            query=query,
+            importance=importance,
+        )
+
+    def _build_document_prompt(
+        self,
+        query: str,
+        documents_context: str,
+    ) -> tuple[str, str]:
+        """Build prompt for document-based synthesis. Returns (system_prompt, user_prompt)."""
+        # Format current date in Russian
+        now = datetime.now()
+        current_date = f"{now.day} {RUSSIAN_MONTHS[now.month]} {now.year} года"
+
+        system_prompt = f"""Ты — ассистент, отвечающий на вопросы на основе предоставленных документов.
+Сегодня: {current_date}. Используй эту дату для вопросов о времени, сроках, актуальности и любых временных расчётов."""
+
+        user_prompt = f"""Вопрос пользователя: {query}
+
+Релевантные документы из базы знаний:
+{documents_context}
+
+Инструкции:
+1. Дай полезный ответ на основе предоставленных документов.
+2. Цитируй конкретную информацию из документов.
+3. Если документы содержат противоречивую информацию, укажи это.
+4. Если в документах нет нужной информации, честно скажи об этом.
+5. Используй текущую дату для вопросов о времени и актуальности.
+6. Не выдумывай информацию, которой нет в документах.
+
+В конце ответа добавь строку в формате:
+СТРАТЕГИЯ: [название_поведения] — [краткое описание твоего подхода к ответу]
+
+Ответ:"""
+        return system_prompt, user_prompt
 
 
 async def synthesize_response(

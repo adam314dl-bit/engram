@@ -5,10 +5,10 @@ from datetime import datetime, timedelta
 import pytest
 
 from engram.models import SemanticMemory, EpisodicMemory
+from engram.retrieval.fusion import reciprocal_rank_fusion
 from engram.retrieval.hybrid_search import (
     ScoredMemory,
     ScoredEpisode,
-    reciprocal_rank_fusion,
     hours_since,
     HybridSearch,
 )
@@ -17,10 +17,15 @@ from engram.retrieval.hybrid_search import (
 class TestReciprocalRankFusion:
     """Tests for RRF algorithm."""
 
+    def _to_dict(self, results):
+        """Convert FusedResult list to dict for easier testing."""
+        return {r.id: r.fused_score for r in results}
+
     def test_rrf_single_list(self) -> None:
         """Test RRF with a single ranked list."""
         ranked_list = [("a", 0.9), ("b", 0.8), ("c", 0.7)]
-        scores = reciprocal_rank_fusion([ranked_list])
+        results = reciprocal_rank_fusion([ranked_list])
+        scores = self._to_dict(results)
 
         # RRF score = 1/(k+rank+1), k=60 by default
         assert "a" in scores
@@ -34,7 +39,8 @@ class TestReciprocalRankFusion:
         list1 = [("a", 0.9), ("b", 0.8), ("c", 0.7)]
         list2 = [("b", 0.95), ("a", 0.85), ("d", 0.75)]
 
-        scores = reciprocal_rank_fusion([list1, list2])
+        results = reciprocal_rank_fusion([list1, list2])
+        scores = self._to_dict(results)
 
         # 'b' is #1 in list2 and #2 in list1, should have high score
         # 'a' is #1 in list1 and #2 in list2
@@ -48,15 +54,16 @@ class TestReciprocalRankFusion:
 
     def test_rrf_empty_lists(self) -> None:
         """Test RRF with empty input."""
-        scores = reciprocal_rank_fusion([])
-        assert scores == {}
+        results = reciprocal_rank_fusion([])
+        assert results == []
 
     def test_rrf_disjoint_lists(self) -> None:
         """Test RRF with lists that have no overlap."""
         list1 = [("a", 0.9), ("b", 0.8)]
         list2 = [("c", 0.9), ("d", 0.8)]
 
-        scores = reciprocal_rank_fusion([list1, list2])
+        results = reciprocal_rank_fusion([list1, list2])
+        scores = self._to_dict(results)
 
         assert len(scores) == 4
         # All items should have similar scores since they appear in only one list
@@ -67,9 +74,11 @@ class TestReciprocalRankFusion:
         ranked_list = [("a", 0.9), ("b", 0.8)]
 
         # With k=10, scores are higher overall
-        scores_k10 = reciprocal_rank_fusion([ranked_list], k=10)
+        results_k10 = reciprocal_rank_fusion([ranked_list], k=10)
+        scores_k10 = self._to_dict(results_k10)
         # With k=100, scores are lower overall
-        scores_k100 = reciprocal_rank_fusion([ranked_list], k=100)
+        results_k100 = reciprocal_rank_fusion([ranked_list], k=100)
+        scores_k100 = self._to_dict(results_k100)
 
         assert scores_k10["a"] > scores_k100["a"]
 

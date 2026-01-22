@@ -26,6 +26,7 @@ from engram.retrieval.pipeline import (
     RetrievalPipeline,
     RetrievalResult,
     retrieve,
+    retrieve_candidates,
 )
 from engram.retrieval.reranker import (
     RerankedItem,
@@ -78,4 +79,5 @@ __all__ = [
     "RetrievalPipeline",
     "RetrievalResult",
     "retrieve",
+    "retrieve_candidates",
 ]
