@@ -1,5 +1,6 @@
 """Semantic memory model - facts, procedures, and relationships."""
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
@@ -115,7 +116,8 @@ class SemanticMemory:
             "superseded_by": self.superseded_by,
             "superseded_at": self.superseded_at.isoformat() if self.superseded_at else None,
             "embedding": self.embedding,
-            "metadata": self.metadata,
+            # Serialize metadata to JSON string for Neo4j (doesn't support nested maps)
+            "metadata": json.dumps(self.metadata) if self.metadata else None,
         }
 
     @classmethod
@@ -155,7 +157,8 @@ class SemanticMemory:
             superseded_by=data.get("superseded_by"),
             superseded_at=parse_datetime(data.get("superseded_at")),
             embedding=data.get("embedding"),
-            metadata=data.get("metadata"),
+            # Deserialize metadata from JSON string
+            metadata=json.loads(data["metadata"]) if data.get("metadata") else None,
         )
 
     def is_valid(self) -> bool:
