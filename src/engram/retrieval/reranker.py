@@ -47,9 +47,11 @@ def get_reranker() -> "FlagReranker":
 
     # Load model with settings
     # use_fp16=True for faster inference on supported GPUs
+    # devices=["cuda:0"] limits to single GPU (reranker doesn't need multi-GPU)
     reranker = FlagReranker(
         settings.reranker_model,
         use_fp16=True,
+        devices=["cuda:0"],  # Single GPU is enough for reranking
     )
 
     logger.info("Reranker model loaded successfully")
