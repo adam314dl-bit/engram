@@ -24,6 +24,9 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pymorphy3>=2.0.0",
     "FlagEmbedding>=1.2.0",
+    # v3.3 additions
+    "cyrtranslit>=1.0.0",  # Russian/Latin transliteration
+    "natasha>=1.6.0",  # Russian NER for person extraction
 ]
 
 [project.optional-dependencies]
@@ -67,7 +70,7 @@ disallow_untyped_defs = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["sentence_transformers.*", "neo4j.*", "pymorphy3.*", "FlagEmbedding.*"]
+module = ["sentence_transformers.*", "neo4j.*", "pymorphy3.*", "FlagEmbedding.*", "natasha.*", "cyrtranslit.*"]
 ignore_missing_imports = true
 
 [tool.uv]
@@ -82,3 +85,8 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
 ignore = ["E501"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

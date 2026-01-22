@@ -182,6 +182,48 @@ class Settings(BaseSettings):
         description="Confidence gap required for auto-resolution (higher confidence wins)"
     )
 
+    # v3.3 Quality Filtering Parameters
+    chunk_quality_threshold: float = Field(
+        default=0.4,
+        description="Minimum quality score for chunks (0-1)"
+    )
+    min_chunk_words: int = Field(
+        default=20,
+        description="Minimum word count for quality chunks"
+    )
+
+    # v3.3 MMR (Maximal Marginal Relevance) Parameters
+    mmr_enabled: bool = Field(
+        default=True,
+        description="Enable MMR reranking for result diversity"
+    )
+    mmr_lambda: float = Field(
+        default=0.5,
+        description="MMR balance: 1.0=pure relevance, 0.0=pure diversity"
+    )
+    mmr_fetch_k: int = Field(
+        default=50,
+        description="Number of candidates to consider for MMR"
+    )
+
+    # v3.3 Dynamic top_k Parameters
+    dynamic_topk_enabled: bool = Field(
+        default=True,
+        description="Enable dynamic top_k based on query complexity"
+    )
+    topk_simple: int = Field(
+        default=4,
+        description="top_k for simple factoid queries"
+    )
+    topk_moderate: int = Field(
+        default=6,
+        description="top_k for moderate complexity queries"
+    )
+    topk_complex: int = Field(
+        default=8,
+        description="top_k for complex analytical queries"
+    )
+
 
 def get_dev_settings() -> Settings:
     """Get development environment settings."""
@@ -191,6 +233,8 @@ def get_dev_settings() -> Settings:
         embedding_query_prefix="",
         reranker_enabled=False,
         bm25_lemmatize=False,
+        mmr_enabled=False,  # Disable MMR in dev for speed
+        dynamic_topk_enabled=False,  # Use fixed top_k in dev
     )
 
 
@@ -223,6 +267,8 @@ def get_test_settings() -> Settings:
         reranker_enabled=False,
         bm25_lemmatize=False,
         neo4j_database="neo4j_test",
+        mmr_enabled=False,  # Disable MMR in tests
+        dynamic_topk_enabled=False,  # Use fixed top_k in tests
     )
 
 

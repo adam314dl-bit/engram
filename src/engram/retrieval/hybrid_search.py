@@ -1,11 +1,15 @@
 """Hybrid search combining BM25, vector search, and graph traversal.
 
 Uses Reciprocal Rank Fusion (RRF) to combine results from multiple sources.
+Includes MMR (Maximal Marginal Relevance) for diversity and dynamic top_k.
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
+
+import numpy as np
 
 from engram.config import settings
 from engram.models import EpisodicMemory, SemanticMemory
@@ -14,6 +18,138 @@ from engram.retrieval.fusion import rrf_scores_only
 from engram.storage.neo4j_client import Neo4jClient
 
 logger = logging.getLogger(__name__)
+
+
+# Russian patterns for query complexity classification
+SIMPLE_QUERY_PATTERNS = [
+    r"^(кто|что|где|когда)\s+",  # Simple factoid questions
+    r"^как\s+называется",
+    r"^какой\s+(номер|телефон|адрес|email)",
+    r"^(дата|время|место)\s+",
+    r"контакт(ы)?\s+",
+]
+
+COMPLEX_QUERY_PATTERNS = [
+    r"(сравни|сравнение|отличия|разница)",
+    r"(почему|зачем|для\s+чего)",
+    r"(как\s+работает|принцип\s+работы)",
+    r"(преимущества|недостатки|плюсы|минусы)",
+    r"(объясни|расскажи\s+подробно)",
+    r"(все|полный\s+список|перечисли)",
+]
+
+
+def classify_query_complexity(query: str) -> tuple[str, int]:
+    """
+    Classify query complexity and recommend top_k.
+
+    Args:
+        query: User query text
+
+    Returns:
+        Tuple of (complexity_type, recommended_k)
+        - "simple": factoid queries, k=4
+        - "moderate": standard queries, k=6
+        - "complex": analytical queries, k=8
+    """
+    query_lower = query.lower().strip()
+
+    # Check for simple patterns
+    for pattern in SIMPLE_QUERY_PATTERNS:
+        if re.search(pattern, query_lower):
+            return ("simple", settings.topk_simple)
+
+    # Check for complex patterns
+    for pattern in COMPLEX_QUERY_PATTERNS:
+        if re.search(pattern, query_lower):
+            return ("complex", settings.topk_complex)
+
+    # Default: moderate complexity
+    return ("moderate", settings.topk_moderate)
+
+
+def mmr_rerank(
+    query_embedding: list[float],
+    candidates: list[tuple[str, list[float], float]],
+    k: int,
+    lambda_mult: float = 0.5,
+    fetch_k: int = 50,
+) -> list[tuple[str, float]]:
+    """
+    Maximal Marginal Relevance reranking for diversity.
+
+    MMR balances relevance to query with diversity among selected results.
+    Score = λ * sim(doc, query) - (1-λ) * max(sim(doc, selected))
+
+    Args:
+        query_embedding: Query embedding vector
+        candidates: List of (id, embedding, original_score) tuples
+        k: Number of results to return
+        lambda_mult: Balance between relevance (1.0) and diversity (0.0)
+        fetch_k: Number of candidates to consider (should be > k)
+
+    Returns:
+        List of (id, mmr_score) tuples sorted by MMR score
+    """
+    if not candidates:
+        return []
+
+    # Limit candidates to fetch_k
+    candidates = candidates[:fetch_k]
+
+    # Convert to numpy for efficiency
+    query_vec = np.array(query_embedding)
+    doc_vecs = np.array([c[1] for c in candidates])
+    doc_ids = [c[0] for c in candidates]
+    original_scores = [c[2] for c in candidates]
+
+    # Normalize vectors for cosine similarity
+    query_norm = query_vec / (np.linalg.norm(query_vec) + 1e-10)
+    doc_norms = doc_vecs / (np.linalg.norm(doc_vecs, axis=1, keepdims=True) + 1e-10)
+
+    # Compute query-document similarities
+    query_sims = np.dot(doc_norms, query_norm)
+
+    # Compute document-document similarity matrix
+    doc_sims = np.dot(doc_norms, doc_norms.T)
+
+    # MMR selection
+    selected_indices: list[int] = []
+    remaining_indices = list(range(len(candidates)))
+
+    for _ in range(min(k, len(candidates))):
+        if not remaining_indices:
+            break
+
+        mmr_scores = []
+        for idx in remaining_indices:
+            # Relevance to query
+            relevance = query_sims[idx]
+
+            # Maximum similarity to already selected documents
+            if selected_indices:
+                max_sim_to_selected = max(doc_sims[idx, s] for s in selected_indices)
+            else:
+                max_sim_to_selected = 0.0
+
+            # MMR score
+            mmr = lambda_mult * relevance - (1 - lambda_mult) * max_sim_to_selected
+            mmr_scores.append((idx, mmr))
+
+        # Select document with highest MMR score
+        best_idx, best_mmr = max(mmr_scores, key=lambda x: x[1])
+        selected_indices.append(best_idx)
+        remaining_indices.remove(best_idx)
+
+    # Return selected documents with their MMR scores
+    results = []
+    for i, idx in enumerate(selected_indices):
+        # Combine MMR position with original score for final ranking
+        position_score = 1.0 - (i / k) if k > 0 else 1.0
+        combined_score = (original_scores[idx] + position_score) / 2
+        results.append((doc_ids[idx], combined_score))
+
+    return results
 
 
 @dataclass
@@ -77,6 +213,7 @@ class HybridSearch:
         query_embedding: list[float],
         graph_memories: list[SemanticMemory] | None = None,
         graph_memory_scores: dict[str, float] | None = None,
+        use_dynamic_k: bool = True,
     ) -> list[ScoredMemory]:
         """
         Search for relevant memories using hybrid approach.
@@ -86,10 +223,18 @@ class HybridSearch:
             query_embedding: Query embedding vector
             graph_memories: Memories from spreading activation (optional)
             graph_memory_scores: Scores from graph traversal (optional)
+            use_dynamic_k: Whether to use dynamic top_k based on query complexity
 
         Returns:
             List of ScoredMemory sorted by final score
         """
+        # Determine final_k based on query complexity
+        final_k = self.final_k
+        if use_dynamic_k and settings.dynamic_topk_enabled:
+            complexity, recommended_k = classify_query_complexity(query)
+            final_k = recommended_k
+            logger.debug(f"Query complexity: {complexity}, using k={final_k}")
+
         # 1. Vector search
         vector_results = await self.db.vector_search_memories(
             embedding=query_embedding, k=self.vector_k
@@ -140,7 +285,124 @@ class HybridSearch:
             sources=memory_sources,
         )
 
-        return scored_memories[: self.final_k]
+        # Apply cross-encoder reranking if enabled
+        if settings.reranker_enabled:
+            scored_memories = self._apply_reranker(
+                query=query,
+                scored_memories=scored_memories,
+                candidates_k=settings.reranker_candidates,
+            )
+
+        # Apply MMR for diversity if enabled
+        if settings.mmr_enabled and len(scored_memories) > final_k:
+            scored_memories = self._apply_mmr(
+                query_embedding=query_embedding,
+                scored_memories=scored_memories,
+                k=final_k,
+            )
+
+        return scored_memories[:final_k]
+
+    def _apply_reranker(
+        self,
+        query: str,
+        scored_memories: list[ScoredMemory],
+        candidates_k: int = 30,
+    ) -> list[ScoredMemory]:
+        """
+        Apply cross-encoder reranking to top candidates.
+
+        Args:
+            query: Query text
+            scored_memories: Pre-ranked memories
+            candidates_k: Number of candidates to rerank
+
+        Returns:
+            Reranked list of ScoredMemory
+        """
+        from engram.retrieval.reranker import rerank_with_fallback
+
+        # Only rerank top candidates
+        to_rerank = scored_memories[:candidates_k]
+        rest = scored_memories[candidates_k:]
+
+        # Prepare candidates for reranker: (id, content, score)
+        candidates = [
+            (sm.memory.id, sm.memory.content, sm.score)
+            for sm in to_rerank
+        ]
+
+        # Rerank
+        reranked = rerank_with_fallback(query, candidates, top_k=candidates_k)
+
+        # Build result with reranked scores
+        memory_lookup = {sm.memory.id: sm for sm in to_rerank}
+        result: list[ScoredMemory] = []
+
+        for item in reranked:
+            sm = memory_lookup.get(item.id)
+            if sm:
+                # Update score with reranker score (blend original and rerank)
+                blended_score = (sm.score + item.rerank_score) / 2
+                result.append(ScoredMemory(
+                    memory=sm.memory,
+                    score=blended_score,
+                    sources=sm.sources,
+                ))
+
+        # Add back remaining memories
+        result.extend(rest)
+        return result
+
+    def _apply_mmr(
+        self,
+        query_embedding: list[float],
+        scored_memories: list[ScoredMemory],
+        k: int,
+    ) -> list[ScoredMemory]:
+        """
+        Apply MMR reranking for diversity.
+
+        Args:
+            query_embedding: Query embedding vector
+            scored_memories: Pre-ranked memories
+            k: Number of results to return
+
+        Returns:
+            MMR-reranked list of ScoredMemory
+        """
+        # Prepare candidates: (id, embedding, score)
+        candidates = []
+        for sm in scored_memories[:settings.mmr_fetch_k]:
+            if sm.memory.embedding:
+                candidates.append((sm.memory.id, sm.memory.embedding, sm.score))
+
+        if not candidates:
+            return scored_memories[:k]
+
+        # Apply MMR
+        mmr_results = mmr_rerank(
+            query_embedding=query_embedding,
+            candidates=candidates,
+            k=k,
+            lambda_mult=settings.mmr_lambda,
+            fetch_k=settings.mmr_fetch_k,
+        )
+
+        # Build result maintaining original ScoredMemory objects
+        memory_lookup = {sm.memory.id: sm for sm in scored_memories}
+        result: list[ScoredMemory] = []
+
+        for doc_id, mmr_score in mmr_results:
+            sm = memory_lookup.get(doc_id)
+            if sm:
+                result.append(ScoredMemory(
+                    memory=sm.memory,
+                    score=mmr_score,
+                    sources=sm.sources,
+                ))
+
+        return result
 
     def _rerank_memories(
         self,

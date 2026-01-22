@@ -2,10 +2,15 @@
 
 Orchestrates:
 1. Concept extraction from query
-2. Spreading activation through concept network
-3. Hybrid search (vector + BM25 + graph)
-4. Similar episode retrieval
-5. Final ranking and result assembly
+2. Query classification (person/role, complexity)
+3. Transliteration expansion for mixed-script queries
+4. Spreading activation through concept network
+5. Hybrid search (vector + BM25 + graph)
+6. Source weighting and quality filtering
+7. MMR reranking for diversity
+8. Raw table fetching for summaries
+9. Similar episode retrieval
+10. Final ranking and result assembly
 """
 
 import logging
@@ -13,9 +18,17 @@ from dataclasses import dataclass, field
 
 from engram.config import settings
 from engram.ingestion.concept_extractor import ConceptExtractor
+from engram.ingestion.person_extractor import PersonQueryType, classify_person_query
 from engram.models import Concept, EpisodicMemory, SemanticMemory
+from engram.preprocessing.transliteration import expand_query_transliteration
 from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
-from engram.retrieval.hybrid_search import HybridSearch, ScoredEpisode, ScoredMemory
+from engram.retrieval.hybrid_search import (
+    HybridSearch,
+    ScoredEpisode,
+    ScoredMemory,
+    classify_query_complexity,
+)
+from engram.retrieval.quality_filter import apply_source_weight
 from engram.retrieval.spreading_activation import (
     ActivationResult,
     SpreadingActivation,
@@ -49,6 +62,12 @@ class RetrievalResult:
     # Debug info
     retrieval_sources: dict[str, int] = field(default_factory=dict)  # source -> count
 
+    # v3.3 additions
+    query_complexity: str = "moderate"  # simple, moderate, complex
+    person_query_type: PersonQueryType = PersonQueryType.GENERAL
+    transliteration_variants: list[str] = field(default_factory=list)
+    raw_tables: dict[str, SemanticMemory] = field(default_factory=dict)  # summary_id -> raw
+
     @property
     def top_memories(self) -> list[SemanticMemory]:
         """Get just the memory objects from scored results."""
@@ -58,6 +77,11 @@ class RetrievalResult:
     def top_episodes(self) -> list[EpisodicMemory]:
         """Get just the episode objects from scored results."""
         return [se.episode for se in self.episodes]
+
+    @property
+    def has_person_query(self) -> bool:
+        """Check if this was a person-related query."""
+        return self.person_query_type != PersonQueryType.GENERAL
 
 
 class RetrievalPipeline:
@@ -95,6 +119,7 @@ class RetrievalPipeline:
         top_k_memories: int | None = None,
         top_k_episodes: int | None = None,
         include_episodes: bool = True,
+        use_transliteration: bool = True,
     ) -> RetrievalResult:
         """
         Execute the full retrieval pipeline.
@@ -104,23 +129,45 @@ class RetrievalPipeline:
             top_k_memories: Number of memories to return (default from settings)
             top_k_episodes: Number of episodes to return (default 3)
             include_episodes: Whether to include similar episodes
+            use_transliteration: Whether to expand query with transliteration variants
 
         Returns:
             RetrievalResult with all retrieved information
         """
-        top_k_memories = top_k_memories or settings.retrieval_top_k
+        # 1. Classify query (person/role, complexity)
+        person_query_type, person_entity = classify_person_query(query)
+        query_complexity, recommended_k = classify_query_complexity(query)
+
+        # Use dynamic top_k if enabled
+        if settings.dynamic_topk_enabled and top_k_memories is None:
+            top_k_memories = recommended_k
+        else:
+            top_k_memories = top_k_memories or settings.retrieval_top_k
+
         top_k_episodes = top_k_episodes or 3
 
-        # 1. Embed query
+        logger.debug(
+            f"Query classification: complexity={query_complexity}, "
+            f"person_type={person_query_type.value}, k={top_k_memories}"
+        )
+
+        # 2. Expand query with transliteration variants
+        transliteration_variants: list[str] = []
+        if use_transliteration:
+            transliteration_variants = expand_query_transliteration(query)
+            if len(transliteration_variants) > 1:
+                logger.debug(f"Transliteration variants: {transliteration_variants}")
+
+        # 3. Embed query (and variants if needed)
         logger.debug(f"Embedding query: {query[:50]}...")
         query_embedding = await self.embeddings.embed(query)
 
-        # 2. Extract concepts from query
+        # 4. Extract concepts from query
         logger.debug("Extracting concepts from query")
         concept_result = await self.concept_extractor.extract(query)
         query_concepts = concept_result.concepts
 
-        # 3. Find matching concepts in graph
+        # 5. Find matching concepts in graph
         seed_concept_ids: list[str] = []
         matched_concepts: list[Concept] = []
 
@@ -142,7 +189,7 @@ class RetrievalPipeline:
                     seed_concept_ids.append(concept.id)
                     matched_concepts.append(concept)
 
-        # 4. Spread activation through concept network
+        # 6. Spread activation through concept network
         logger.debug(f"Spreading activation from {len(seed_concept_ids)} seed concepts")
         activation_result: ActivationResult | None = None
         activated_concepts: dict[str, float] = {}
@@ -153,7 +200,7 @@ class RetrievalPipeline:
             )
             activated_concepts = activation_result.activations
 
-        # 5. Get memories connected to activated concepts
+        # 7. Get memories connected to activated concepts
         graph_memories: list[SemanticMemory] = []
         graph_memory_scores: dict[str, float] = {}
 
@@ -178,17 +225,41 @@ class RetrievalPipeline:
                     )
                     graph_memory_scores[memory.id] = score
 
-        # 6. Hybrid search (combining all signals)
+        # 8. Hybrid search (combining all signals)
+        # Note: MMR and reranker are applied inside search_memories
         logger.debug("Performing hybrid search")
         scored_memories = await self.hybrid.search_memories(
             query=query,
             query_embedding=query_embedding,
             graph_memories=graph_memories,
             graph_memory_scores=graph_memory_scores,
+            use_dynamic_k=False,  # Already applied dynamic k above
         )
+
+        # 9. Apply source weights to scores
+        for sm in scored_memories:
+            source_type = None
+            if sm.memory.metadata:
+                source_type = sm.memory.metadata.get("source_type")
+            sm.score = apply_source_weight(sm.score, source_type)
+
+        # Re-sort after weighting
+        scored_memories.sort(key=lambda x: x.score, reverse=True)
 
         # Limit to top_k
         scored_memories = scored_memories[:top_k_memories]
+
+        # 10. Fetch raw tables for summary memories
+        raw_tables: dict[str, SemanticMemory] = {}
+        summary_ids = [
+            sm.memory.id for sm in scored_memories
+            if sm.memory.memory_type == "table_summary"
+        ]
+        if summary_ids:
+            from engram.preprocessing.table_enricher import fetch_raw_tables_for_summaries
+            raw_tables = await fetch_raw_tables_for_summaries(self.db, summary_ids)
+            if raw_tables:
+                logger.debug(f"Fetched {len(raw_tables)} raw tables for generation")
 
         # Count retrieval sources
         retrieval_sources: dict[str, int] = {}
@@ -196,7 +267,7 @@ class RetrievalPipeline:
             for source in sm.sources:
                 retrieval_sources[source] = retrieval_sources.get(source, 0) + 1
 
-        # 7. Find similar episodes (reasoning templates)
+        # 11. Find similar episodes (reasoning templates)
         episodes: list[ScoredEpisode] = []
         if include_episodes:
             logger.debug("Finding similar episodes")
@@ -211,7 +282,8 @@ class RetrievalPipeline:
 
         logger.info(
             f"Retrieved {len(scored_memories)} memories, {len(episodes)} episodes "
-            f"from {len(activated_concepts)} activated concepts"
+            f"from {len(activated_concepts)} activated concepts "
+            f"(complexity={query_complexity}, person={person_query_type.value})"
         )
 
         return RetrievalResult(
@@ -223,6 +295,10 @@ class RetrievalPipeline:
             memories=scored_memories,
             episodes=episodes,
             retrieval_sources=retrieval_sources,
+            query_complexity=query_complexity,
+            person_query_type=person_query_type,
+            transliteration_variants=transliteration_variants,
+            raw_tables=raw_tables,
         )
 
     async def retrieve_for_concepts(

@@ -1,16 +1,42 @@
-"""Table enricher using LLM to generate searchable descriptions."""
+"""Table enricher using LLM to generate searchable descriptions.
+
+v3.3: Multi-vector strategy - stores both searchable summary and raw table.
+Summary memory is embedded for search, raw table is fetched at generation time.
+"""
 
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from engram.ingestion.llm_client import LLMClient, get_llm_client
 from engram.ingestion.parser import generate_id
 from engram.models import SemanticMemory
 from engram.preprocessing.table_parser import ParsedTable
 
+if TYPE_CHECKING:
+    from engram.storage.neo4j_client import Neo4jClient
+
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TableWithSummary:
+    """Multi-vector table representation for v3.3.
+
+    Links a searchable summary to the raw table for retrieval:
+    1. Summary memory is embedded and searched
+    2. Raw table memory is fetched at generation time via doc_id link
+    """
+
+    doc_id: str  # Links summary ↔ raw table
+    summary_ru: str  # Russian summary for embedding/search
+    raw_markdown: str  # Full table markdown for generation
+    surrounding_context: str  # 2-3 paragraphs around the table
+    title: str | None = None
+    key_facts: list[str] = field(default_factory=list)
 
 
 # Russian prompts for table enrichment
@@ -52,6 +78,76 @@ FACT|AWS единственный поддерживает Lambda
 FACT|Все провайдеры поддерживают Kubernetes"""
 
 
+TABLE_SUMMARY_PROMPT = """Создай краткое описание таблицы на русском языке для поиска.
+
+{table_context}
+
+Таблица:
+{table_markdown}
+
+Напиши 2-3 предложения, описывающие:
+1. Что содержит таблица
+2. Какие ключевые данные в ней представлены
+3. Для чего она может быть полезна
+
+Ответ должен быть на русском языке, без форматирования."""
+
+
+def extract_surrounding_context(
+    full_text: str,
+    table_markdown: str,
+    context_paragraphs: int = 2,
+) -> str:
+    """
+    Extract surrounding context (paragraphs) around a table.
+
+    Args:
+        full_text: Full document text
+        table_markdown: Table markdown to find
+        context_paragraphs: Number of paragraphs before/after
+
+    Returns:
+        Surrounding context string
+    """
+    # Try to find table in text
+    # Tables might be slightly different due to normalization
+    table_lines = table_markdown.strip().split("\n")
+    if not table_lines:
+        return ""
+
+    # Find first line of table in text
+    first_line = table_lines[0].strip()
+    if first_line not in full_text:
+        # Try finding pipe-delimited content
+        first_line = first_line.replace("|", "").strip()
+
+    # Split text into paragraphs
+    paragraphs = re.split(r"\n\n+", full_text)
+
+    # Find paragraph containing table
+    table_idx = -1
+    for i, para in enumerate(paragraphs):
+        if first_line[:30] in para or ("|" in para and "---" in para):
+            table_idx = i
+            break
+
+    if table_idx == -1:
+        return ""
+
+    # Get surrounding paragraphs
+    start_idx = max(0, table_idx - context_paragraphs)
+    end_idx = min(len(paragraphs), table_idx + context_paragraphs + 1)
+
+    context_parts = []
+    for i in range(start_idx, end_idx):
+        if i != table_idx:  # Skip the table itself
+            para = paragraphs[i].strip()
+            if para and not para.startswith("|"):  # Skip table content
+                context_parts.append(para)
+
+    return "\n\n".join(context_parts)
+
+
 @dataclass
 class EnrichedTable:
     """Enriched table with LLM-generated metadata."""
@@ -75,6 +171,72 @@ class TableEnricher:
 
     def __init__(self, llm_client: LLMClient | None = None) -> None:
         self.llm = llm_client or get_llm_client()
+
+    async def enrich_multi_vector(
+        self,
+        table: ParsedTable,
+        full_document_text: str | None = None,
+    ) -> TableWithSummary:
+        """
+        Enrich table with multi-vector strategy (v3.3).
+
+        Creates both a searchable summary and preserves raw table.
+
+        Args:
+            table: Parsed table
+            full_document_text: Full document for context extraction
+
+        Returns:
+            TableWithSummary with linked summary and raw table
+        """
+        doc_id = generate_id()
+
+        # Get surrounding context if document provided
+        surrounding_context = ""
+        if full_document_text:
+            surrounding_context = extract_surrounding_context(
+                full_document_text,
+                table.to_markdown(),
+            )
+
+        # Build context for prompt
+        context_parts = []
+        if table.title:
+            context_parts.append(f"Заголовок: {table.title}")
+        if table.context:
+            context_parts.append(f"Контекст: {table.context}")
+        if surrounding_context:
+            context_parts.append(f"Окружающий текст: {surrounding_context[:500]}")
+        table_context = "\n".join(context_parts) if context_parts else "Нет контекста."
+
+        # Generate summary
+        prompt = TABLE_SUMMARY_PROMPT.format(
+            table_context=table_context,
+            table_markdown=table.to_markdown(),
+        )
+
+        try:
+            summary_ru = await self.llm.generate(
+                prompt,
+                temperature=0.3,
+                max_tokens=500,
+            )
+            summary_ru = summary_ru.strip()
+        except Exception as e:
+            logger.warning(f"Failed to generate table summary: {e}")
+            summary_ru = self._generate_fallback_description(table)
+
+        # Also get key facts via standard enrichment
+        enriched = await self.enrich(table)
+
+        return TableWithSummary(
+            doc_id=doc_id,
+            summary_ru=summary_ru,
+            raw_markdown=table.to_markdown(),
+            surrounding_context=surrounding_context,
+            title=table.title,
+            key_facts=enriched.key_facts,
+        )
 
     async def enrich(self, table: ParsedTable) -> EnrichedTable:
         """
@@ -340,3 +502,108 @@ def create_memories_from_table(
                 ))
 
     return memories
+
+
+def create_multi_vector_memories(
+    table_summary: TableWithSummary,
+    doc_id: str | None = None,
+    concept_ids: list[str] | None = None,
+) -> tuple[SemanticMemory, SemanticMemory]:
+    """
+    Create multi-vector memories from a table (v3.3).
+
+    Creates two linked memories:
+    1. Summary memory: embedded, searchable
+    2. Raw table memory: not indexed, fetched at generation time
+
+    Args:
+        table_summary: TableWithSummary with summary and raw table
+        doc_id: Source document ID
+        concept_ids: Concept IDs to link memories to
+
+    Returns:
+        Tuple of (summary_memory, raw_table_memory)
+    """
+    # Summary memory - this is embedded and searched
+    summary_content = table_summary.summary_ru
+    if table_summary.title:
+        summary_content = f"{table_summary.title}: {summary_content}"
+
+    # Add key facts to summary for better search
+    if table_summary.key_facts:
+        facts_text = " | ".join(table_summary.key_facts[:3])
+        summary_content = f"{summary_content}\nКлючевые факты: {facts_text}"
+
+    summary_memory = SemanticMemory(
+        id=generate_id(),
+        content=summary_content,
+        concept_ids=concept_ids or [],
+        source_doc_ids=[doc_id] if doc_id else [],
+        memory_type="table_summary",
+        importance=6.0,
+        metadata={
+            "table_doc_id": table_summary.doc_id,
+            "has_raw_table": True,
+            "source_type": "table",
+        },
+    )
+
+    # Raw table memory - not indexed, fetched at generation time
+    raw_content = table_summary.raw_markdown
+    if table_summary.surrounding_context:
+        raw_content = f"{table_summary.surrounding_context}\n\n{raw_content}"
+
+    raw_memory = SemanticMemory(
+        id=generate_id(),
+        content=raw_content,
+        concept_ids=concept_ids or [],
+        source_doc_ids=[doc_id] if doc_id else [],
+        memory_type="table_raw",
+        importance=5.0,
+        metadata={
+            "table_doc_id": table_summary.doc_id,
+            "for_generation_only": True,  # Don't index this
+            "linked_summary_id": summary_memory.id,
+            "source_type": "table",
+        },
+    )
+
+    # Update summary with link to raw
+    summary_memory.metadata["linked_raw_id"] = raw_memory.id
+
+    return summary_memory, raw_memory
+
+
+async def fetch_raw_tables_for_summaries(
+    db: "Neo4jClient",  # type: ignore
+    summary_ids: list[str],
+) -> dict[str, SemanticMemory]:
+    """
+    Fetch raw table memories linked to summary memories.
+
+    Used at generation time to get full table content.
+
+    Args:
+        db: Neo4j client
+        summary_ids: IDs of summary memories
+
+    Returns:
+        Dict mapping summary_id to raw table memory
+    """
+    result: dict[str, SemanticMemory] = {}
+
+    for summary_id in summary_ids:
+        # Get summary to find linked raw ID
+        summary = await db.get_semantic_memory(summary_id)
+        if not summary or not summary.metadata:
+            continue
+
+        raw_id = summary.metadata.get("linked_raw_id")
+        if not raw_id:
+            continue
+
+        raw_memory = await db.get_semantic_memory(raw_id)
+        if raw_memory:
+            result[summary_id] = raw_memory
+
+    return result

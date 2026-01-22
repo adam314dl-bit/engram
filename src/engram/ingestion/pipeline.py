@@ -1,4 +1,7 @@
-"""Ingestion pipeline - orchestrates document processing."""
+"""Ingestion pipeline - orchestrates document processing.
+
+v3.3: Adds list extraction and person extraction for improved retrieval.
+"""
 
 from __future__ import annotations
 
@@ -13,12 +16,15 @@ from typing import TYPE_CHECKING
 
 from engram.config import settings
 from engram.ingestion.concept_extractor import ConceptExtractor
+from engram.ingestion.list_extractor import ListExtractor, lists_to_chunks
 from engram.ingestion.memory_extractor import MemoryExtractor
-from engram.ingestion.parser import DocumentParser
+from engram.ingestion.parser import DocumentParser, generate_id
+from engram.ingestion.person_extractor import PersonExtractor
 from engram.ingestion.relationship_extractor import RelationshipExtractor
 from engram.models import Concept, Document, SemanticMemory
 from engram.preprocessing.table_parser import extract_tables, remove_tables_from_text
 from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
+from engram.retrieval.quality_filter import is_quality_chunk
 from engram.storage.neo4j_client import Neo4jClient
 
 if TYPE_CHECKING:
@@ -44,10 +50,13 @@ class IngestionPipeline:
 
     Steps:
     1. Parse document
-    2. Extract concepts
-    3. Extract memories
-    4. Generate embeddings
-    5. Store in Neo4j
+    2. Extract tables (v3.2) and lists (v3.3)
+    3. Extract persons (v3.3)
+    4. Extract concepts
+    5. Extract memories
+    6. Apply quality filtering (v3.3)
+    7. Generate embeddings
+    8. Store in Neo4j
     """
 
     def __init__(
@@ -59,6 +68,8 @@ class IngestionPipeline:
         relationship_extractor: RelationshipExtractor | None = None,
         embedding_service: EmbeddingService | None = None,
         table_enricher: TableEnricher | None = None,
+        list_extractor: ListExtractor | None = None,
+        person_extractor: PersonExtractor | None = None,
     ) -> None:
         self.db = neo4j_client
         self.parser = parser or DocumentParser()
@@ -75,6 +86,8 @@ class IngestionPipeline:
             from engram.preprocessing.table_enricher import TableEnricher
             table_enricher = TableEnricher()
         self.table_enricher = table_enricher
+        self.list_extractor = list_extractor or ListExtractor()
+        self.person_extractor = person_extractor or PersonExtractor()
 
     async def ingest_file(self, path: Path | str) -> IngestionResult:
         """Ingest a single file."""
@@ -137,6 +150,61 @@ class IngestionPipeline:
             # (tables are already processed separately)
             text_content = remove_tables_from_text(document.content) if tables else document.content
 
+            # --- Phase 1.5 (v3.3): Extract and process lists ---
+            extracted_lists = self.list_extractor.extract_lists(text_content)
+            list_memories: list[SemanticMemory] = []
+
+            if extracted_lists:
+                logger.debug(f"Found {len(extracted_lists)} lists in: {document.title}")
+                list_chunks = lists_to_chunks(extracted_lists, items_per_chunk=4)
+
+                for chunk in list_chunks:
+                    # Apply quality filtering
+                    if is_quality_chunk(chunk, settings.chunk_quality_threshold, settings.min_chunk_words):
+                        list_memories.append(SemanticMemory(
+                            id=generate_id(),
+                            content=chunk,
+                            concept_ids=[],  # Will be linked via concept extraction
+                            source_doc_ids=[document.id],
+                            memory_type="fact",
+                            importance=5.0,
+                            metadata={"source_type": "list"},
+                        ))
+
+                logger.debug(f"Created {len(list_memories)} memories from lists")
+
+            # --- Phase 1.6 (v3.3): Extract persons ---
+            person_result = self.person_extractor.extract(text_content, document.id)
+            person_memories: list[SemanticMemory] = []
+
+            if person_result.persons:
+                logger.debug(f"Found {len(person_result.persons)} persons in: {document.title}")
+
+                for person in person_result.persons:
+                    # Create memory for person with their role
+                    if person.role:
+                        content = f"{person.canonical_name} — {person.role}"
+                        if person.team:
+                            content += f" (команда {person.team})"
+
+                        person_memories.append(SemanticMemory(
+                            id=generate_id(),
+                            content=content,
+                            concept_ids=[],
+                            source_doc_ids=[document.id],
+                            memory_type="fact",
+                            importance=6.0,  # Person info is usually important
+                            metadata={
+                                "source_type": "person",
+                                "person_name": person.canonical_name,
+                                "person_variants": person.variants,
+                                "person_role": person.role,
+                                "person_team": person.team,
+                            },
+                        ))
+
+                logger.debug(f"Created {len(person_memories)} memories from persons")
+
             # --- Phase 2: Extract concepts and memories from text ---
             logger.debug(f"Extracting concepts and memories from: {document.title}")
             concept_result, memory_result = await asyncio.gather(
@@ -158,8 +226,23 @@ class IngestionPipeline:
 
             concepts = list(all_concepts.values())
 
-            # Combine text memories and table memories
-            memories = memory_result.memories + table_memories
+            # Combine all memories: text + table + list + person
+            memories = memory_result.memories + table_memories + list_memories + person_memories
+
+            # --- Phase 2.5 (v3.3): Apply quality filtering to text memories ---
+            filtered_memories: list[SemanticMemory] = []
+            for memory in memories:
+                # Skip if already filtered (table/list memories) or if passes quality check
+                source_type = memory.metadata.get("source_type") if memory.metadata else None
+                if source_type in ("table", "list", "person"):
+                    filtered_memories.append(memory)
+                elif is_quality_chunk(memory.content, settings.chunk_quality_threshold, settings.min_chunk_words):
+                    filtered_memories.append(memory)
+                else:
+                    logger.debug(f"Filtered low-quality memory: {memory.content[:50]}...")
+
+            memories = filtered_memories
+            logger.debug(f"After quality filtering: {len(memories)} memories")
 
             # Extract enhanced relationships with embeddings
             logger.debug(f"Extracting relationships for {len(concepts)} concepts")
@@ -178,7 +261,7 @@ class IngestionPipeline:
                 logger.debug(f"Generating embeddings for {len(concepts)} concepts")
                 concept_texts = [c.name + (f": {c.description}" if c.description else "") for c in concepts]
                 embeddings = await self.embeddings.embed_batch(concept_texts)
-                for concept, emb in zip(concepts, embeddings):
+                for concept, emb in zip(concepts, embeddings, strict=False):
                     concept.embedding = emb
 
             # Generate embeddings for memories
@@ -186,7 +269,7 @@ class IngestionPipeline:
                 logger.debug(f"Generating embeddings for {len(memories)} memories")
                 memory_texts = [m.content for m in memories]
                 embeddings = await self.embeddings.embed_batch(memory_texts)
-                for memory, emb in zip(memories, embeddings):
+                for memory, emb in zip(memories, embeddings, strict=False):
                     memory.embedding = emb
 
             # Save concepts
