@@ -12,6 +12,13 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 
+# Russian month names for date formatting
+RUSSIAN_MONTHS = {
+    1: "января", 2: "февраля", 3: "марта", 4: "апреля",
+    5: "мая", 6: "июня", 7: "июля", 8: "августа",
+    9: "сентября", 10: "октября", 11: "ноября", 12: "декабря",
+}
+
 from engram.ingestion.llm_client import LLMClient, get_llm_client
 from engram.models import EpisodicMemory, SemanticMemory
 from engram.retrieval.hybrid_search import ScoredEpisode, ScoredMemory
@@ -245,7 +252,13 @@ class ResponseSynthesizer:
         episodes_context: str,
     ) -> str:
         """Build the synthesis prompt."""
-        return f"""Вопрос пользователя: {query}
+        # Format current date in Russian
+        now = datetime.now()
+        current_date = f"{now.day} {RUSSIAN_MONTHS[now.month]} {now.year} года"
+
+        return f"""Текущая дата: {current_date}
+
+Вопрос пользователя: {query}
 
 Релевантные знания:
 {memories_context}
