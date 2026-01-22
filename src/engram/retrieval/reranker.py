@@ -172,3 +172,22 @@ def is_reranker_available() -> bool:
 def clear_reranker_cache() -> None:
     """Clear the cached reranker model (useful for testing)."""
     get_reranker.cache_clear()
+
+
+def preload_reranker() -> None:
+    """
+    Preload reranker model at startup to avoid delay on first query.
+
+    Call this during application startup (in lifespan handler).
+    Does nothing if reranker is disabled.
+    """
+    if not settings.reranker_enabled:
+        logger.info("Reranker disabled, skipping preload")
+        return
+
+    try:
+        logger.info("Preloading reranker model...")
+        get_reranker()
+        logger.info("Reranker model ready")
+    except Exception as e:
+        logger.warning(f"Failed to preload reranker: {e}")

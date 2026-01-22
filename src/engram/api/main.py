@@ -15,6 +15,7 @@ from engram.api.graph import router as graph_router
 from engram.api.routes import router
 from engram.config import settings
 from engram.retrieval.embeddings import preload_embedding_model
+from engram.retrieval.reranker import preload_reranker
 from engram.storage.neo4j_client import Neo4jClient
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Preloading embedding model...")
     preload_embedding_model()
     logger.info("Embedding model ready")
+
+    # Preload reranker model (if enabled) to avoid delay on first query
+    preload_reranker()
 
     # Store db in app state for routes
     app.state.db = db
