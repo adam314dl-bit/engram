@@ -34,6 +34,7 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 - **Time-Aware Responses**: Current date context enables relevant temporal reasoning
 - **Learning from Feedback**: Positive feedback strengthens memories, negative triggers re-reasoning
 - **Memory Consolidation**: Successful episodes crystallize into semantic memories
+- **Fast Ingestion**: Unified extraction (1 LLM call per document) with batch Neo4j writes
 - **OpenAI-Compatible API**: Works with Open WebUI and other clients
 
 ## Tech Stack
@@ -400,6 +401,19 @@ uv run ruff check src/engram
 - [x] PyMorphy3 validation for person extraction (reduces false positives)
 - [x] Reranker preloading at startup (faster first query)
 - [x] Reranker single GPU mode (avoids conflicts with vLLM on multi-GPU setups)
+
+**v3.5 Ingestion Speed (30-40% faster):**
+- [x] Simplified pipeline: 3 LLM calls per doc (concept, memory, relationship)
+- [x] Removed separate table/list extraction (handled by memory LLM)
+- [x] Batch Neo4j writes (UNWIND queries instead of individual MERGEs)
+- [x] Combined embedding calls (single batch for concepts + memories)
+- [x] High concurrency config (32 docs parallel)
+
+**v3.6 Combined Extraction (3x faster ingestion):**
+- [x] Unified extraction: 1 LLM call per document (concepts, memories, relations, persons)
+- [x] Shared context: LLM sees document once, extracts all knowledge types together
+- [x] 3x token efficiency: Document sent 1× vs 3× (6K vs 18K input tokens per doc)
+- [x] Better coherence: Concepts, memories, relations naturally aligned in same context
 
 ### Planned
 
