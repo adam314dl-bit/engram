@@ -27,6 +27,7 @@ dependencies = [
     # v3.3 additions
     "cyrtranslit>=1.0.0",  # Russian/Latin transliteration
     "natasha>=1.6.0",  # Russian NER for person extraction
+    "setuptools>=69.0.0",  # Required for pkg_resources (natasha dependency)
 ]
 
 [project.optional-dependencies]

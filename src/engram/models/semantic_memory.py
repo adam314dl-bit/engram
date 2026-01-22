@@ -83,6 +83,9 @@ class SemanticMemory:
     # Embedding for semantic search
     embedding: list[float] | None = None
 
+    # v3.3: Flexible metadata for source type, person info, table links, etc.
+    metadata: dict[str, Any] | None = None
+
     def to_dict(self) -> dict:
         """Convert to dictionary for Neo4j storage."""
         return {
@@ -112,6 +115,7 @@ class SemanticMemory:
             "superseded_by": self.superseded_by,
             "superseded_at": self.superseded_at.isoformat() if self.superseded_at else None,
             "embedding": self.embedding,
+            "metadata": self.metadata,
         }
 
     @classmethod
@@ -151,6 +155,7 @@ class SemanticMemory:
             superseded_by=data.get("superseded_by"),
             superseded_at=parse_datetime(data.get("superseded_at")),
             embedding=data.get("embedding"),
+            metadata=data.get("metadata"),
         )
 
     def is_valid(self) -> bool:
