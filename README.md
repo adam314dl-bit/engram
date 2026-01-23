@@ -48,7 +48,8 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 - **Contradiction Detection**: LLM-based detection and auto-resolution
 - **Learning from Feedback**: Positive feedback strengthens memories, negative triggers re-reasoning
 - **Memory Consolidation**: Successful episodes crystallize into semantic memories
-- **Fast Ingestion**: Unified extraction (1 LLM call per document) with batch Neo4j writes
+- **Table Enrichment**: LLM-based table enrichment with multi-vector retrieval
+- **Fast Ingestion**: Batch Neo4j writes and batch embeddings
 
 **Integration:**
 - **Source Attribution**: Shows document sources (title + URL) in responses
@@ -458,18 +459,11 @@ uv run ruff check src/engram
 - [x] Reranker preloading at startup (faster first query)
 - [x] Reranker single GPU mode (avoids conflicts with vLLM on multi-GPU setups)
 
-**v3.5 Ingestion Speed (30-40% faster):**
-- [x] Simplified pipeline: 3 LLM calls per doc (concept, memory, relationship)
-- [x] Removed separate table/list extraction (handled by memory LLM)
+**v3.5 Ingestion Improvements:**
 - [x] Batch Neo4j writes (UNWIND queries instead of individual MERGEs)
 - [x] Combined embedding calls (single batch for concepts + memories)
 - [x] High concurrency config (32 docs parallel)
-
-**v3.6 Combined Extraction (3x faster ingestion):**
-- [x] Unified extraction: 1 LLM call per document (concepts, memories, relations, persons)
-- [x] Shared context: LLM sees document once, extracts all knowledge types together
-- [x] 3x token efficiency: Document sent 1× vs 3× (6K vs 18K input tokens per doc)
-- [x] Better coherence: Concepts, memories, relations naturally aligned in same context
+- [x] Separate extractors with table enrichment (2 + N LLM calls per doc)
 
 **v3.7 Two-Phase Retrieval with Confidence Fallback:**
 - [x] Semantic chunking with Chonkie (topic boundary detection)
