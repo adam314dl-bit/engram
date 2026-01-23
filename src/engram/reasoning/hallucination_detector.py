@@ -131,19 +131,23 @@ CLAIM_VERIFICATION_PROMPT = """Проверь, подтверждается ли
 Утверждение: {claim}
 
 Классифицируй:
-- "supported": утверждение подтверждается контекстом
-- "contradicted": утверждение противоречит контексту
-- "not_supported": утверждение не упоминается в контексте
-- "uncertain": невозможно определить
+- supported: утверждение подтверждается контекстом
+- contradicted: утверждение противоречит контексту
+- not_supported: утверждение не упоминается в контексте
+- uncertain: невозможно определить
 
-Верни JSON:
-{{
-  "status": "supported" | "contradicted" | "not_supported" | "uncertain",
-  "confidence": 0.0-1.0,
-  "evidence": "цитата из контекста или null"
-}}
+Верни результат в формате:
+VERIFY|статус|уверенность|доказательство
 
-JSON:"""
+Где:
+- статус: supported, contradicted, not_supported, uncertain
+- уверенность: число 0-100
+- доказательство: цитата из контекста или "нет"
+
+Пример:
+VERIFY|supported|85|Docker использует контейнеры для изоляции
+
+Ответ:"""
 
 
 class HallucinationDetector:
@@ -335,42 +339,36 @@ class HallucinationDetector:
                 claim=claim,
             )
 
-            result = await self.llm.generate_json(
+            response = await self.llm.generate(
                 prompt=prompt,
                 temperature=0.1,
                 max_tokens=256,
-                fallback=None,
             )
 
-            if result:
-                status_str = result.get("status", "uncertain")
-                confidence = result.get("confidence", 0.5)
-                evidence = result.get("evidence")
+            status, confidence, evidence = self._parse_verification_response(response)
 
-                status = ClaimStatus(status_str)
+            # Convert confidence to probabilities
+            if status == ClaimStatus.SUPPORTED:
+                entailment = confidence
+                contradiction = 0.0
+                neutral = 1 - confidence
+            elif status == ClaimStatus.CONTRADICTED:
+                entailment = 0.0
+                contradiction = confidence
+                neutral = 1 - confidence
+            else:
+                entailment = 0.3
+                contradiction = 0.1
+                neutral = 0.6
 
-                # Convert confidence to probabilities
-                if status == ClaimStatus.SUPPORTED:
-                    entailment = confidence
-                    contradiction = 0.0
-                    neutral = 1 - confidence
-                elif status == ClaimStatus.CONTRADICTED:
-                    entailment = 0.0
-                    contradiction = confidence
-                    neutral = 1 - confidence
-                else:
-                    entailment = 0.3
-                    contradiction = 0.1
-                    neutral = 0.6
-
-                return ClaimVerification(
-                    claim=claim,
-                    status=status,
-                    entailment_prob=entailment,
-                    contradiction_prob=contradiction,
-                    neutral_prob=neutral,
-                    best_evidence=evidence,
-                )
+            return ClaimVerification(
+                claim=claim,
+                status=status,
+                entailment_prob=entailment,
+                contradiction_prob=contradiction,
+                neutral_prob=neutral,
+                best_evidence=evidence,
+            )
 
         except Exception as e:
             logger.warning(f"LLM verification failed: {e}")
@@ -383,6 +381,38 @@ class HallucinationDetector:
             contradiction_prob=0.1,
             neutral_prob=0.6,
         )
+
+    def _parse_verification_response(
+        self,
+        text: str,
+    ) -> tuple[ClaimStatus, float, str | None]:
+        """Parse pipe-delimited verification response."""
+        for line in text.strip().split("\n"):
+            line = line.strip()
+            if line.startswith("VERIFY|"):
+                parts = line.split("|", 3)
+                if len(parts) >= 3:
+                    status_str = parts[1].strip().lower()
+                    # Validate status
+                    if status_str not in ("supported", "contradicted", "not_supported", "uncertain"):
+                        status_str = "uncertain"
+                    status = ClaimStatus(status_str)
+
+                    try:
+                        confidence = float(parts[2].strip()) / 100.0
+                        confidence = max(0.0, min(1.0, confidence))
+                    except ValueError:
+                        confidence = 0.5
+
+                    evidence = None
+                    if len(parts) > 3:
+                        evidence = parts[3].strip()
+                        if evidence.lower() in ("нет", "null", "none", ""):
+                            evidence = None
+
+                    return status, confidence, evidence
+
+        return ClaimStatus.UNCERTAIN, 0.5, None
 
     def _format_context(self, memories: list[ScoredMemory]) -> str:
         """Format memories as context string."""

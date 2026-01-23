@@ -125,13 +125,15 @@ VERBALIZED_CONFIDENCE_PROMPT = """Оцени уверенность в отве�
 2. Есть ли неточности или пробелы в ответе?
 3. Можно ли доверять этому ответу?
 
-Верни JSON:
-{{
-  "confidence": 0-10,
-  "reasoning": "объяснение оценки"
-}}
+Верни результат в формате:
+CONFIDENCE|оценка|обоснование
 
-JSON:"""
+Где оценка: число 0-10
+
+Пример:
+CONFIDENCE|8|Ответ полностью основан на контексте
+
+Ответ:"""
 
 
 class ConfidenceCalibrator:
@@ -328,19 +330,32 @@ class ConfidenceCalibrator:
                 response=response,
             )
 
-            result = await self.llm.generate_json(
+            llm_response = await self.llm.generate(
                 prompt=prompt,
                 temperature=0.1,
                 max_tokens=256,
-                fallback={"confidence": 5},
             )
 
-            confidence = result.get("confidence", 5)
+            confidence = self._parse_confidence_response(llm_response)
             return confidence / 10.0  # Normalize to 0-1
 
         except Exception as e:
             logger.warning(f"Verbalized confidence failed: {e}")
             return 0.5
+
+    def _parse_confidence_response(self, text: str) -> float:
+        """Parse pipe-delimited confidence response."""
+        for line in text.strip().split("\n"):
+            line = line.strip()
+            if line.startswith("CONFIDENCE|"):
+                parts = line.split("|", 2)
+                if len(parts) >= 2:
+                    try:
+                        confidence = float(parts[1].strip())
+                        return max(0.0, min(10.0, confidence))
+                    except ValueError:
+                        pass
+        return 5.0  # Default middle confidence
 
     def _determine_action(
         self,

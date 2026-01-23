@@ -99,17 +99,19 @@ VALIDATION_PROMPT = """Проверь, подтверждается ли отв�
 2. Есть ли противоречия с контекстом?
 3. Есть ли утверждения без опоры на контекст?
 
-Верни JSON:
-{{
-  "support_level": "fully_supported" | "partially_supported" | "not_supported",
-  "supported_claims": ["список подтверждённых утверждений"],
-  "unsupported_claims": [
-    {{"claim": "неподтверждённое утверждение", "reason": "почему не подтверждено"}}
-  ],
-  "reasoning": "общий анализ"
-}}
+Верни результат проверки в формате:
+SUPPORT|уровень|общее_обоснование
 
-JSON:"""
+Для каждого неподтверждённого утверждения добавь строку:
+UNSUPPORTED|утверждение|причина
+
+Уровни: fully_supported, partially_supported, not_supported
+
+Пример:
+SUPPORT|partially_supported|Часть информации подтверждена контекстом
+UNSUPPORTED|Docker работает на Windows|В контексте нет информации о Windows
+
+Ответ:"""
 
 
 REGENERATION_PROMPT = """Исправь ответ, убрав неподтверждённые утверждения.
@@ -234,6 +236,7 @@ class SelfRAGValidator:
         context: str,
     ) -> ValidationResult:
         """Validate a single response against context."""
+        error_msg = ""
         try:
             prompt = VALIDATION_PROMPT.format(
                 query=query,
@@ -241,50 +244,65 @@ class SelfRAGValidator:
                 response=response,
             )
 
-            result = await self.llm.generate_json(
+            llm_response = await self.llm.generate(
                 prompt=prompt,
                 temperature=0.1,
                 max_tokens=1024,
-                fallback=None,
             )
 
-            if result:
-                support_level = SupportLevel(result.get("support_level", "not_supported"))
-
-                unsupported_claims = [
-                    UnsupportedClaim(claim=c.get("claim", ""), reason=c.get("reason", ""))
-                    for c in result.get("unsupported_claims", [])
-                ]
-
-                supported_claims = result.get("supported_claims", [])
-                reasoning = result.get("reasoning", "")
-
-                # Calculate confidence based on support level
-                confidence_map = {
-                    SupportLevel.FULLY_SUPPORTED: 0.9,
-                    SupportLevel.PARTIALLY_SUPPORTED: 0.6,
-                    SupportLevel.NOT_SUPPORTED: 0.2,
-                }
-                confidence = confidence_map[support_level]
-
-                return ValidationResult(
-                    support_level=support_level,
-                    unsupported_claims=unsupported_claims,
-                    supported_claims=supported_claims,
-                    validation_reasoning=reasoning,
-                    confidence=confidence,
-                )
+            return self._parse_validation_response(llm_response)
 
         except Exception as e:
             logger.warning(f"Validation failed: {e}")
+            error_msg = str(e)
 
         # Default to partially supported on error
         return ValidationResult(
             support_level=SupportLevel.PARTIALLY_SUPPORTED,
             unsupported_claims=[],
             supported_claims=[],
-            validation_reasoning=f"Validation error: {e}",
+            validation_reasoning=f"Validation error: {error_msg}",
             confidence=0.5,
+        )
+
+    def _parse_validation_response(self, text: str) -> ValidationResult:
+        """Parse pipe-delimited validation response."""
+        support_level = SupportLevel.PARTIALLY_SUPPORTED
+        reasoning = ""
+        unsupported_claims: list[UnsupportedClaim] = []
+
+        for line in text.strip().split("\n"):
+            line = line.strip()
+            if line.startswith("SUPPORT|"):
+                parts = line.split("|", 2)
+                if len(parts) >= 2:
+                    level_str = parts[1].strip().lower()
+                    if level_str in ("fully_supported", "partially_supported", "not_supported"):
+                        support_level = SupportLevel(level_str)
+                if len(parts) >= 3:
+                    reasoning = parts[2].strip()
+            elif line.startswith("UNSUPPORTED|"):
+                parts = line.split("|", 2)
+                if len(parts) >= 3:
+                    unsupported_claims.append(UnsupportedClaim(
+                        claim=parts[1].strip(),
+                        reason=parts[2].strip()
+                    ))
+
+        # Calculate confidence based on support level
+        confidence_map = {
+            SupportLevel.FULLY_SUPPORTED: 0.9,
+            SupportLevel.PARTIALLY_SUPPORTED: 0.6,
+            SupportLevel.NOT_SUPPORTED: 0.2,
+        }
+        confidence = confidence_map[support_level]
+
+        return ValidationResult(
+            support_level=support_level,
+            unsupported_claims=unsupported_claims,
+            supported_claims=[],  # Not tracked in pipe format
+            validation_reasoning=reasoning,
+            confidence=confidence,
         )
 
     async def _regenerate_response(

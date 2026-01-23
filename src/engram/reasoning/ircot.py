@@ -72,13 +72,16 @@ DECOMPOSITION_PROMPT = """Разбей сложный вопрос на подв
 Вопрос: {query}
 
 Разбей на 2-4 подвопроса, которые нужно последовательно ответить.
-Верни JSON:
-{{
-  "sub_queries": ["подвопрос 1", "подвопрос 2", ...],
-  "reasoning": "почему такое разбиение"
-}}
 
-JSON:"""
+Верни каждый подвопрос в формате:
+SUBQUERY|текст подвопроса
+
+Пример:
+SUBQUERY|Что такое Kubernetes?
+SUBQUERY|Что такое Docker Swarm?
+SUBQUERY|В чём различия между ними?
+
+Ответ:"""
 
 
 REASONING_STEP_PROMPT = """Продолжи рассуждение на основе новой информации.
@@ -123,14 +126,16 @@ CONVERGENCE_CHECK_PROMPT = """Проверь, достаточно ли инфо
 Текущие выводы:
 {conclusions}
 
-Верни JSON:
-{{
-  "has_enough_info": true | false,
-  "missing_info": "что ещё нужно" | null,
-  "ready_for_answer": true | false
-}}
+Верни результат в формате:
+CONVERGE|готов|недостающая_информация
 
-JSON:"""
+Где готов: yes или no
+
+Пример:
+CONVERGE|yes|нет
+CONVERGE|no|Нужна информация о ценах
+
+Ответ:"""
 
 
 class IRCoTReasoner:
@@ -289,23 +294,34 @@ class IRCoTReasoner:
         """Decompose complex query into sub-queries."""
         try:
             prompt = DECOMPOSITION_PROMPT.format(query=query)
-            result = await self.llm.generate_json(
+            response = await self.llm.generate(
                 prompt=prompt,
                 temperature=0.3,
                 max_tokens=512,
-                fallback=None,
             )
 
-            if result and "sub_queries" in result:
-                sub_queries = result["sub_queries"]
-                if isinstance(sub_queries, list) and sub_queries:
-                    return sub_queries[:4]  # Max 4 sub-queries
+            sub_queries = self._parse_decomposition_response(response)
+            if sub_queries:
+                return sub_queries[:4]  # Max 4 sub-queries
 
         except Exception as e:
             logger.warning(f"Query decomposition failed: {e}")
 
         # Fallback: return original query
         return [query]
+
+    def _parse_decomposition_response(self, text: str) -> list[str]:
+        """Parse pipe-delimited decomposition response."""
+        sub_queries = []
+        for line in text.strip().split("\n"):
+            line = line.strip()
+            if line.startswith("SUBQUERY|"):
+                parts = line.split("|", 1)
+                if len(parts) >= 2:
+                    sub_query = parts[1].strip()
+                    if sub_query:
+                        sub_queries.append(sub_query)
+        return sub_queries
 
     async def _retrieve_for_query(
         self,
@@ -370,18 +386,28 @@ class IRCoTReasoner:
                 conclusions="\n".join(conclusions[-3:]) if conclusions else "Нет выводов пока",
             )
 
-            result = await self.llm.generate_json(
+            response = await self.llm.generate(
                 prompt=prompt,
                 temperature=0.1,
                 max_tokens=256,
-                fallback={"ready_for_answer": False},
             )
 
-            return result.get("ready_for_answer", False)
+            return self._parse_convergence_response(response)
 
         except Exception as e:
             logger.warning(f"Convergence check failed: {e}")
             return False
+
+    def _parse_convergence_response(self, text: str) -> bool:
+        """Parse pipe-delimited convergence response."""
+        for line in text.strip().split("\n"):
+            line = line.strip()
+            if line.startswith("CONVERGE|"):
+                parts = line.split("|", 2)
+                if len(parts) >= 2:
+                    ready = parts[1].strip().lower()
+                    return ready in ("yes", "да", "true", "1")
+        return False
 
     async def _synthesize(
         self,

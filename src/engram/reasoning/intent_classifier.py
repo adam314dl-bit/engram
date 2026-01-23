@@ -144,22 +144,26 @@ INTENT_CLASSIFICATION_PROMPT = """Классифицируй запрос пол
 1. Нужен ли поиск в базе знаний для ответа?
 2. Насколько сложный запрос?
 
-Верни JSON:
-{{
-  "decision": "retrieve" | "no_retrieve" | "clarify",
-  "complexity": "simple" | "moderate" | "complex",
-  "reasoning": "краткое объяснение решения"
-}}
+Верни ответ в формате:
+INTENT|решение|сложность|обоснование
+
+Где:
+- решение: retrieve, no_retrieve, clarify
+- сложность: simple, moderate, complex
+- обоснование: краткое объяснение
 
 Правила:
-- "retrieve": запрос требует фактической информации из базы знаний
-- "no_retrieve": приветствия, благодарности, общий разговор
-- "clarify": запрос неоднозначен, нужно уточнение
-- "simple": простой фактоидный вопрос (кто, что, где, когда)
-- "moderate": стандартный вопрос, требующий объяснения
-- "complex": сравнение, анализ, многошаговое рассуждение
+- retrieve: запрос требует фактической информации из базы знаний
+- no_retrieve: приветствия, благодарности, общий разговор
+- clarify: запрос неоднозначен, нужно уточнение
+- simple: простой фактоидный вопрос (кто, что, где, когда)
+- moderate: стандартный вопрос, требующий объяснения
+- complex: сравнение, анализ, многошаговое рассуждение
 
-JSON:"""
+Пример:
+INTENT|retrieve|complex|Вопрос требует информацию из базы знаний
+
+Ответ:"""
 
 
 class IntentClassifier:
@@ -231,30 +235,28 @@ class IntentClassifier:
         """Use LLM for ambiguous cases."""
         try:
             prompt = INTENT_CLASSIFICATION_PROMPT.format(query=query)
-            result = await self.llm.generate_json(
+            response = await self.llm.generate(
                 prompt=prompt,
                 temperature=0.1,
                 max_tokens=256,
-                fallback=None,
             )
 
-            if result:
-                decision_str = result.get("decision", "retrieve")
-                complexity_str = result.get("complexity", complexity.value)
-                reasoning = result.get("reasoning", "LLM classification")
+            decision_str, complexity_str, reasoning = self._parse_intent_response(
+                response, complexity.value
+            )
 
-                decision = RetrievalDecision(decision_str)
-                llm_complexity = QueryComplexity(complexity_str)
+            decision = RetrievalDecision(decision_str)
+            llm_complexity = QueryComplexity(complexity_str)
 
-                logger.debug(f"LLM classification: {decision.value}, {llm_complexity.value}")
+            logger.debug(f"LLM classification: {decision.value}, {llm_complexity.value}")
 
-                return IntentResult(
-                    decision=decision,
-                    complexity=llm_complexity,
-                    confidence=0.8,
-                    reasoning=reasoning,
-                    should_use_ircot=llm_complexity == QueryComplexity.COMPLEX,
-                )
+            return IntentResult(
+                decision=decision,
+                complexity=llm_complexity,
+                confidence=0.8,
+                reasoning=reasoning,
+                should_use_ircot=llm_complexity == QueryComplexity.COMPLEX,
+            )
 
         except Exception as e:
             logger.warning(f"LLM classification failed: {e}")
@@ -267,6 +269,34 @@ class IntentClassifier:
             reasoning="LLM classification failed, defaulting to retrieve",
             should_use_ircot=complexity == QueryComplexity.COMPLEX,
         )
+
+    def _parse_intent_response(
+        self,
+        text: str,
+        default_complexity: str,
+    ) -> tuple[str, str, str]:
+        """Parse pipe-delimited intent response."""
+        for line in text.strip().split("\n"):
+            line = line.strip()
+            if line.startswith("INTENT|"):
+                parts = line.split("|")
+                if len(parts) >= 4:
+                    decision = parts[1].strip().lower()
+                    complexity = parts[2].strip().lower()
+                    reasoning = parts[3].strip()
+                    # Validate decision
+                    if decision not in ("retrieve", "no_retrieve", "clarify"):
+                        decision = "retrieve"
+                    # Validate complexity
+                    if complexity not in ("simple", "moderate", "complex"):
+                        complexity = default_complexity
+                    return decision, complexity, reasoning
+                elif len(parts) >= 2:
+                    decision = parts[1].strip().lower()
+                    if decision not in ("retrieve", "no_retrieve", "clarify"):
+                        decision = "retrieve"
+                    return decision, default_complexity, "Parsed from LLM"
+        return "retrieve", default_complexity, "Fallback - no INTENT line found"
 
 
 async def classify_intent(
