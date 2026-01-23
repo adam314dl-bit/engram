@@ -226,7 +226,7 @@ class Settings(BaseSettings):
 
     # Two-phase retrieval settings
     phase1_candidates: int = Field(
-        default=200,
+        default=300,
         description="Number of memory candidates to retrieve in Phase 1"
     )
     phase1_rerank_k: int = Field(
@@ -236,6 +236,10 @@ class Settings(BaseSettings):
     confidence_threshold: int = Field(
         default=5,
         description="Confidence threshold (0-10) below which Phase 2 triggers"
+    )
+    max_synthesis_documents: int = Field(
+        default=6,
+        description="Maximum documents to send to LLM for final synthesis"
     )
 
     # Semantic chunking settings

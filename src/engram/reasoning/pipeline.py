@@ -4,9 +4,14 @@ This is the main entry point for the reasoning system.
 
 Supports two modes:
 1. Standard mode: Retrieve memories -> Synthesize response
-2. Two-phase mode: Retrieve candidates -> LLM select -> Fetch documents -> Synthesize
+2. Two-phase mode: Always runs both phases in parallel:
+   - Phase 1: Memory retrieval (graph + vector + BM25) -> LLM selection
+   - Phase 2: BM25 chunk search -> LLM selection
+   - Merge & rank documents (docs in both phases get priority)
+   - Select top N documents for synthesis
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 
@@ -193,115 +198,132 @@ class ReasoningPipeline:
         self,
         query: str,
         top_k_candidates: int | None = None,
-        confidence_threshold: int | None = None,
         temperature: float = 0.4,
     ) -> ReasoningResult:
         """
-        Execute two-phase retrieval with confidence fallback.
+        Execute two-phase retrieval - always runs both phases in parallel.
 
         Flow:
-        Phase 1: Retrieve memories -> LLM select with confidence score
-        If confidence < threshold:
-          Phase 2: BM25 search on raw chunks -> LLM select
-          Merge Phase 1 + Phase 2 results
+        Phase 1 (parallel): Retrieve memories -> LLM select
+        Phase 2 (parallel): BM25 search on raw chunks -> LLM select
+        Merge & deduplicate documents from both phases
+        Rank by score (docs in both phases get priority)
+        Select top N documents (default 6)
+        Send to LLM for synthesis
 
         Args:
             query: User query
             top_k_candidates: Number of candidates to retrieve (default from settings)
-            confidence_threshold: Threshold below which Phase 2 triggers (default from settings)
             temperature: LLM temperature for synthesis
 
         Returns:
             ReasoningResult with answer, documents, and selection info
         """
         top_k_candidates = top_k_candidates or settings.phase1_candidates
-        confidence_threshold = confidence_threshold or settings.confidence_threshold
+        max_docs = settings.max_synthesis_documents
 
         logger.info(f"Two-phase reasoning for query: {query[:50]}...")
 
         # =================================================================
-        # Phase 1: Memory-based retrieval
+        # Run Phase 1 and Phase 2 in parallel
         # =================================================================
-        retrieval_result = await self.retrieval.retrieve_candidates(
-            query=query,
-            top_k_memories=top_k_candidates,
-        )
 
-        logger.debug(f"Phase 1: Retrieved {len(retrieval_result.memories)} memory candidates")
-
-        # LLM selects relevant memories with confidence score
-        selection_result = await self.selector.select(
-            query=query,
-            candidates=retrieval_result.memories,
-            max_candidates=top_k_candidates,
-        )
-
-        logger.info(
-            f"Phase 1: Selected {len(selection_result.selected_ids)} memories, "
-            f"confidence: {selection_result.confidence:.1f}"
-        )
-
-        # Track Phase 2 results
-        phase2_triggered = False
-        chunk_selection_result: ChunkSelectionResult | None = None
-
-        # =================================================================
-        # Phase 2: Raw chunk fallback (if confidence is low)
-        # =================================================================
-        if selection_result.confidence < confidence_threshold:
-            logger.info(
-                f"Phase 1 confidence {selection_result.confidence:.1f} < {confidence_threshold}, "
-                "triggering Phase 2 chunk search"
+        async def run_phase1() -> tuple[RetrievalResult, SelectionResult]:
+            """Phase 1: Memory-based retrieval + LLM selection."""
+            retrieval = await self.retrieval.retrieve_candidates(
+                query=query,
+                top_k_memories=top_k_candidates,
             )
-            phase2_triggered = True
+            logger.debug(f"Phase 1: Retrieved {len(retrieval.memories)} memory candidates")
 
-            # BM25 search on raw document chunks
+            selection = await self.selector.select(
+                query=query,
+                candidates=retrieval.memories,
+                max_candidates=top_k_candidates,
+            )
+            logger.info(
+                f"Phase 1: Selected {len(selection.selected_ids)} memories, "
+                f"confidence: {selection.confidence:.1f}"
+            )
+            return retrieval, selection
+
+        async def run_phase2() -> ChunkSelectionResult | None:
+            """Phase 2: BM25 chunk search + LLM selection."""
             chunk_results = await self.db.fulltext_search_chunks(query, k=200)
             logger.debug(f"Phase 2: Found {len(chunk_results)} chunks via BM25")
 
-            if chunk_results:
-                # LLM selects relevant chunks
-                chunk_selection_result = await self.selector.select_from_chunks(
-                    query=query,
-                    chunks=chunk_results,
-                    max_candidates=100,
-                )
+            if not chunk_results:
+                return None
 
-                logger.info(
-                    f"Phase 2: Selected {len(chunk_selection_result.selected_ids)} chunks, "
-                    f"confidence: {chunk_selection_result.confidence:.1f}"
-                )
+            chunk_selection = await self.selector.select_from_chunks(
+                query=query,
+                chunks=chunk_results,
+                max_candidates=100,
+            )
+            logger.info(
+                f"Phase 2: Selected {len(chunk_selection.selected_ids)} chunks, "
+                f"confidence: {chunk_selection.confidence:.1f}"
+            )
+            return chunk_selection
+
+        # Run both phases in parallel
+        (retrieval_result, selection_result), chunk_selection_result = await asyncio.gather(
+            run_phase1(),
+            run_phase2(),
+        )
 
         # =================================================================
-        # Fetch source documents
+        # Merge & Score Documents
         # =================================================================
-        source_documents: list[Document] = []
-        memory_doc_ids: set[str] = set()
+        doc_scores: dict[str, float] = {}  # doc_id -> score
 
-        # Get documents from Phase 1 memories
+        # Phase 1 documents (from memories)
+        phase1_doc_ids: set[str] = set()
         if selection_result.selected_ids:
             phase1_docs = await self.db.get_source_documents_for_memories(
                 memory_ids=selection_result.selected_ids
             )
             for doc in phase1_docs:
-                if doc.id not in memory_doc_ids:
-                    source_documents.append(doc)
-                    memory_doc_ids.add(doc.id)
+                doc_scores[doc.id] = doc_scores.get(doc.id, 0) + 1.0
+                phase1_doc_ids.add(doc.id)
 
-        # Get documents from Phase 2 chunks (if triggered)
+        # Phase 2 documents (from chunks)
+        phase2_doc_ids: set[str] = set()
         if chunk_selection_result and chunk_selection_result.chunks:
-            # Collect unique doc_ids from selected chunks
             chunk_doc_ids = {
                 doc_id for _, (_, doc_id) in chunk_selection_result.chunks.items()
             }
             for doc_id in chunk_doc_ids:
-                if doc_id not in memory_doc_ids:
-                    doc = await self.db.get_document(doc_id)
-                    if doc:
-                        source_documents.append(doc)
-                        memory_doc_ids.add(doc_id)
+                doc_scores[doc_id] = doc_scores.get(doc_id, 0) + 1.0
+                phase2_doc_ids.add(doc_id)
 
-        logger.debug(f"Total source documents: {len(source_documents)}")
+        # Log overlap between phases
+        overlap = phase1_doc_ids & phase2_doc_ids
+        logger.debug(
+            f"Phase 1 docs: {len(phase1_doc_ids)}, Phase 2 docs: {len(phase2_doc_ids)}, "
+            f"overlap: {len(overlap)}"
+        )
+
+        # =================================================================
+        # Select Top N Documents
+        # =================================================================
+        # Sort by score (docs in both phases score 2.0, single phase score 1.0)
+        sorted_doc_ids = sorted(
+            doc_scores.keys(), key=lambda x: doc_scores[x], reverse=True
+        )
+        top_doc_ids = sorted_doc_ids[:max_docs]
+
+        # Fetch full documents
+        source_documents: list[Document] = []
+        for doc_id in top_doc_ids:
+            doc = await self.db.get_document(doc_id)
+            if doc:
+                source_documents.append(doc)
+
+        logger.info(
+            f"Selected {len(source_documents)} documents for synthesis "
+            f"(from {len(doc_scores)} unique docs)"
+        )
 
         # =================================================================
         # Synthesize response
@@ -322,8 +344,7 @@ class ReasoningPipeline:
 
         logger.info(
             f"Two-phase reasoning complete: {episode.behavior_name} "
-            f"(confidence: {synthesis.confidence:.0%}, "
-            f"docs: {len(source_documents)}, phase2: {phase2_triggered})"
+            f"(confidence: {synthesis.confidence:.0%}, docs: {len(source_documents)})"
         )
 
         return ReasoningResult(
@@ -334,7 +355,7 @@ class ReasoningPipeline:
             confidence=synthesis.confidence,
             selection_result=selection_result,
             source_documents=source_documents,
-            phase2_triggered=phase2_triggered,
+            phase2_triggered=True,  # Always True now since we always run both phases
             chunk_selection_result=chunk_selection_result,
         )
 
@@ -406,17 +427,17 @@ async def reason_with_documents(
     db: Neo4jClient,
     query: str,
     top_k_candidates: int | None = None,
-    confidence_threshold: int | None = None,
 ) -> ReasoningResult:
     """
     Convenience function for two-phase reasoning with documents.
 
-    Uses LLM selection to pick relevant memories from a large candidate pool.
-    If confidence is below threshold, falls back to BM25 search on raw chunks.
+    Always runs both phases:
+    - Phase 1: Memory-based retrieval with LLM selection
+    - Phase 2: BM25 chunk search with LLM selection
+    Merges and deduplicates documents, then selects top N for synthesis.
     """
     pipeline = ReasoningPipeline(db=db)
     return await pipeline.reason_with_documents(
         query=query,
         top_k_candidates=top_k_candidates,
-        confidence_threshold=confidence_threshold,
     )
