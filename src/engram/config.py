@@ -103,9 +103,9 @@ class Settings(BaseSettings):
     reflection_importance_threshold: float = 150.0
 
     # Retrieval Parameters
-    retrieval_top_k: int = 5
-    retrieval_bm25_k: int = 100
-    retrieval_vector_k: int = 100
+    retrieval_top_k: int = 100
+    retrieval_bm25_k: int = 200
+    retrieval_vector_k: int = 200
 
     # RRF Fusion Parameters
     rrf_k: int = Field(
@@ -123,7 +123,7 @@ class Settings(BaseSettings):
         description="Cross-encoder model for reranking"
     )
     reranker_candidates: int = Field(
-        default=30,
+        default=150,
         description="Number of candidates to pass to reranker"
     )
 
@@ -208,7 +208,7 @@ class Settings(BaseSettings):
 
     # v3.3 Dynamic top_k Parameters
     dynamic_topk_enabled: bool = Field(
-        default=True,
+        default=False,
         description="Enable dynamic top_k based on query complexity"
     )
     topk_simple: int = Field(
