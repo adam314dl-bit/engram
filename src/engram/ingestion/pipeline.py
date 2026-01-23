@@ -4,7 +4,6 @@ v3.4: Separate extractors with table enrichment (2 + N LLM calls per document).
       - 1 call for concepts
       - 1 call for memories
       - N calls for N tables (table enrichment)
-      Plus chunking for two-phase retrieval.
 """
 
 from __future__ import annotations
@@ -26,7 +25,6 @@ from engram.ingestion.parser import DocumentParser, generate_id
 from engram.ingestion.person_extractor import PersonExtractor
 from engram.ingestion.relationship_extractor import RelationshipExtractor
 from engram.models import Concept, Document, SemanticMemory
-from engram.preprocessing.chunker import ChunkingService, get_chunking_service
 from engram.preprocessing.table_parser import extract_tables, remove_tables_from_text
 from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
 from engram.retrieval.quality_filter import is_quality_chunk
@@ -46,7 +44,6 @@ class IngestionResult:
     concepts_created: int
     memories_created: int
     relations_created: int
-    chunks_created: int
     errors: list[str]
 
 
@@ -64,7 +61,6 @@ class IngestionPipeline:
     7. Apply quality filtering
     8. Generate embeddings (batch)
     9. Store in Neo4j (batch)
-    10. Generate chunks for two-phase retrieval
     """
 
     def __init__(
@@ -78,7 +74,6 @@ class IngestionPipeline:
         table_enricher: TableEnricher | None = None,
         list_extractor: ListExtractor | None = None,
         person_extractor: PersonExtractor | None = None,
-        chunking_service: ChunkingService | None = None,
     ) -> None:
         self.db = neo4j_client
         self.parser = parser or DocumentParser()
@@ -97,7 +92,6 @@ class IngestionPipeline:
         self.table_enricher = table_enricher
         self.list_extractor = list_extractor or ListExtractor()
         self.person_extractor = person_extractor or PersonExtractor()
-        self.chunker = chunking_service or get_chunking_service()
 
     async def ingest_file(self, path: Path | str) -> IngestionResult:
         """Ingest a single file."""
@@ -121,7 +115,6 @@ class IngestionPipeline:
         concepts_created = 0
         memories_created = 0
         relations_created = 0
-        chunks_created = 0
 
         try:
             # Update document status
@@ -357,22 +350,6 @@ class IngestionPipeline:
                 if memory_doc_links:
                     await self.db.link_memories_to_documents_batch(memory_doc_links)
 
-            # --- Phase 5: Generate and save chunks for two-phase retrieval ---
-            doc_chunks = self.chunker.chunk_document(text_content, document.id)
-            if doc_chunks:
-                chunk_dicts = [
-                    {
-                        "id": chunk.id,
-                        "text": chunk.text,
-                        "doc_id": chunk.doc_id,
-                        "position": chunk.position,
-                    }
-                    for chunk in doc_chunks
-                ]
-                await self.db.save_chunks_batch(chunk_dicts)
-                chunks_created = len(doc_chunks)
-                logger.debug(f"Created {chunks_created} chunks for: {document.title}")
-
             # Update document status
             document.status = "completed"
             document.processed_at = datetime.utcnow()
@@ -383,7 +360,7 @@ class IngestionPipeline:
             logger.info(
                 f"Ingested '{document.title}': "
                 f"{concepts_created} concepts, {memories_created} memories, "
-                f"{relations_created} relations, {chunks_created} chunks"
+                f"{relations_created} relations"
             )
 
         except Exception as e:
@@ -399,7 +376,6 @@ class IngestionPipeline:
             concepts_created=concepts_created,
             memories_created=memories_created,
             relations_created=relations_created,
-            chunks_created=chunks_created,
             errors=errors,
         )
 
@@ -458,7 +434,6 @@ class IngestionPipeline:
                     concepts_created=0,
                     memories_created=0,
                     relations_created=0,
-                    chunks_created=0,
                     errors=[str(result)],
                 )
                 # Check if already added via callback

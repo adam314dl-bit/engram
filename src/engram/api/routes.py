@@ -61,12 +61,6 @@ class ChatCompletionRequest(BaseModel):
     force_include_nodes: list[str] = []
     force_exclude_nodes: list[str] = []
 
-    # Two-phase retrieval (parallel phases, top 6 docs)
-    two_phase: bool = Field(
-        default=True,
-        description="Enable two-phase retrieval with parallel memory + chunk search"
-    )
-
 
 class ChatCompletionChoice(BaseModel):
     """Single choice in chat completion response."""
@@ -320,25 +314,17 @@ async def chat_completions(
         if body.agentic:
             return await _handle_agentic_request(db, query, body)
 
-        # Standard v3 pipeline
+        # Standard v3 pipeline with hybrid search
         pipeline = ReasoningPipeline(db=db)
 
-        if body.two_phase:
-            # Two-phase retrieval with confidence fallback
-            result = await pipeline.reason_with_documents(
-                query=query,
-                temperature=body.temperature,
-            )
-        else:
-            # Standard retrieval
-            result = await pipeline.reason(
-                query=query,
-                top_k_memories=body.top_k_memories,
-                top_k_episodes=body.top_k_episodes,
-                temperature=body.temperature,
-                force_include_nodes=body.force_include_nodes if body.force_include_nodes else None,
-                force_exclude_nodes=body.force_exclude_nodes if body.force_exclude_nodes else None,
-            )
+        result = await pipeline.reason(
+            query=query,
+            top_k_memories=body.top_k_memories,
+            top_k_episodes=body.top_k_episodes,
+            temperature=body.temperature,
+            force_include_nodes=body.force_include_nodes if body.force_include_nodes else None,
+            force_exclude_nodes=body.force_exclude_nodes if body.force_exclude_nodes else None,
+        )
 
         # Fetch source documents for memories used
         source_documents = await db.get_source_documents_for_memories(
