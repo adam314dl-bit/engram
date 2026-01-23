@@ -45,6 +45,9 @@ gpu = [
     "cugraph-cu12>=24.0.0",
     "cudf-cu12>=24.0.0",
 ]
+nli = [
+    "transformers>=4.35.0",  # For mDeBERTa NLI model in v4 hallucination detection
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -73,7 +76,7 @@ disallow_untyped_defs = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["sentence_transformers.*", "neo4j.*", "pymorphy3.*", "FlagEmbedding.*", "natasha.*", "cyrtranslit.*", "chonkie.*"]
+module = ["sentence_transformers.*", "neo4j.*", "pymorphy3.*", "FlagEmbedding.*", "natasha.*", "cyrtranslit.*", "chonkie.*", "transformers.*"]
 ignore_missing_imports = true
 
 [tool.uv]

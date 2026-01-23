@@ -17,7 +17,7 @@ from engram.retrieval.hybrid_search import (
 class TestReciprocalRankFusion:
     """Tests for RRF algorithm."""
 
-    def _to_dict(self, results):
+    def _scores_dict(self, results: list) -> dict[str, float]:
         """Convert FusedResult list to dict for easier testing."""
         return {r.id: r.fused_score for r in results}
 
@@ -25,7 +25,7 @@ class TestReciprocalRankFusion:
         """Test RRF with a single ranked list."""
         ranked_list = [("a", 0.9), ("b", 0.8), ("c", 0.7)]
         results = reciprocal_rank_fusion([ranked_list])
-        scores = self._to_dict(results)
+        scores = self._scores_dict(results)
 
         # RRF score = 1/(k+rank+1), k=60 by default
         assert "a" in scores
@@ -40,7 +40,7 @@ class TestReciprocalRankFusion:
         list2 = [("b", 0.95), ("a", 0.85), ("d", 0.75)]
 
         results = reciprocal_rank_fusion([list1, list2])
-        scores = self._to_dict(results)
+        scores = self._scores_dict(results)
 
         # 'b' is #1 in list2 and #2 in list1, should have high score
         # 'a' is #1 in list1 and #2 in list2
@@ -63,7 +63,7 @@ class TestReciprocalRankFusion:
         list2 = [("c", 0.9), ("d", 0.8)]
 
         results = reciprocal_rank_fusion([list1, list2])
-        scores = self._to_dict(results)
+        scores = self._scores_dict(results)
 
         assert len(scores) == 4
         # All items should have similar scores since they appear in only one list
@@ -75,10 +75,10 @@ class TestReciprocalRankFusion:
 
         # With k=10, scores are higher overall
         results_k10 = reciprocal_rank_fusion([ranked_list], k=10)
-        scores_k10 = self._to_dict(results_k10)
+        scores_k10 = self._scores_dict(results_k10)
         # With k=100, scores are lower overall
         results_k100 = reciprocal_rank_fusion([ranked_list], k=100)
-        scores_k100 = self._to_dict(results_k100)
+        scores_k100 = self._scores_dict(results_k100)
 
         assert scores_k10["a"] > scores_k100["a"]
 

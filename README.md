@@ -16,26 +16,44 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 
 ## Features
 
+**Core Retrieval:**
 - **Spreading Activation**: Brain-like associative retrieval through concept networks
 - **Hybrid Search**: Combines graph traversal, vector similarity, and BM25 with RRF fusion
 - **Two-Phase Retrieval**: LLM confidence scoring with fallback to raw document chunks
 - **Cross-Encoder Reranking**: BGE-reranker-v2-m3 for improved retrieval precision
 - **MMR Diversity**: Maximal Marginal Relevance prevents redundant results
 - **Dynamic top_k**: Query complexity classification adjusts retrieval depth
+
+**v4 Agentic RAG (opt-in):**
+- **Intent Classification**: Decides whether to retrieve, respond directly, or ask for clarification
+- **CRAG Document Grading**: Grades retrieved docs as CORRECT/INCORRECT/AMBIGUOUS before generation
+- **Self-RAG Validation**: Validates response against context, regenerates if unsupported (max 3 iterations)
+- **Hallucination Detection**: NLI-based claim verification (LLM or mDeBERTa model)
+- **Inline Citations**: `[1]`, `[2]` style citations with optional NLI verification
+- **Confidence Calibration**: Knows when to abstain or respond with caveats
+- **IRCoT Multi-Hop**: Interleaved retrieval + reasoning for complex queries (max 7 steps)
+- **RAGAS Evaluation**: Automated quality metrics (faithfulness, relevancy, precision, recall)
+- **Async Research Mode**: Long-running queries with progress tracking and checkpointing
+
+**NLP & Processing:**
 - **Russian NLP**: PyMorphy3 lemmatization and stopword removal for Russian content
 - **Transliteration**: Handles mixed Cyrillic/Latin content with query expansion
 - **Person Extraction**: Natasha NER with PyMorphy3 validation extracts people, roles, and team affiliations
-- **ACT-R Memory Model**: Cognitive-inspired forgetting with base-level activation
-- **Contradiction Detection**: LLM-based detection and auto-resolution
-- **Source Attribution**: Shows document sources (title + URL) in responses
 - **Table Extraction**: Multi-vector strategy with searchable summaries and raw tables
 - **List Extraction**: Structure-aware extraction of definitions, procedures, bullets
 - **Quality Filtering**: Chunk scoring and source weighting for cleaner retrieval
-- **Confluence Integration**: Extracts metadata from Confluence exports, strips headers
-- **Time-Aware Responses**: Current date context enables relevant temporal reasoning
+
+**Memory & Learning:**
+- **ACT-R Memory Model**: Cognitive-inspired forgetting with base-level activation
+- **Contradiction Detection**: LLM-based detection and auto-resolution
 - **Learning from Feedback**: Positive feedback strengthens memories, negative triggers re-reasoning
 - **Memory Consolidation**: Successful episodes crystallize into semantic memories
 - **Fast Ingestion**: Unified extraction (1 LLM call per document) with batch Neo4j writes
+
+**Integration:**
+- **Source Attribution**: Shows document sources (title + URL) in responses
+- **Confluence Integration**: Extracts metadata from Confluence exports, strips headers
+- **Time-Aware Responses**: Current date context enables relevant temporal reasoning
 - **OpenAI-Compatible API**: Works with Open WebUI and other clients
 
 ## Tech Stack
@@ -171,6 +189,7 @@ Now you can chat with your knowledge base through Open WebUI.
 POST /v1/chat/completions
 ```
 
+**Standard request:**
 ```json
 {
   "messages": [{"role": "user", "content": "What is Docker?"}],
@@ -192,6 +211,20 @@ When `two_phase: true`:
 1. Phase 1: Retrieves memories, LLM assesses confidence (0-10)
 2. If confidence < 5: Phase 2 searches raw document chunks via BM25
 3. Merges source documents from both phases for synthesis
+
+**With v4 agentic mode (opt-in):**
+```json
+{
+  "messages": [{"role": "user", "content": "Compare Kubernetes and Docker Swarm"}],
+  "model": "engram",
+  "agentic": true
+}
+```
+
+When `agentic: true`, the system uses the full v4 pipeline:
+- Intent classification → CRAG grading → Self-RAG validation → Hallucination check → Confidence calibration
+- Complex queries automatically use IRCoT multi-hop reasoning
+- Response includes inline citations and confidence indicators
 
 ### Feedback
 
@@ -336,8 +369,9 @@ engram/
 │   ├── models/          # Concept, SemanticMemory, EpisodicMemory
 │   ├── ingestion/       # Document parsing, concept/memory extraction
 │   ├── storage/         # Neo4j client and schema
-│   ├── retrieval/       # Embeddings, spreading activation, hybrid search
-│   ├── reasoning/       # Response synthesis, episode management
+│   ├── retrieval/       # Embeddings, spreading activation, hybrid search, CRAG
+│   ├── reasoning/       # Synthesis, v4 agentic components (intent, self-rag, etc.)
+│   ├── evaluation/      # v4 RAGAS quality metrics
 │   ├── learning/        # Feedback, consolidation, memory strength
 │   └── api/             # FastAPI routes
 ├── tests/
@@ -444,6 +478,18 @@ uv run ruff check src/engram
 - [x] Phase 2 fallback: BM25 search on raw chunks when confidence < threshold
 - [x] Merged results: Phase 1 memories + Phase 2 chunks for synthesis
 - [x] Configurable thresholds via environment variables
+
+**v4 Agentic RAG:**
+- [x] Intent classification (RETRIEVE/NO_RETRIEVE/CLARIFY)
+- [x] CRAG document grading with query rewrite
+- [x] Self-RAG validation loop (max 3 iterations)
+- [x] NLI hallucination detection (LLM or mDeBERTa)
+- [x] Inline citations with NLI verification
+- [x] Confidence calibration with abstention
+- [x] IRCoT multi-hop reasoning (max 7 steps)
+- [x] RAGAS evaluation metrics
+- [x] Async research mode with checkpointing
+- [x] AgenticPipeline integration
 
 ### Planned
 

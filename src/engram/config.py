@@ -256,6 +256,144 @@ class Settings(BaseSettings):
         description="Semantic similarity threshold for chunk boundaries"
     )
 
+    # =========================================================================
+    # v4 Agentic RAG Settings
+    # =========================================================================
+
+    # Intent Classification
+    intent_classification_enabled: bool = Field(
+        default=True,
+        description="Enable intent classification to decide whether to retrieve"
+    )
+    intent_use_llm_fallback: bool = Field(
+        default=True,
+        description="Use LLM fallback for ambiguous intent classification"
+    )
+
+    # CRAG (Corrective RAG) Document Grading
+    crag_enabled: bool = Field(
+        default=True,
+        description="Enable CRAG document grading before generation"
+    )
+    crag_min_relevant_ratio: float = Field(
+        default=0.3,
+        description="Minimum ratio of relevant documents to proceed without rewrite"
+    )
+    crag_rewrite_on_failure: bool = Field(
+        default=True,
+        description="Rewrite query when all documents are irrelevant"
+    )
+
+    # Self-RAG Validation Loop
+    self_rag_enabled: bool = Field(
+        default=True,
+        description="Enable Self-RAG validation loop"
+    )
+    self_rag_max_iterations: int = Field(
+        default=3,
+        description="Maximum regeneration iterations for Self-RAG"
+    )
+
+    # NLI Hallucination Detection
+    nli_enabled: bool = Field(
+        default=True,
+        description="Enable NLI-based hallucination detection"
+    )
+    nli_use_model: bool = Field(
+        default=False,
+        description="Use mDeBERTa NLI model (False = LLM fallback only)"
+    )
+    nli_model: str = Field(
+        default="MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7",
+        description="NLI model for hallucination detection (multilingual)"
+    )
+    nli_entailment_threshold: float = Field(
+        default=0.6,
+        description="Minimum entailment probability to consider claim supported"
+    )
+    nli_contradiction_threshold: float = Field(
+        default=0.4,
+        description="Minimum contradiction probability to flag claim"
+    )
+
+    # Citation System
+    citations_enabled: bool = Field(
+        default=True,
+        description="Enable inline citations in responses"
+    )
+    citations_verify_nli: bool = Field(
+        default=True,
+        description="Verify citations using NLI"
+    )
+
+    # Confidence Calibration
+    confidence_high_threshold: float = Field(
+        default=0.8,
+        description="Threshold for high confidence responses"
+    )
+    confidence_medium_threshold: float = Field(
+        default=0.5,
+        description="Threshold for medium confidence responses"
+    )
+    confidence_low_threshold: float = Field(
+        default=0.3,
+        description="Threshold for low confidence responses"
+    )
+    confidence_abstain_on_very_low: bool = Field(
+        default=True,
+        description="Abstain from answering when confidence is very low"
+    )
+    confidence_retrieval_weight: float = Field(
+        default=0.3,
+        description="Weight for retrieval confidence in combined score"
+    )
+    confidence_validation_weight: float = Field(
+        default=0.4,
+        description="Weight for validation confidence in combined score"
+    )
+    confidence_generation_weight: float = Field(
+        default=0.3,
+        description="Weight for generation confidence in combined score"
+    )
+
+    # IRCoT (Interleaved Retrieval Chain-of-Thought)
+    ircot_enabled: bool = Field(
+        default=True,
+        description="Enable IRCoT for complex multi-hop queries"
+    )
+    ircot_max_steps: int = Field(
+        default=7,
+        description="Maximum reasoning steps for IRCoT"
+    )
+    ircot_max_paragraphs: int = Field(
+        default=15,
+        description="Maximum paragraphs to collect in IRCoT"
+    )
+
+    # RAGAS Evaluation
+    ragas_enabled: bool = Field(
+        default=True,
+        description="Enable RAGAS evaluation metrics"
+    )
+    ragas_async_evaluation: bool = Field(
+        default=True,
+        description="Run RAGAS evaluation asynchronously"
+    )
+
+    # Research Mode (Async Agent)
+    research_mode_enabled: bool = Field(
+        default=True,
+        description="Enable async research mode for complex queries"
+    )
+    research_checkpoint_dir: str = Field(
+        default="/tmp/engram_research",
+        description="Directory for research checkpoints"
+    )
+    research_max_concurrent_subtasks: int = Field(
+        default=3,
+        description="Maximum concurrent subtasks in research mode"
+    )
+
 
 def get_dev_settings() -> Settings:
     """Get development environment settings."""
