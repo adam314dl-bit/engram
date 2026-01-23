@@ -59,4 +59,5 @@ Thumbs.db
 # Local
 CLAUDE.md
 CONTEXT.md
+docs/claude-code-tips.md
 uv.lock

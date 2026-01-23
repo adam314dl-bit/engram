@@ -593,6 +593,71 @@ class Neo4jClient:
         return results
 
     # ==========================================================================
+    # Chunk operations (for two-phase retrieval)
+    # ==========================================================================
+
+    async def save_chunks_batch(self, chunks: list[dict[str, Any]]) -> None:
+        """
+        Batch save document chunks.
+
+        Args:
+            chunks: List of dicts with {id, text, doc_id, position}
+        """
+        if not chunks:
+            return
+
+        query = """
+        UNWIND $items AS item
+        MERGE (c:Chunk {id: item.id})
+        SET c.text = item.text,
+            c.doc_id = item.doc_id,
+            c.position = item.position
+        """
+        async with self.session() as session:
+            await session.run(query, items=chunks)
+        logger.debug(f"Batch saved {len(chunks)} chunks")
+
+    async def fulltext_search_chunks(
+        self, query_text: str, k: int = 200
+    ) -> list[tuple[str, str, str, float]]:
+        """
+        Search raw document chunks using full-text (BM25).
+
+        Args:
+            query_text: Query string for BM25 search
+            k: Maximum number of results
+
+        Returns:
+            List of (chunk_id, text, doc_id, score) tuples
+        """
+        # Escape Lucene special characters
+        escaped_query = escape_lucene_query(query_text)
+        query = """
+        CALL db.index.fulltext.queryNodes('chunk_content', $query_text)
+        YIELD node, score
+        RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, score
+        LIMIT $k
+        """
+        results: list[tuple[str, str, str, float]] = []
+        async with self.session() as session:
+            result = await session.run(query, query_text=escaped_query, k=k)
+            async for record in result:
+                results.append((
+                    record["id"],
+                    record["text"],
+                    record["doc_id"],
+                    record["score"],
+                ))
+        return results
+
+    async def delete_chunks_for_document(self, doc_id: str) -> None:
+        """Delete all chunks for a document (for re-ingestion)."""
+        query = "MATCH (c:Chunk {doc_id: $doc_id}) DETACH DELETE c"
+        async with self.session() as session:
+            await session.run(query, doc_id=doc_id)
+        logger.debug(f"Deleted chunks for document {doc_id}")
+
+    # ==========================================================================
     # Utility operations
     # ==========================================================================
 

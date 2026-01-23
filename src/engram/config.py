@@ -224,6 +224,34 @@ class Settings(BaseSettings):
         description="top_k for complex analytical queries"
     )
 
+    # Two-phase retrieval settings
+    phase1_candidates: int = Field(
+        default=200,
+        description="Number of memory candidates to retrieve in Phase 1"
+    )
+    phase1_rerank_k: int = Field(
+        default=100,
+        description="Number of candidates to pass to reranker in Phase 1"
+    )
+    confidence_threshold: int = Field(
+        default=5,
+        description="Confidence threshold (0-10) below which Phase 2 triggers"
+    )
+
+    # Semantic chunking settings
+    chunk_size_tokens: int = Field(
+        default=512,
+        description="Target chunk size in tokens for semantic chunking"
+    )
+    chunk_overlap_tokens: int = Field(
+        default=50,
+        description="Overlap between chunks in tokens"
+    )
+    chunk_semantic_threshold: float = Field(
+        default=0.5,
+        description="Semantic similarity threshold for chunk boundaries"
+    )
+
 
 def get_dev_settings() -> Settings:
     """Get development environment settings."""
