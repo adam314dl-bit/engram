@@ -361,8 +361,9 @@ async def chat_completions(
         memories_count = len(result.synthesis.memories_used)
         confidence_pct = int(result.confidence * 100)
 
-        # Format sources for display (markdown links)
+        # Format sources for display (markdown links) - limit to top 5
         if sources_used:
+            sources_used = sources_used[:5]
             sources_lines = []
             for src in sources_used:
                 if src.url:
@@ -491,8 +492,9 @@ async def _handle_agentic_request(
     # Build response content
     content = result.answer
 
-    # Add sources if available
+    # Add sources if available - limit to top 5
     if sources_used:
+        sources_used = sources_used[:5]
         sources_lines = []
         for src in sources_used:
             if src.url:
