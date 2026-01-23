@@ -53,10 +53,10 @@ class ChatCompletionRequest(BaseModel):
     force_include_nodes: list[str] = []
     force_exclude_nodes: list[str] = []
 
-    # Two-phase retrieval with confidence fallback
+    # Two-phase retrieval (parallel phases, top 6 docs)
     two_phase: bool = Field(
-        default=False,
-        description="Enable two-phase retrieval with LLM confidence scoring"
+        default=True,
+        description="Enable two-phase retrieval with parallel memory + chunk search"
     )
 
 
