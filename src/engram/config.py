@@ -226,7 +226,7 @@ class Settings(BaseSettings):
 
     # Two-phase retrieval settings
     phase1_candidates: int = Field(
-        default=300,
+        default=200,
         description="Number of memory candidates to retrieve in Phase 1"
     )
     phase1_rerank_k: int = Field(

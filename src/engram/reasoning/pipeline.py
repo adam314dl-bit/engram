@@ -249,7 +249,7 @@ class ReasoningPipeline:
 
         async def run_phase2() -> ChunkSelectionResult | None:
             """Phase 2: BM25 chunk search + LLM selection."""
-            chunk_results = await self.db.fulltext_search_chunks(query, k=200)
+            chunk_results = await self.db.fulltext_search_chunks(query, k=100)
             logger.debug(f"Phase 2: Found {len(chunk_results)} chunks via BM25")
 
             if not chunk_results:
