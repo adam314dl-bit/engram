@@ -111,6 +111,26 @@ class Neo4jClient:
         async with self.session() as session:
             await session.run(query, id=concept.id, props=props)
 
+    async def save_concepts_batch(self, concepts: list[Concept]) -> None:
+        """Save multiple concepts in a single batch operation."""
+        if not concepts:
+            return
+
+        query = """
+        UNWIND $items AS item
+        MERGE (c:Concept {id: item.id})
+        SET c += item.props
+        """
+        items = []
+        for concept in concepts:
+            props = concept.to_dict()
+            concept_id = props.pop("id")
+            items.append({"id": concept_id, "props": props})
+
+        async with self.session() as session:
+            await session.run(query, items=items)
+        logger.debug(f"Batch saved {len(concepts)} concepts")
+
     async def get_concept(self, concept_id: str) -> Concept | None:
         """Get a concept by ID."""
         query = "MATCH (c:Concept {id: $id}) RETURN c"
@@ -171,6 +191,28 @@ class Neo4jClient:
         async with self.session() as session:
             await session.run(query, **relation.to_dict())
 
+    async def save_relations_batch(self, relations: list[ConceptRelation]) -> None:
+        """Save multiple concept relations in a single batch operation."""
+        if not relations:
+            return
+
+        query = """
+        UNWIND $items AS item
+        MATCH (source:Concept {id: item.source_id})
+        MATCH (target:Concept {id: item.target_id})
+        MERGE (source)-[r:RELATED_TO]->(target)
+        SET r.type = item.relation_type,
+            r.weight = item.weight,
+            r.edge_embedding = item.edge_embedding,
+            r.co_occurrence_count = item.co_occurrence_count,
+            r.last_used = item.last_used
+        """
+        items = [relation.to_dict() for relation in relations]
+
+        async with self.session() as session:
+            await session.run(query, items=items)
+        logger.debug(f"Batch saved {len(relations)} relations")
+
     async def update_concept_activation(self, concept_id: str) -> None:
         """Increment activation count and update timestamp."""
         query = """
@@ -196,6 +238,26 @@ class Neo4jClient:
         async with self.session() as session:
             await session.run(query, id=memory.id, props=props)
 
+    async def save_memories_batch(self, memories: list[SemanticMemory]) -> None:
+        """Save multiple semantic memories in a single batch operation."""
+        if not memories:
+            return
+
+        query = """
+        UNWIND $items AS item
+        MERGE (s:SemanticMemory {id: item.id})
+        SET s += item.props
+        """
+        items = []
+        for memory in memories:
+            props = memory.to_dict()
+            memory_id = props.pop("id")
+            items.append({"id": memory_id, "props": props})
+
+        async with self.session() as session:
+            await session.run(query, items=items)
+        logger.debug(f"Batch saved {len(memories)} memories")
+
     async def get_semantic_memory(self, memory_id: str) -> SemanticMemory | None:
         """Get a semantic memory by ID."""
         query = "MATCH (s:SemanticMemory {id: $id}) RETURN s"
@@ -216,6 +278,29 @@ class Neo4jClient:
         async with self.session() as session:
             await session.run(query, memory_id=memory_id, concept_id=concept_id)
 
+    async def link_memories_to_concepts_batch(
+        self, links: list[tuple[str, str]]
+    ) -> None:
+        """Batch create ABOUT relationships between memories and concepts.
+
+        Args:
+            links: List of (memory_id, concept_id) tuples
+        """
+        if not links:
+            return
+
+        query = """
+        UNWIND $links AS link
+        MATCH (s:SemanticMemory {id: link.memory_id})
+        MATCH (c:Concept {id: link.concept_id})
+        MERGE (s)-[:ABOUT]->(c)
+        """
+        items = [{"memory_id": m, "concept_id": c} for m, c in links]
+
+        async with self.session() as session:
+            await session.run(query, links=items)
+        logger.debug(f"Batch linked {len(links)} memory-concept pairs")
+
     async def link_memory_to_document(self, memory_id: str, doc_id: str) -> None:
         """Create EXTRACTED_FROM relationship between memory and document."""
         query = """
@@ -225,6 +310,29 @@ class Neo4jClient:
         """
         async with self.session() as session:
             await session.run(query, memory_id=memory_id, doc_id=doc_id)
+
+    async def link_memories_to_documents_batch(
+        self, links: list[tuple[str, str]]
+    ) -> None:
+        """Batch create EXTRACTED_FROM relationships between memories and documents.
+
+        Args:
+            links: List of (memory_id, doc_id) tuples
+        """
+        if not links:
+            return
+
+        query = """
+        UNWIND $links AS link
+        MATCH (s:SemanticMemory {id: link.memory_id})
+        MATCH (d:Document {id: link.doc_id})
+        MERGE (s)-[:EXTRACTED_FROM]->(d)
+        """
+        items = [{"memory_id": m, "doc_id": d} for m, d in links]
+
+        async with self.session() as session:
+            await session.run(query, links=items)
+        logger.debug(f"Batch linked {len(links)} memory-document pairs")
 
     async def get_memories_for_concepts(
         self,
@@ -483,6 +591,71 @@ class Neo4jClient:
                 memory = SemanticMemory.from_dict(dict(record["node"]))
                 results.append((memory, record["score"]))
         return results
+
+    # ==========================================================================
+    # Chunk operations (for two-phase retrieval)
+    # ==========================================================================
+
+    async def save_chunks_batch(self, chunks: list[dict[str, Any]]) -> None:
+        """
+        Batch save document chunks.
+
+        Args:
+            chunks: List of dicts with {id, text, doc_id, position}
+        """
+        if not chunks:
+            return
+
+        query = """
+        UNWIND $items AS item
+        MERGE (c:Chunk {id: item.id})
+        SET c.text = item.text,
+            c.doc_id = item.doc_id,
+            c.position = item.position
+        """
+        async with self.session() as session:
+            await session.run(query, items=chunks)
+        logger.debug(f"Batch saved {len(chunks)} chunks")
+
+    async def fulltext_search_chunks(
+        self, query_text: str, k: int = 200
+    ) -> list[tuple[str, str, str, float]]:
+        """
+        Search raw document chunks using full-text (BM25).
+
+        Args:
+            query_text: Query string for BM25 search
+            k: Maximum number of results
+
+        Returns:
+            List of (chunk_id, text, doc_id, score) tuples
+        """
+        # Escape Lucene special characters
+        escaped_query = escape_lucene_query(query_text)
+        query = """
+        CALL db.index.fulltext.queryNodes('chunk_content', $query_text)
+        YIELD node, score
+        RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, score
+        LIMIT $k
+        """
+        results: list[tuple[str, str, str, float]] = []
+        async with self.session() as session:
+            result = await session.run(query, query_text=escaped_query, k=k)
+            async for record in result:
+                results.append((
+                    record["id"],
+                    record["text"],
+                    record["doc_id"],
+                    record["score"],
+                ))
+        return results
+
+    async def delete_chunks_for_document(self, doc_id: str) -> None:
+        """Delete all chunks for a document (for re-ingestion)."""
+        query = "MATCH (c:Chunk {doc_id: $doc_id}) DETACH DELETE c"
+        async with self.session() as session:
+            await session.run(query, doc_id=doc_id)
+        logger.debug(f"Deleted chunks for document {doc_id}")
 
     # ==========================================================================
     # Utility operations

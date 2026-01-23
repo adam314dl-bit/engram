@@ -104,19 +104,38 @@ class MemoryExtractor:
 
             if line.startswith("MEMORY|"):
                 parts = line.split("|")
-                if len(parts) < 4:
+                # New format: MEMORY|summary|keywords|type|concepts|importance (6 parts)
+                # Old format: MEMORY|content|type|concepts|importance (5 parts)
+                if len(parts) < 5:
                     continue
 
-                content = parts[1].strip()
+                # Detect format by checking if parts[2] looks like a type
+                is_new_format = len(parts) >= 6 and parts[3].strip().lower() in {"fact", "procedure", "relationship"}
+
+                if is_new_format:
+                    # New format: summary + keywords
+                    summary = parts[1].strip()
+                    keywords = parts[2].strip()
+                    memory_type = validate_memory_type(parts[3])
+                    concepts_str = parts[4] if len(parts) > 4 else ""
+                    importance = validate_importance(parts[5]) if len(parts) > 5 else 5.0
+
+                    # Combine summary and keywords for content
+                    content = f"Summary: {summary} | Keywords: {keywords}"
+                else:
+                    # Old format: content only
+                    content = parts[1].strip()
+                    memory_type = validate_memory_type(parts[2]) if len(parts) > 2 else "fact"
+                    concepts_str = parts[3] if len(parts) > 3 else ""
+                    importance = validate_importance(parts[4]) if len(parts) > 4 else 5.0
+
                 if not content or len(content) < 10:
                     continue
 
-                memory_type = validate_memory_type(parts[2]) if len(parts) > 2 else "fact"
-
                 # Parse concepts (comma-separated)
                 concept_ids: list[str] = []
-                if len(parts) > 3:
-                    concept_names = [c.strip() for c in parts[3].split(",")]
+                if concepts_str:
+                    concept_names = [c.strip() for c in concepts_str.split(",")]
                     for name in concept_names:
                         normalized = normalize_concept_name(name)
                         if not normalized:
@@ -127,8 +146,6 @@ class MemoryExtractor:
                             all_concepts[normalized] = concept
 
                         concept_ids.append(all_concepts[normalized].id)
-
-                importance = validate_importance(parts[4]) if len(parts) > 4 else 5.0
 
                 memory = SemanticMemory(
                     id=generate_id(),

@@ -28,6 +28,8 @@ dependencies = [
     "cyrtranslit>=1.0.0",  # Russian/Latin transliteration
     "natasha>=1.6.0",  # Russian NER for person extraction
     "setuptools>=69.0.0",  # Required for pkg_resources (natasha dependency)
+    # Two-phase retrieval
+    "chonkie[semantic]>=0.4.0",  # Semantic chunking for raw document retrieval
 ]
 
 [project.optional-dependencies]
@@ -71,7 +73,7 @@ disallow_untyped_defs = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["sentence_transformers.*", "neo4j.*", "pymorphy3.*", "FlagEmbedding.*", "natasha.*", "cyrtranslit.*"]
+module = ["sentence_transformers.*", "neo4j.*", "pymorphy3.*", "FlagEmbedding.*", "natasha.*", "cyrtranslit.*", "chonkie.*"]
 ignore_missing_imports = true
 
 [tool.uv]

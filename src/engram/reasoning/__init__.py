@@ -8,11 +8,17 @@ from engram.reasoning.pipeline import (
     ReasoningPipeline,
     ReasoningResult,
     reason,
+    reason_with_documents,
 )
 from engram.reasoning.re_reasoning import (
     ReReasoner,
     ReReasoningResult,
     re_reason,
+)
+from engram.reasoning.selector import (
+    MemorySelector,
+    SelectionResult,
+    select_memories,
 )
 from engram.reasoning.synthesizer import (
     Behavior,
@@ -36,8 +42,13 @@ __all__ = [
     "ReReasoner",
     "ReReasoningResult",
     "re_reason",
+    # Selector (two-phase retrieval)
+    "MemorySelector",
+    "SelectionResult",
+    "select_memories",
     # Pipeline
     "ReasoningPipeline",
     "ReasoningResult",
     "reason",
+    "reason_with_documents",
 ]

@@ -9,11 +9,13 @@ SCHEMA_QUERIES = [
     "CREATE CONSTRAINT semantic_id IF NOT EXISTS FOR (s:SemanticMemory) REQUIRE s.id IS UNIQUE",
     "CREATE CONSTRAINT episodic_id IF NOT EXISTS FOR (e:EpisodicMemory) REQUIRE e.id IS UNIQUE",
     "CREATE CONSTRAINT doc_id IF NOT EXISTS FOR (d:Document) REQUIRE d.id IS UNIQUE",
+    "CREATE CONSTRAINT chunk_id IF NOT EXISTS FOR (c:Chunk) REQUIRE c.id IS UNIQUE",
     # Text indexes for search
     "CREATE INDEX concept_name IF NOT EXISTS FOR (c:Concept) ON (c.name)",
     "CREATE INDEX semantic_status IF NOT EXISTS FOR (s:SemanticMemory) ON (s.status)",
     "CREATE INDEX episodic_domain IF NOT EXISTS FOR (e:EpisodicMemory) ON (e.domain)",
     "CREATE INDEX doc_status IF NOT EXISTS FOR (d:Document) ON (d.status)",
+    "CREATE INDEX chunk_doc_id IF NOT EXISTS FOR (c:Chunk) ON (c.doc_id)",
 ]
 
 # Vector index queries (separate due to different syntax)
@@ -44,10 +46,16 @@ VECTOR_INDEX_QUERIES = [
     """,
 ]
 
-# Full-text index for BM25 search
+# Full-text index for BM25 search on semantic memories
 FULLTEXT_INDEX_QUERY = """
 CREATE FULLTEXT INDEX semantic_content IF NOT EXISTS
 FOR (s:SemanticMemory) ON EACH [s.content]
+"""
+
+# Full-text index for BM25 search on raw document chunks
+CHUNK_FULLTEXT_INDEX_QUERY = """
+CREATE FULLTEXT INDEX chunk_content IF NOT EXISTS
+FOR (c:Chunk) ON EACH [c.text]
 """
 
 # Relationship types used in the graph:
@@ -65,6 +73,7 @@ def get_all_schema_queries() -> list[str]:
     queries = SCHEMA_QUERIES.copy()
     queries.extend(VECTOR_INDEX_QUERIES)
     queries.append(FULLTEXT_INDEX_QUERY)
+    queries.append(CHUNK_FULLTEXT_INDEX_QUERY)
     return queries
 
 

@@ -18,6 +18,7 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 
 - **Spreading Activation**: Brain-like associative retrieval through concept networks
 - **Hybrid Search**: Combines graph traversal, vector similarity, and BM25 with RRF fusion
+- **Two-Phase Retrieval**: LLM confidence scoring with fallback to raw document chunks
 - **Cross-Encoder Reranking**: BGE-reranker-v2-m3 for improved retrieval precision
 - **MMR Diversity**: Maximal Marginal Relevance prevents redundant results
 - **Dynamic top_k**: Query complexity classification adjusts retrieval depth
@@ -34,6 +35,7 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 - **Time-Aware Responses**: Current date context enables relevant temporal reasoning
 - **Learning from Feedback**: Positive feedback strengthens memories, negative triggers re-reasoning
 - **Memory Consolidation**: Successful episodes crystallize into semantic memories
+- **Fast Ingestion**: Unified extraction (1 LLM call per document) with batch Neo4j writes
 - **OpenAI-Compatible API**: Works with Open WebUI and other clients
 
 ## Tech Stack
@@ -46,6 +48,7 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 | API | FastAPI |
 | Embeddings | sentence-transformers (local HuggingFace) |
 | Reranker | FlagEmbedding BGE-reranker-v2-m3 |
+| Chunking | Chonkie SemanticChunker |
 | Russian NLP | PyMorphy3, Natasha NER |
 | Transliteration | cyrtranslit |
 | LLM | OpenAI-compatible endpoint (remote) |
@@ -118,6 +121,11 @@ NEO4J_PASSWORD=engram2024
 # Prod: ai-sage/Giga-Embeddings-instruct (2048 dims)
 EMBEDDING_MODEL=ai-sage/Giga-Embeddings-instruct
 EMBEDDING_DIMENSIONS=2048
+
+# Two-Phase Retrieval (v3.7)
+PHASE1_CANDIDATES=200        # Memory candidates in Phase 1
+CONFIDENCE_THRESHOLD=5       # Confidence (0-10) below which Phase 2 triggers
+CHUNK_SIZE_TOKENS=512        # Semantic chunk size for Phase 2
 ```
 
 ## Running the Server
@@ -169,6 +177,21 @@ POST /v1/chat/completions
   "model": "engram"
 }
 ```
+
+**Two-Phase Retrieval** (with confidence fallback):
+
+```json
+{
+  "messages": [{"role": "user", "content": "How to configure bridge network?"}],
+  "model": "engram",
+  "two_phase": true
+}
+```
+
+When `two_phase: true`:
+1. Phase 1: Retrieves memories, LLM assesses confidence (0-10)
+2. If confidence < 5: Phase 2 searches raw document chunks via BM25
+3. Merges source documents from both phases for synthesis
 
 ### Feedback
 
@@ -400,6 +423,27 @@ uv run ruff check src/engram
 - [x] PyMorphy3 validation for person extraction (reduces false positives)
 - [x] Reranker preloading at startup (faster first query)
 - [x] Reranker single GPU mode (avoids conflicts with vLLM on multi-GPU setups)
+
+**v3.5 Ingestion Speed (30-40% faster):**
+- [x] Simplified pipeline: 3 LLM calls per doc (concept, memory, relationship)
+- [x] Removed separate table/list extraction (handled by memory LLM)
+- [x] Batch Neo4j writes (UNWIND queries instead of individual MERGEs)
+- [x] Combined embedding calls (single batch for concepts + memories)
+- [x] High concurrency config (32 docs parallel)
+
+**v3.6 Combined Extraction (3x faster ingestion):**
+- [x] Unified extraction: 1 LLM call per document (concepts, memories, relations, persons)
+- [x] Shared context: LLM sees document once, extracts all knowledge types together
+- [x] 3x token efficiency: Document sent 1× vs 3× (6K vs 18K input tokens per doc)
+- [x] Better coherence: Concepts, memories, relations naturally aligned in same context
+
+**v3.7 Two-Phase Retrieval with Confidence Fallback:**
+- [x] Semantic chunking with Chonkie (topic boundary detection)
+- [x] Chunk storage in Neo4j with fulltext index for BM25 search
+- [x] LLM memory selection with confidence scoring (0-10 scale)
+- [x] Phase 2 fallback: BM25 search on raw chunks when confidence < threshold
+- [x] Merged results: Phase 1 memories + Phase 2 chunks for synthesis
+- [x] Configurable thresholds via environment variables
 
 ### Planned
 
