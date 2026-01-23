@@ -202,7 +202,7 @@ class Settings(BaseSettings):
         description="MMR balance: 1.0=pure relevance, 0.0=pure diversity"
     )
     mmr_fetch_k: int = Field(
-        default=50,
+        default=200,
         description="Number of candidates to consider for MMR"
     )
 
