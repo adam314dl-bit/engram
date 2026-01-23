@@ -138,6 +138,12 @@ NEO4J_PASSWORD=engram2024
 # Prod: ai-sage/Giga-Embeddings-instruct (2048 dims)
 EMBEDDING_MODEL=ai-sage/Giga-Embeddings-instruct
 EMBEDDING_DIMENSIONS=2048
+
+# Retrieval
+RETRIEVAL_TOP_K=100       # Final memories sent to LLM
+RETRIEVAL_BM25_K=200      # BM25 candidates before fusion
+RETRIEVAL_VECTOR_K=200    # Vector candidates before fusion
+MMR_FETCH_K=200           # MMR candidate pool size
 ```
 
 ## Running the Server
