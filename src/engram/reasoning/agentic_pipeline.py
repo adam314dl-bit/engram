@@ -160,7 +160,7 @@ class AgenticPipeline:
     async def reason(
         self,
         query: str,
-        top_k_memories: int = 10,
+        top_k_memories: int = 100,
         temperature: float = 0.4,
         force_include_nodes: list[str] | None = None,
         force_exclude_nodes: list[str] | None = None,
@@ -424,7 +424,7 @@ class AgenticPipeline:
 async def agentic_reason(
     db: Neo4jClient,
     query: str,
-    top_k: int = 10,
+    top_k: int = 100,
 ) -> AgenticResult:
     """Convenience function for agentic reasoning."""
     pipeline = AgenticPipeline(db=db)
