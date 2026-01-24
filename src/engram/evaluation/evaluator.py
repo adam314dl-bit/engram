@@ -651,15 +651,53 @@ class EngramEvaluator:
     def _load_csv(
         self, csv_path: Path
     ) -> list[tuple[str, str, str]]:
-        """Load questions from CSV file."""
+        """Load questions from CSV file.
+
+        Supports:
+        - Comma or semicolon delimiters (auto-detected)
+        - English columns: question, answer, url
+        - Russian columns: Вопрос, Правильный ответ, Ссылка на правильный ответ
+        """
         questions = []
 
         with open(csv_path, encoding="utf-8") as f:
-            reader = csv.DictReader(f)
+            # Read first line to detect delimiter
+            first_line = f.readline()
+            f.seek(0)
+
+            # Auto-detect delimiter
+            delimiter = ";" if ";" in first_line else ","
+
+            reader = csv.DictReader(f, delimiter=delimiter)
+
+            # Column name mappings (Russian -> English)
+            column_maps = {
+                "question": ["question", "Вопрос"],
+                "answer": ["answer", "Правильный ответ"],
+                "url": ["url", "Ссылка на правильный ответ"],
+            }
+
             for row in reader:
-                question = row.get("question", "").strip()
-                answer = row.get("answer", "").strip()
-                url = row.get("url", "").strip()
+                # Find question column
+                question = ""
+                for col in column_maps["question"]:
+                    if col in row:
+                        question = row[col].strip()
+                        break
+
+                # Find answer column
+                answer = ""
+                for col in column_maps["answer"]:
+                    if col in row:
+                        answer = row[col].strip()
+                        break
+
+                # Find URL column
+                url = ""
+                for col in column_maps["url"]:
+                    if col in row:
+                        url = row[col].strip()
+                        break
 
                 if question:
                     questions.append((question, answer, url))
