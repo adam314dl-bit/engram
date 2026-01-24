@@ -52,7 +52,7 @@ class ChatCompletionRequest(BaseModel):
 
     # v4 Agentic mode
     agentic: bool = Field(
-        default=True,
+        default=False,
         description="Use v4 agentic pipeline with intent classification, CRAG, Self-RAG, etc."
     )
 

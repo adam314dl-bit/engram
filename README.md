@@ -23,7 +23,7 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 - **MMR Diversity**: Maximal Marginal Relevance prevents redundant results
 - **Dynamic top_k**: Query complexity classification adjusts retrieval depth
 
-**v4 Agentic RAG (enabled by default):**
+**v4 Agentic RAG (opt-in):**
 - **Intent Classification**: Decides whether to retrieve, respond directly, or ask for clarification
 - **CRAG Document Grading**: Grades retrieved docs as CORRECT/INCORRECT/AMBIGUOUS before generation
 - **Self-RAG Validation**: Validates response against context, regenerates if unsupported (max 3 iterations)
@@ -204,16 +204,16 @@ POST /v1/chat/completions
 }
 ```
 
-**Disable agentic mode (opt-out):**
+**With v4 agentic mode (opt-in):**
 ```json
 {
   "messages": [{"role": "user", "content": "Compare Kubernetes and Docker Swarm"}],
   "model": "engram",
-  "agentic": false
+  "agentic": true
 }
 ```
 
-By default, the system uses the full v4 agentic pipeline:
+When `agentic: true`, the system uses the full v4 pipeline:
 - Intent classification → CRAG grading → Self-RAG validation → Hallucination check → Confidence calibration
 - Complex queries automatically use IRCoT multi-hop reasoning
 - Response includes inline citations and confidence indicators
