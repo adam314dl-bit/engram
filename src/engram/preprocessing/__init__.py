@@ -1,5 +1,20 @@
 """Preprocessing modules for Engram."""
 
+from .content_context import (
+    ContentContext,
+    ContentContextExtractor,
+    ContentType,
+    PageMetadata,
+    extract_navigation_path,
+    extract_page_metadata_from_content,
+)
+from .list_parser import (
+    ListParser,
+    ListType,
+    ParsedList,
+    extract_lists,
+    remove_lists_from_text,
+)
 from .normalizer import (
     BULLET_SYMBOLS,
     CHECKMARK_SYMBOLS,
@@ -35,10 +50,24 @@ from .table_parser import (
 )
 from .thinking_stripper import OutputParser, ThinkingStripper
 
-# Note: table_enricher is imported lazily to avoid circular imports
+# Note: table_enricher and list_enricher are imported lazily to avoid circular imports
 # Use: from engram.preprocessing.table_enricher import TableEnricher
+# Use: from engram.preprocessing.list_enricher import ListEnricher
 
 __all__ = [
+    # Content context (v4.1)
+    "ContentContext",
+    "ContentContextExtractor",
+    "ContentType",
+    "PageMetadata",
+    "extract_navigation_path",
+    "extract_page_metadata_from_content",
+    # List parser (v4.1)
+    "ListParser",
+    "ListType",
+    "ParsedList",
+    "extract_lists",
+    "remove_lists_from_text",
     # Thinking stripper
     "ThinkingStripper",
     "OutputParser",

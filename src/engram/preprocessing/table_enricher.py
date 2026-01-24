@@ -1,5 +1,9 @@
 """Table enricher using LLM to generate searchable descriptions.
 
+v4.1: Search-optimized prompts explaining WHY we need descriptions.
+      Uses ContentContext for rich hierarchy information.
+      1 table = 1 memory (atomic unit).
+
 v3.3: Multi-vector strategy - stores both searchable summary and raw table.
 Summary memory is embedded for search, raw table is fetched at generation time.
 """
@@ -14,6 +18,7 @@ from typing import TYPE_CHECKING
 from engram.ingestion.llm_client import LLMClient, get_llm_client
 from engram.ingestion.parser import generate_id
 from engram.models import SemanticMemory
+from engram.preprocessing.content_context import ContentContext, ContentType
 from engram.preprocessing.table_parser import ParsedTable
 
 if TYPE_CHECKING:
@@ -39,7 +44,57 @@ class TableWithSummary:
     key_facts: list[str] = field(default_factory=list)
 
 
-# Russian prompts for table enrichment
+# v4.1: Search-optimized prompt explaining WHY we need descriptions
+TABLE_ENRICHMENT_PROMPT = """Ты эксперт по документации. Твоя задача — создать описание таблицы для поисковой системы.
+
+ЗАЧЕМ ЭТО НУЖНО:
+1. BM25 (поиск по словам) — нужны точные слова, синонимы, транслитерация (frontend/фронтенд)
+2. Векторный поиск (embeddings) — нужен семантический смысл, чтобы найти по похожим запросам
+3. Reranker — нужно описание, которое отвечает на потенциальные вопросы пользователя
+
+КОНТЕКСТ ДОКУМЕНТА:
+{context}
+
+ТАБЛИЦА:
+{table_markdown}
+
+ИНСТРУКЦИИ:
+1. ПРИНАДЛЕЖНОСТЬ: К чему относится таблица? (команда, проект, продукт, процесс)
+2. ТИП: Что это за таблица? (сравнение, контакты, характеристики, расписание)
+3. СТОЛБЦЫ: Краткое описание каждого столбца
+4. ОПИСАНИЕ: 2-3 предложения, которые:
+   - Содержат ключевые слова для BM25 (включая синонимы и транслитерацию)
+   - Передают семантику для векторного поиска
+   - Отвечают на вопросы: "email команды...", "сравнение продуктов...", "контакты..."
+5. ЗАПРОСЫ_ДЛЯ_ПОИСКА: 3-5 примеров запросов, по которым должна находиться эта таблица
+6. ФАКТЫ: 3-5 ключевых фактов из таблицы (имена, числа, конкретные данные)
+
+ФОРМАТ ОТВЕТА:
+ПРИНАДЛЕЖНОСТЬ|<к чему относится>
+ТИП|<тип таблицы: сравнение, контакты, характеристики, матрица_функций>
+СТОЛБЦЫ|<описание столбцов через запятую>
+ОПИСАНИЕ|<описание для поиска>
+ЗАПРОС|<пример запроса 1>
+ЗАПРОС|<пример запроса 2>
+ЗАПРОС|<пример запроса 3>
+ФАКТ|<факт 1>
+ФАКТ|<факт 2>
+
+ПРИМЕР:
+ПРИНАДЛЕЖНОСТЬ|Команда Frontend
+ТИП|контакты
+СТОЛБЦЫ|Имя сотрудника, Роль в команде, Email для связи, Telegram username
+ОПИСАНИЕ|Контакты команды фронтенда (frontend team): email и telegram разработчиков. Таблица содержит контактные данные 5 человек: Иван Петров (тимлид, ivan@company.ru), Мария Сидорова (React), Алексей Козлов (Vue).
+ЗАПРОС|email фронтенд команды
+ЗАПРОС|контакты frontend разработчиков
+ЗАПРОС|телеграм тимлида
+ЗАПРОС|как связаться с командой фронтенда
+ФАКТ|Иван Петров — тимлид, email: ivan@company.ru
+ФАКТ|В команде Frontend 5 человек
+ФАКТ|Мария Сидорова — React разработчик"""
+
+
+# Legacy prompts (kept for backward compatibility)
 TABLE_DESCRIPTION_PROMPT = """Ты эксперт по анализу данных. Проанализируй следующую таблицу и создай её краткое описание.
 
 {table_context}
@@ -152,13 +207,22 @@ def extract_surrounding_context(
 
 @dataclass
 class EnrichedTable:
-    """Enriched table with LLM-generated metadata."""
+    """Enriched table with LLM-generated metadata.
+
+    v4.1: Added belonging_context, table_type_semantic, column_descriptions, search_queries.
+    """
 
     table: ParsedTable
     description: str = ""
     key_facts: list[str] = field(default_factory=list)
     column_summaries: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     # column_summaries: {"AWS": {"да": ["K8s", "Lambda"], "нет": ["GitOps"]}}
+
+    # v4.1 new fields
+    belonging_context: str = ""  # К чему относится (команда, проект, etc.)
+    table_type_semantic: str = ""  # Семантический тип (сравнение, контакты, etc.)
+    column_descriptions: str = ""  # Описание столбцов
+    search_queries: list[str] = field(default_factory=list)  # Example search queries
 
     @property
     def table_type(self) -> str:
@@ -173,6 +237,102 @@ class TableEnricher:
 
     def __init__(self, llm_client: LLMClient | None = None) -> None:
         self.llm = llm_client or get_llm_client()
+
+    async def enrich_v41(
+        self,
+        table: ParsedTable,
+        context: ContentContext | None = None,
+    ) -> EnrichedTable:
+        """
+        Enrich table with v4.1 search-optimized descriptions.
+
+        Args:
+            table: Parsed table to enrich
+            context: Content context with hierarchy information
+
+        Returns:
+            EnrichedTable with search-optimized metadata
+        """
+        # Format context for prompt
+        if context:
+            context_str = context.format_for_prompt(ContentType.TABLE)
+        else:
+            context_str = self._build_basic_context(table)
+
+        prompt = TABLE_ENRICHMENT_PROMPT.format(
+            context=context_str,
+            table_markdown=table.to_markdown(),
+        )
+
+        try:
+            result = await self.llm.generate(
+                prompt,
+                temperature=0.3,
+                max_tokens=1000,
+            )
+            return self._parse_v41_result(table, result)
+        except Exception as e:
+            logger.warning(f"Failed to enrich table with v4.1: {e}")
+            return self._fallback_enrichment(table)
+
+    def _build_basic_context(self, table: ParsedTable) -> str:
+        """Build basic context from table metadata."""
+        parts = []
+        if table.title:
+            parts.append(f"Заголовок: {table.title}")
+        if table.context:
+            parts.append(f"Текст перед таблицей: {table.context}")
+        return "\n".join(parts) if parts else "Контекст отсутствует."
+
+    def _parse_v41_result(self, table: ParsedTable, result: str) -> EnrichedTable:
+        """Parse v4.1 enrichment result."""
+        belonging = ""
+        table_type_semantic = ""
+        column_descriptions = ""
+        description = ""
+        search_queries: list[str] = []
+        facts: list[str] = []
+
+        for line in result.split("\n"):
+            line = line.strip()
+            if not line or "|" not in line:
+                continue
+
+            parts = line.split("|", 1)
+            if len(parts) != 2:
+                continue
+
+            key = parts[0].strip().upper()
+            value = parts[1].strip()
+
+            if key == "ПРИНАДЛЕЖНОСТЬ":
+                belonging = value
+            elif key == "ТИП":
+                table_type_semantic = value
+            elif key == "СТОЛБЦЫ":
+                column_descriptions = value
+            elif key == "ОПИСАНИЕ":
+                description = value
+            elif key == "ЗАПРОС":
+                if value:
+                    search_queries.append(value)
+            elif key == "ФАКТ":
+                if value:
+                    facts.append(value)
+
+        # Fallback if no description
+        if not description:
+            description = self._generate_fallback_description(table)
+
+        return EnrichedTable(
+            table=table,
+            description=description,
+            key_facts=facts,
+            belonging_context=belonging,
+            table_type_semantic=table_type_semantic,
+            column_descriptions=column_descriptions,
+            search_queries=search_queries,
+        )
 
     async def enrich_multi_vector(
         self,
@@ -412,13 +572,114 @@ class TableEnricher:
         return facts[:10]  # Limit facts
 
 
+def create_memory_from_table(
+    enriched: EnrichedTable,
+    doc_id: str | None = None,
+    concept_ids: list[str] | None = None,
+) -> SemanticMemory:
+    """
+    Create a single semantic memory from an enriched table (v4.1).
+
+    Creates exactly 1 memory per table (atomic unit).
+    Uses description for embedding, raw_markdown for generation.
+
+    Args:
+        enriched: Enriched table
+        doc_id: Source document ID
+        concept_ids: Concept IDs to link memory to
+
+    Returns:
+        SemanticMemory for the table
+    """
+    # Build content: description + raw for generation
+    content_parts = []
+
+    # Add belonging context as header
+    if enriched.belonging_context:
+        content_parts.append(f"# {enriched.belonging_context}")
+
+    # Add description
+    if enriched.description:
+        content_parts.append(enriched.description)
+
+    # Add raw markdown for generation context
+    content_parts.append("")
+    content_parts.append(enriched.table.raw_text or enriched.table.to_markdown())
+
+    content = "\n".join(content_parts)
+
+    # Build metadata
+    metadata = {
+        "source_type": "table",
+        "table_type": enriched.table_type,
+        "table_type_semantic": enriched.table_type_semantic,
+        "belonging_context": enriched.belonging_context,
+        "column_descriptions": enriched.column_descriptions,
+        "row_count": enriched.table.row_count,
+        "column_count": enriched.table.column_count,
+        "search_queries": enriched.search_queries,
+        "key_facts": enriched.key_facts,
+    }
+
+    if enriched.table.title:
+        metadata["table_title"] = enriched.table.title
+
+    return SemanticMemory(
+        id=generate_id(),
+        content=content,
+        concept_ids=concept_ids or [],
+        source_doc_ids=[doc_id] if doc_id else [],
+        memory_type="fact",
+        importance=6.0,  # Tables are usually important
+        metadata=metadata,
+    )
+
+
+def create_fact_memories_from_table(
+    enriched: EnrichedTable,
+    doc_id: str | None = None,
+    concept_ids: list[str] | None = None,
+) -> list[SemanticMemory]:
+    """
+    Create additional fact memories from table key facts.
+
+    Args:
+        enriched: Enriched table
+        doc_id: Source document ID
+        concept_ids: Concept IDs to link memories to
+
+    Returns:
+        List of SemanticMemory objects for key facts
+    """
+    memories: list[SemanticMemory] = []
+
+    for fact in enriched.key_facts:
+        if len(fact) < 10:  # Skip very short facts
+            continue
+
+        memories.append(SemanticMemory(
+            id=generate_id(),
+            content=fact,
+            concept_ids=concept_ids or [],
+            source_doc_ids=[doc_id] if doc_id else [],
+            memory_type="fact",
+            importance=5.0,
+            metadata={
+                "source_type": "table_fact",
+                "source_table": enriched.belonging_context or enriched.table.title,
+            },
+        ))
+
+    return memories
+
+
 def create_memories_from_table(
     enriched: EnrichedTable,
     doc_id: str | None = None,
     concept_ids: list[str] | None = None,
 ) -> list[SemanticMemory]:
     """
-    Create semantic memories from an enriched table.
+    Create semantic memories from an enriched table (legacy v3.x).
 
     Creates:
     1. One memory for the table description

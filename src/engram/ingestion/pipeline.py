@@ -1,9 +1,15 @@
 """Ingestion pipeline - orchestrates document processing.
 
+v4.1: Search-optimized enrichment for tables and lists.
+      - ContentContext extraction with Confluence hierarchy
+      - 1 table = 1 memory, 1 list = 1 memory (atomic units)
+      - LLM enrichment explains WHY descriptions are needed
+
 v3.4: Separate extractors with table enrichment (2 + N LLM calls per document).
       - 1 call for concepts
       - 1 call for memories
       - N calls for N tables (table enrichment)
+      - M calls for M lists (list enrichment)
 """
 
 from __future__ import annotations
@@ -19,18 +25,24 @@ from typing import TYPE_CHECKING
 
 from engram.config import settings
 from engram.ingestion.concept_extractor import ConceptExtractor
-from engram.ingestion.list_extractor import ListExtractor, lists_to_chunks
 from engram.ingestion.memory_extractor import MemoryExtractor
 from engram.ingestion.parser import DocumentParser, generate_id
 from engram.ingestion.person_extractor import PersonExtractor
 from engram.ingestion.relationship_extractor import RelationshipExtractor
 from engram.models import Concept, Document, SemanticMemory
+from engram.preprocessing.content_context import (
+    ContentContextExtractor,
+    PageMetadata,
+    extract_page_metadata_from_content,
+)
+from engram.preprocessing.list_parser import ListParser, extract_lists
 from engram.preprocessing.table_parser import extract_tables, remove_tables_from_text
 from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
 from engram.retrieval.quality_filter import is_quality_chunk
 from engram.storage.neo4j_client import Neo4jClient
 
 if TYPE_CHECKING:
+    from engram.preprocessing.list_enricher import ListEnricher
     from engram.preprocessing.table_enricher import TableEnricher
 
 logger = logging.getLogger(__name__)
@@ -51,10 +63,10 @@ class IngestionPipeline:
     """
     Pipeline for ingesting documents into Engram.
 
-    v3.4 Separate extraction (2 + N LLM calls per document):
-    1. Parse document
-    2. Extract tables (N LLM calls for N tables)
-    3. Extract lists (regex, no LLM)
+    v4.1 Enrichment pipeline (2 + N + M LLM calls per document):
+    1. Parse document, extract page metadata
+    2. Extract tables with context, enrich (N LLM calls)
+    3. Extract lists with context, enrich (M LLM calls)
     4. Extract persons (regex/Natasha, no LLM)
     5. Extract concepts (1 LLM call)
     6. Extract memories (1 LLM call)
@@ -71,8 +83,8 @@ class IngestionPipeline:
         memory_extractor: MemoryExtractor | None = None,
         relationship_extractor: RelationshipExtractor | None = None,
         embedding_service: EmbeddingService | None = None,
-        table_enricher: TableEnricher | None = None,
-        list_extractor: ListExtractor | None = None,
+        table_enricher: "TableEnricher | None" = None,
+        list_enricher: "ListEnricher | None" = None,
         person_extractor: PersonExtractor | None = None,
     ) -> None:
         self.db = neo4j_client
@@ -85,13 +97,21 @@ class IngestionPipeline:
         self.relationship_extractor = relationship_extractor or RelationshipExtractor(
             embedding_service=self.embeddings
         )
+
         # Lazy import to avoid circular dependency
         if table_enricher is None:
             from engram.preprocessing.table_enricher import TableEnricher
             table_enricher = TableEnricher()
         self.table_enricher = table_enricher
-        self.list_extractor = list_extractor or ListExtractor()
+
+        if list_enricher is None:
+            from engram.preprocessing.list_enricher import ListEnricher
+            list_enricher = ListEnricher()
+        self.list_enricher = list_enricher
+
         self.person_extractor = person_extractor or PersonExtractor()
+        self.context_extractor = ContentContextExtractor()
+        self.list_parser = ListParser()
 
     async def ingest_file(self, path: Path | str) -> IngestionResult:
         """Ingest a single file."""
@@ -121,6 +141,16 @@ class IngestionPipeline:
             document.status = "processing"
             await self.db.save_document(document)
 
+            # --- Phase 0: Extract page metadata (Confluence hierarchy) ---
+            page_metadata = extract_page_metadata_from_content(document.content)
+            if not page_metadata.title:
+                page_metadata.title = document.title
+            if not page_metadata.url and document.source_path:
+                page_metadata.url = document.source_path
+
+            logger.debug(f"Page metadata: space={page_metadata.space_name}, "
+                        f"parents={page_metadata.parent_pages}, title={page_metadata.title}")
+
             # --- Phase 1: Extract and process tables (N LLM calls) ---
             tables = extract_tables(document.content)
             table_memories: list[SemanticMemory] = []
@@ -128,12 +158,23 @@ class IngestionPipeline:
             if tables:
                 logger.debug(f"Found {len(tables)} tables in: {document.title}")
 
-                # Lazy import to avoid circular dependency
-                from engram.preprocessing.table_enricher import create_memories_from_table
+                from engram.preprocessing.table_enricher import (
+                    create_fact_memories_from_table,
+                    create_memory_from_table,
+                )
 
-                # Enrich tables in parallel (N LLM calls)
+                # Enrich tables in parallel with v4.1 context
+                async def enrich_table_with_context(table):
+                    context = self.context_extractor.extract_context(
+                        document.content,
+                        table.start_line,
+                        table.end_line,
+                        page_metadata,
+                    )
+                    return await self.table_enricher.enrich_v41(table, context)
+
                 enriched_tables = await asyncio.gather(
-                    *[self.table_enricher.enrich(table) for table in tables],
+                    *[enrich_table_with_context(table) for table in tables],
                     return_exceptions=True,
                 )
 
@@ -142,38 +183,72 @@ class IngestionPipeline:
                     if isinstance(enriched, Exception):
                         logger.warning(f"Failed to enrich table: {enriched}")
                         continue
-                    memories_from_table = create_memories_from_table(
+
+                    # Create main table memory (1 table = 1 memory)
+                    table_memory = create_memory_from_table(
                         enriched,
                         doc_id=document.id,
                     )
-                    table_memories.extend(memories_from_table)
+                    table_memories.append(table_memory)
+
+                    # Create fact memories from key facts
+                    fact_memories = create_fact_memories_from_table(
+                        enriched,
+                        doc_id=document.id,
+                    )
+                    table_memories.extend(fact_memories)
 
                 logger.debug(f"Created {len(table_memories)} memories from tables")
 
             # Remove tables from content for text processing
-            # (tables are already processed separately)
             text_content = remove_tables_from_text(document.content) if tables else document.content
 
-            # --- Phase 1.5: Extract and process lists (no LLM) ---
-            extracted_lists = self.list_extractor.extract_lists(text_content)
+            # --- Phase 1.5: Extract and process lists (M LLM calls) ---
+            parsed_lists = extract_lists(text_content)
             list_memories: list[SemanticMemory] = []
 
-            if extracted_lists:
-                logger.debug(f"Found {len(extracted_lists)} lists in: {document.title}")
-                list_chunks = lists_to_chunks(extracted_lists, items_per_chunk=4)
+            if parsed_lists:
+                logger.debug(f"Found {len(parsed_lists)} lists in: {document.title}")
 
-                for chunk in list_chunks:
-                    # Apply quality filtering
-                    if is_quality_chunk(chunk, settings.chunk_quality_threshold, settings.min_chunk_words):
-                        list_memories.append(SemanticMemory(
-                            id=generate_id(),
-                            content=chunk,
-                            concept_ids=[],  # Will be linked via concept extraction
-                            source_doc_ids=[document.id],
-                            memory_type="fact",
-                            importance=5.0,
-                            metadata={"source_type": "list"},
-                        ))
+                from engram.preprocessing.list_enricher import (
+                    create_fact_memories_from_list,
+                    create_memory_from_list,
+                )
+
+                # Enrich lists in parallel with v4.1 context
+                async def enrich_list_with_context(parsed_list):
+                    context = self.context_extractor.extract_context(
+                        text_content,
+                        parsed_list.start_line,
+                        parsed_list.end_line,
+                        page_metadata,
+                    )
+                    return await self.list_enricher.enrich(parsed_list, context)
+
+                enriched_lists = await asyncio.gather(
+                    *[enrich_list_with_context(lst) for lst in parsed_lists],
+                    return_exceptions=True,
+                )
+
+                # Create memories from enriched lists
+                for enriched in enriched_lists:
+                    if isinstance(enriched, Exception):
+                        logger.warning(f"Failed to enrich list: {enriched}")
+                        continue
+
+                    # Create main list memory (1 list = 1 memory)
+                    list_memory = create_memory_from_list(
+                        enriched,
+                        doc_id=document.id,
+                    )
+                    list_memories.append(list_memory)
+
+                    # Create fact memories from key facts
+                    fact_memories = create_fact_memories_from_list(
+                        enriched,
+                        doc_id=document.id,
+                    )
+                    list_memories.extend(fact_memories)
 
                 logger.debug(f"Created {len(list_memories)} memories from lists")
 
@@ -272,7 +347,8 @@ class IngestionPipeline:
             filtered_memories: list[SemanticMemory] = []
             for memory in memories:
                 source_type = memory.metadata.get("source_type") if memory.metadata else None
-                if source_type in ("table", "list", "person"):
+                if source_type in ("table", "list", "person", "table_fact", "list_fact"):
+                    # Keep enriched content without filtering
                     filtered_memories.append(memory)
                 elif is_quality_chunk(memory.content, settings.chunk_quality_threshold, settings.min_chunk_words):
                     filtered_memories.append(memory)
