@@ -414,10 +414,15 @@ uv run python -m engram.evaluation.evaluator test_data.csv \
 
 **Input CSV format:**
 ```csv
-question,answer,url
-"Кто лид фронтенда?","Или","https://confluence.example.com/team"
-"Как задеплоить?","","https://confluence.example.com/deploy"
+question;answer;url
+Кто лид фронтенда?;Или;https://confluence.example.com/team
+Как задеплоить?;;https://confluence.example.com/deploy
 ```
+
+**Supported formats:**
+- Delimiters: `;` or `,` (auto-detected)
+- Encoding: UTF-8 with or without BOM
+- Columns: `question,answer,url` or `Вопрос,Правильный ответ,Ссылка на правильный ответ`
 
 **Output:**
 - `{input}_results.csv` - Full results per question
