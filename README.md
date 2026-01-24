@@ -34,6 +34,13 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 - **RAGAS Evaluation**: Automated quality metrics (faithfulness, relevancy, precision, recall)
 - **Async Research Mode**: Long-running queries with progress tracking and checkpointing
 
+**v4.2 Test Set Evaluation:**
+- **Regression Testing**: Evaluate Engram against human reference answers
+- **Incomplete Annotations**: Designed for lazy/partial annotations (URL-only, short snippets)
+- **Containment Check**: Verifies human answer ⊆ Engram answer (not equality)
+- **Source Matching**: Fuzzy URL/path/pageId comparison
+- **LLM Judge**: Semantic evaluation with weighted scoring by answer type
+
 **NLP & Processing:**
 - **Russian NLP**: PyMorphy3 lemmatization and stopword removal for Russian content
 - **Transliteration**: Handles mixed Cyrillic/Latin content with query expansion
@@ -356,7 +363,7 @@ engram/
 │   ├── storage/         # Neo4j client and schema
 │   ├── retrieval/       # Embeddings, spreading activation, hybrid search, CRAG
 │   ├── reasoning/       # Synthesis, v4 agentic components (intent, self-rag, etc.)
-│   ├── evaluation/      # v4 RAGAS quality metrics
+│   ├── evaluation/      # RAGAS metrics, v4.2 test set evaluation
 │   ├── learning/        # Feedback, consolidation, memory strength
 │   └── api/             # FastAPI routes
 ├── tests/
@@ -386,6 +393,46 @@ uv run mypy src/engram
 # Linting
 uv run ruff check src/engram
 ```
+
+## Test Set Evaluation (v4.2)
+
+Evaluate Engram against human reference answers for regression testing. Designed for incomplete/lazy annotations where human answers may be just a URL or short snippet.
+
+**Key insight:** Checks if human answer is CONTAINED in Engram answer (not equality).
+
+```bash
+# Basic usage (uses LLM from .env as judge)
+uv run python -m engram.evaluation.evaluator test_data.csv
+
+# Full options
+uv run python -m engram.evaluation.evaluator test_data.csv \
+  --engram-url http://localhost:7777/v1 \
+  --judge-url http://localhost:11434/v1 \
+  --judge-model qwen3:8b \
+  --workers 8
+```
+
+**Input CSV format:**
+```csv
+question,answer,url
+"Кто лид фронтенда?","Или","https://confluence.example.com/team"
+"Как задеплоить?","","https://confluence.example.com/deploy"
+```
+
+**Output:**
+- `{input}_results.csv` - Full results per question
+- `{input}_results.summary.json` - Aggregate metrics
+
+**Metrics:**
+| Metric | Description |
+|--------|-------------|
+| `source_match` | Does Engram use same source as human URL? |
+| `key_info_match` | Does Engram CONTAIN key info from human answer? |
+| `relevance` | Does Engram answer the question? |
+| `no_contradiction` | No conflicts with human answer? |
+| `overall` | Weighted combination by answer type |
+
+**Answer types:** `url_only`, `short`, `full`, `empty` — each has different metric weights.
 
 ## Roadmap
 
@@ -460,6 +507,14 @@ uv run ruff check src/engram
 - [x] RAGAS evaluation metrics
 - [x] Async research mode with checkpointing
 - [x] AgenticPipeline integration
+
+**v4.2 Test Set Evaluation:**
+- [x] Test set evaluation for incomplete/lazy human reference answers
+- [x] Answer type classification (url_only, short, full, empty)
+- [x] Source URL matching with fuzzy path/pageId matching
+- [x] LLM judge for containment-based evaluation
+- [x] Weighted scoring by answer type
+- [x] CLI with parallel evaluation
 
 ### Planned
 
