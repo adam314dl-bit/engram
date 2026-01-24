@@ -26,6 +26,7 @@ import csv
 import json
 import logging
 import re
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -176,6 +177,29 @@ class EngramClient:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self._http = ThreadSafeSession(timeout=timeout)
+
+    def check_availability(self) -> tuple[bool, str]:
+        """
+        Check if Engram API is available.
+
+        Returns:
+            Tuple of (is_available, error_message)
+        """
+        # Try health endpoint first
+        health_url = self.base_url.replace("/v1", "") + "/health"
+
+        try:
+            session = self._http.get_session()
+            response = session.get(health_url, timeout=10)
+            if response.status_code == 200:
+                return True, ""
+            return False, f"Engram health check returned status {response.status_code}"
+        except requests.exceptions.ConnectionError:
+            return False, f"Cannot connect to Engram at {self.base_url}"
+        except requests.exceptions.Timeout:
+            return False, f"Engram at {self.base_url} timed out"
+        except Exception as e:
+            return False, f"Engram check failed: {e}"
 
     def query(self, question: str) -> tuple[str, list[str]]:
         """
@@ -391,7 +415,33 @@ RESULT|<key_info_match>|<relevance>|<no_contradiction>|<краткое объя�
 
 Пример: RESULT|0.9|1.0|1.0|Ответ содержит имя Или и дополнительные контакты"""
 
-    def _call_llm(self, prompt: str) -> str:
+    def check_availability(self) -> tuple[bool, str]:
+        """
+        Check if Judge LLM is available and returns valid responses.
+
+        Returns:
+            Tuple of (is_available, error_message)
+        """
+        test_prompt = "Reply with exactly: OK"
+
+        try:
+            response = self._call_llm(test_prompt)
+            if response is None:
+                return False, (
+                    f"Judge LLM at {self.base_url} returned None content. "
+                    f"Model '{self.model}' may not support chat completions format."
+                )
+            return True, ""
+        except requests.exceptions.ConnectionError:
+            return False, f"Cannot connect to Judge LLM at {self.base_url}"
+        except requests.exceptions.Timeout:
+            return False, f"Judge LLM at {self.base_url} timed out"
+        except requests.exceptions.HTTPError as e:
+            return False, f"Judge LLM HTTP error: {e}"
+        except Exception as e:
+            return False, f"Judge LLM check failed: {e}"
+
+    def _call_llm(self, prompt: str) -> str | None:
         """Call LLM API and return response content."""
         url = f"{self.base_url}/chat/completions"
 
@@ -407,12 +457,19 @@ RESULT|<key_info_match>|<relevance>|<no_contradiction>|<краткое объя�
         data = response.json()
 
         if "choices" in data and data["choices"]:
-            return data["choices"][0].get("message", {}).get("content", "")
+            content = data["choices"][0].get("message", {}).get("content")
+            # Handle None content explicitly
+            if content is None:
+                return None
+            return content
 
         return ""
 
-    def _parse_response(self, content: str) -> dict[str, float]:
+    def _parse_response(self, content: str | None) -> dict[str, float]:
         """Parse pipe-delimited response from judge."""
+        if content is None:
+            return self._default_scores("LLM returned None content")
+
         for line in content.strip().split("\n"):
             line = line.strip()
             if line.startswith("RESULT|"):
@@ -997,7 +1054,7 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    # Run evaluation
+    # Create evaluator
     evaluator = EngramEvaluator(
         engram_url=args.engram_url,
         engram_model=args.engram_model,
@@ -1006,6 +1063,41 @@ def main() -> None:
         workers=args.workers,
     )
 
+    # Check availability before starting
+    print("Checking service availability...")
+
+    # Check Engram
+    engram_ok, engram_err = evaluator.engram.check_availability()
+    if not engram_ok:
+        print(f"\n[ERROR] Engram API not available:")
+        print(f"  URL: {args.engram_url}")
+        print(f"  Error: {engram_err}")
+        print("\nMake sure Engram API is running:")
+        print("  uv run python -m engram.api.main")
+        sys.exit(1)
+
+    print(f"  [OK] Engram API at {args.engram_url}")
+
+    # Check Judge LLM
+    judge_url = args.judge_url or settings.llm_base_url
+    judge_model = args.judge_model or settings.llm_model
+    judge_ok, judge_err = evaluator.judge.check_availability()
+    if not judge_ok:
+        print(f"\n[ERROR] Judge LLM not available:")
+        print(f"  URL: {judge_url}")
+        print(f"  Model: {judge_model}")
+        print(f"  Error: {judge_err}")
+        print("\nTroubleshooting:")
+        print("  1. Check if LLM server is running")
+        print("  2. Verify model name is correct")
+        print("  3. Try a different model with --judge-model")
+        print("  4. Try Ollama locally: --judge-url http://localhost:11434/v1 --judge-model qwen3:8b")
+        sys.exit(1)
+
+    print(f"  [OK] Judge LLM at {judge_url} (model: {judge_model})")
+    print()
+
+    # Run evaluation
     summary = evaluator.evaluate_csv(args.csv_path, args.output)
 
     # Print summary
