@@ -657,18 +657,26 @@ class EngramEvaluator:
         - Comma or semicolon delimiters (auto-detected)
         - English columns: question, answer, url
         - Russian columns: Вопрос, Правильный ответ, Ссылка на правильный ответ
+        - UTF-8 with or without BOM
         """
         questions = []
 
-        with open(csv_path, encoding="utf-8") as f:
+        # Read with utf-8-sig to handle BOM automatically
+        with open(csv_path, encoding="utf-8-sig") as f:
             # Read first line to detect delimiter
             first_line = f.readline()
             f.seek(0)
 
             # Auto-detect delimiter
             delimiter = ";" if ";" in first_line else ","
+            logger.debug(f"Detected delimiter: '{delimiter}'")
+            logger.debug(f"First line: {first_line[:100]!r}")
 
             reader = csv.DictReader(f, delimiter=delimiter)
+
+            # Log detected columns
+            if reader.fieldnames:
+                logger.debug(f"Columns: {reader.fieldnames}")
 
             # Column name mappings (Russian -> English)
             column_maps = {
@@ -682,21 +690,21 @@ class EngramEvaluator:
                 question = ""
                 for col in column_maps["question"]:
                     if col in row:
-                        question = row[col].strip()
+                        question = (row[col] or "").strip()
                         break
 
                 # Find answer column
                 answer = ""
                 for col in column_maps["answer"]:
                     if col in row:
-                        answer = row[col].strip()
+                        answer = (row[col] or "").strip()
                         break
 
                 # Find URL column
                 url = ""
                 for col in column_maps["url"]:
                     if col in row:
-                        url = row[col].strip()
+                        url = (row[col] or "").strip()
                         break
 
                 if question:
