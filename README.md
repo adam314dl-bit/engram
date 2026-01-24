@@ -412,6 +412,12 @@ uv run python -m engram.evaluation.evaluator test_data.csv \
   --workers 8
 ```
 
+**Startup checks:** Before evaluation begins, the tool verifies:
+- Engram API is available (health check)
+- Judge LLM responds correctly (test prompt)
+
+If either check fails, you'll see a clear error with troubleshooting tips.
+
 **Input CSV format:**
 ```csv
 question;answer;url
@@ -520,6 +526,7 @@ question;answer;url
 - [x] LLM judge for containment-based evaluation
 - [x] Weighted scoring by answer type
 - [x] CLI with parallel evaluation
+- [x] Startup availability checks for Engram API and Judge LLM
 
 ### Planned
 
