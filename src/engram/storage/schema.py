@@ -47,18 +47,12 @@ VECTOR_INDEX_QUERIES = [
 ]
 
 # Full-text index for BM25 search on semantic memories
-# v4.5: Include both search_content and content for backward compatibility
-# search_content is searched first (optimized for search), falls back to content
+# v4.6: BM25 searches content field only (original facts)
+# Vector search uses search_content embedding (summary + keywords)
+# Note: Neo4j doesn't allow multiple fulltext indexes on same property,
+# so we use a single index on content for BM25
 FULLTEXT_INDEX_QUERY = """
 CREATE FULLTEXT INDEX semantic_content IF NOT EXISTS
-FOR (s:SemanticMemory) ON EACH [s.search_content, s.content]
-"""
-
-# v4.6: Separate BM25 index on content field only
-# Used for weighted retrieval: BM25 searches original content,
-# while vector search uses search_content (summary + keywords)
-FULLTEXT_INDEX_CONTENT_QUERY = """
-CREATE FULLTEXT INDEX semantic_content_bm25 IF NOT EXISTS
 FOR (s:SemanticMemory) ON EACH [s.content]
 """
 
@@ -83,7 +77,6 @@ def get_all_schema_queries() -> list[str]:
     queries = SCHEMA_QUERIES.copy()
     queries.extend(VECTOR_INDEX_QUERIES)
     queries.append(FULLTEXT_INDEX_QUERY)
-    queries.append(FULLTEXT_INDEX_CONTENT_QUERY)  # v4.6: BM25 on content only
     queries.append(CHUNK_FULLTEXT_INDEX_QUERY)
     return queries
 
