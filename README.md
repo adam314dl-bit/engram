@@ -48,6 +48,12 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 - **Multi-Query Retrieval**: Original + expanded + rewritten variants with RRF fusion
 - **Dedicated Enrichment LLM**: Fast Qwen3-4B for low-latency query processing
 
+**v4.5 Dual-Content Memory:**
+- **Separate Search vs Display**: `search_content` for search, `content` for LLM generation
+- **Search-Optimized**: Summary + keywords embedded for vector/BM25 search
+- **Near-Verbatim Facts**: Actual data preserved for accurate LLM responses
+- **Backward Compatible**: Works with existing memories (falls back to content)
+
 **NLP & Processing:**
 - **Russian NLP**: PyMorphy3 lemmatization and stopword removal for Russian content
 - **Transliteration**: Handles mixed Cyrillic/Latin content with query expansion
@@ -585,6 +591,15 @@ question;answer;url
 - [x] Startup health check with automatic fallback
 - [x] Docker deployment support (vLLM)
 - [x] Thinking model support (handles reasoning field when content is empty)
+
+**v4.5 Dual-Content Memory:**
+- [x] Separate `search_content` (summary + keywords) from `content` (actual facts)
+- [x] `search_content` used for embedding and BM25 search
+- [x] `content` contains near-verbatim facts sent to LLM
+- [x] 7-part extraction format: search_summary|keywords|actual_content|type|concepts|importance
+- [x] Parser backward-compatible with v3/v2 formats
+- [x] Table/list enrichers set `search_content` with descriptions + queries
+- [x] Neo4j fulltext index includes both fields
 
 ### Planned
 
