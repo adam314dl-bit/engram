@@ -635,6 +635,10 @@ question;answer;url
 - [x] Batch reranking with 64 candidates per pass
 - [x] Setup script: `scripts/create_concept_index.py`
 
+**v4.7.1 Episode Embedding Skip:**
+- [x] Skip episode embedding in `bm25_graph` mode (prevents embedding model load on first query)
+- [x] Episodes still created for feedback tracking (just without embedding for similarity search)
+
 ### Planned
 
 - [ ] Spatial indexing (Neo4j point indexes)
