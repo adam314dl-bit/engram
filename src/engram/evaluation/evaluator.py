@@ -663,10 +663,12 @@ class EngramEvaluator:
         judge_url: str | None = None,
         judge_model: str | None = None,
         workers: int = 4,
+        skip_url_only: bool = False,
     ) -> None:
         self.engram = EngramClient(engram_url, engram_model)
         self.judge = JudgeLLM(judge_url, judge_model)
         self.workers = workers
+        self.skip_url_only = skip_url_only
 
     def evaluate_csv(
         self,
@@ -688,6 +690,17 @@ class EngramEvaluator:
         # Load questions
         questions = self._load_csv(csv_path)
         logger.info(f"Loaded {len(questions)} questions from {csv_path}")
+
+        # Filter out url_only questions if requested
+        if self.skip_url_only:
+            original_count = len(questions)
+            questions = [
+                (q, a, u) for q, a, u in questions
+                if classify_answer(a, u) != "url_only"
+            ]
+            skipped = original_count - len(questions)
+            if skipped > 0:
+                logger.info(f"Skipped {skipped} url_only questions")
 
         # Evaluate in parallel
         results = self._evaluate_parallel(questions)
@@ -1044,6 +1057,11 @@ def main() -> None:
         action="store_true",
         help="Enable verbose logging",
     )
+    parser.add_argument(
+        "--skip-url-only",
+        action="store_true",
+        help="Skip questions that only have URL (no text answer)",
+    )
 
     args = parser.parse_args()
 
@@ -1061,6 +1079,7 @@ def main() -> None:
         judge_url=args.judge_url,
         judge_model=args.judge_model,
         workers=args.workers,
+        skip_url_only=args.skip_url_only,
     )
 
     # Check availability before starting
