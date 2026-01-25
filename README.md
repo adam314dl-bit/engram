@@ -17,11 +17,12 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 ## Features
 
 **Core Retrieval:**
+- **BM25+Graph Mode** (v4.7): Default mode - no embedding model required, uses BM25 + graph traversal
+- **Hybrid Mode**: Optional - adds vector similarity search (set `RETRIEVAL_MODE=hybrid`)
 - **Spreading Activation**: Brain-like associative retrieval through concept networks
-- **Hybrid Search**: Combines graph traversal, vector similarity, and BM25 with RRF fusion
 - **Weighted RRF** (v4.6): Prioritized fusion with BM25 (0.45) > Vector (0.35) > Graph (0.20)
-- **Cross-Encoder Reranking**: BGE-reranker-v2-m3 for improved retrieval precision
-- **MMR Diversity**: Maximal Marginal Relevance prevents redundant results
+- **Jina Reranker v3**: Multilingual cross-encoder for improved retrieval precision
+- **MMR Diversity**: Maximal Marginal Relevance prevents redundant results (hybrid mode only)
 - **Dynamic top_k**: Query complexity classification adjusts retrieval depth
 
 **v4 Agentic RAG (opt-in):**
@@ -85,8 +86,8 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 | Package Manager | uv |
 | Graph DB | Neo4j 5 (Docker) |
 | API | FastAPI |
-| Embeddings | sentence-transformers (local HuggingFace) |
-| Reranker | FlagEmbedding BGE-reranker-v2-m3 |
+| Embeddings | sentence-transformers (optional in bm25_graph mode) |
+| Reranker | Jina Reranker v3 (multilingual cross-encoder) |
 | Russian NLP | PyMorphy3, Natasha NER |
 | Transliteration | cyrtranslit |
 | LLM | OpenAI-compatible endpoint (remote) |
@@ -160,11 +161,19 @@ NEO4J_PASSWORD=engram2024
 EMBEDDING_MODEL=ai-sage/Giga-Embeddings-instruct
 EMBEDDING_DIMENSIONS=2048
 
+# Retrieval Mode (v4.7)
+RETRIEVAL_MODE=bm25_graph # Default: BM25 + Graph only (no embeddings)
+# RETRIEVAL_MODE=hybrid   # Enable vector search (requires embedding model)
+
 # Retrieval
 RETRIEVAL_TOP_K=100       # Final memories sent to LLM
 RETRIEVAL_BM25_K=200      # BM25 candidates before fusion
-RETRIEVAL_VECTOR_K=200    # Vector candidates before fusion
-MMR_FETCH_K=200           # MMR candidate pool size
+RETRIEVAL_VECTOR_K=200    # Vector candidates (only in hybrid mode)
+
+# Reranker
+RERANKER_ENABLED=true     # Enable Jina cross-encoder
+RERANKER_MODEL=jinaai/jina-reranker-v3
+RERANKER_CANDIDATES=64    # Candidates per batch
 
 # v4.3.1 Enrichment LLM (optional, falls back to main LLM)
 ENRICHMENT_LLM_ENABLED=true
@@ -341,7 +350,9 @@ Engram includes an interactive WebGL graph visualization of the memory network, 
 - **Drag**: Pan the view
 
 **Debug Panel:**
-- Shows retrieved memories with scores (0-1) and sources (V=Vector, B=BM25, G=Graph, F=Forced)
+- Shows retrieved memories with scores (0-1) and sources:
+  - `B` = BM25, `V` = Vector (hybrid mode only), `G` = Graph, `F` = Forced
+  - `BE` = BM25 Expanded, `S` = Semantic rewrite, `H` = HyDE
 - Shows activated concepts with activation levels
 - **+ button**: Force include node in next query
 - **− button**: Force exclude node from next query
@@ -395,6 +406,9 @@ uv run python scripts/run_ingestion.py --clear /path/to/docs
 
 # Generate KB summary (required for v4.3 query enrichment)
 uv run python scripts/generate_kb_summary.py
+
+# Create concept index (required for v4.7 BM25+Graph mode)
+uv run python scripts/create_concept_index.py
 ```
 
 **Confluence Export Support:**
@@ -424,7 +438,10 @@ engram/
 │   ├── setup_rhel.sh    # Production setup
 │   ├── chat.py          # Interactive CLI
 │   ├── generate_mock_docs.py
-│   └── run_ingestion.py
+│   ├── run_ingestion.py
+│   ├── compute_layout.py      # Pre-compute graph layout
+│   ├── generate_kb_summary.py # KB summary for query enrichment
+│   └── create_concept_index.py # v4.7 concept fulltext index
 └── CLAUDE.md            # AI assistant instructions
 ```
 
@@ -608,6 +625,15 @@ question;answer;url
 - [x] Vector searches `search_content` embedding (summary + keywords)
 - [x] `weighted_rrf()` function for source-prioritized fusion
 - [x] Works with both single-query and multi-query retrieval
+
+**v4.7 BM25+Graph Mode & Jina Reranker:**
+- [x] Configurable `retrieval_mode`: `bm25_graph` (default) or `hybrid`
+- [x] In `bm25_graph` mode: no embedding model needed, faster startup
+- [x] Jina Reranker v3 replaces BGE (better multilingual support)
+- [x] Skip vector search and embedding preload in `bm25_graph` mode
+- [x] BM25 concept search fallback when vector search disabled
+- [x] Batch reranking with 64 candidates per pass
+- [x] Setup script: `scripts/create_concept_index.py`
 
 ### Planned
 
