@@ -6,13 +6,18 @@ Generates a summary of the knowledge base contents to help with:
 - Out-of-scope detection
 
 The summary is computed once after ingestion and stored in Neo4j.
+
+v4.4: LLM-enhanced summary generation with domain description,
+capabilities, limitations, and sample questions.
 """
 
 import json
 import logging
+import random
 from dataclasses import dataclass, field
 from typing import Any
 
+from engram.config import settings
 from engram.storage.neo4j_client import Neo4jClient
 
 logger = logging.getLogger(__name__)
@@ -40,7 +45,13 @@ class KBSummary:
     # Statistics
     statistics: dict[str, Any] = field(default_factory=dict)
 
-    def to_prompt_text(self, max_tokens: int = 400) -> str:
+    # v4.4 LLM-enhanced fields
+    domain_description: str | None = None  # "Корпоративная база знаний о..."
+    capabilities: list[str] = field(default_factory=list)  # What can be answered
+    limitations: list[str] = field(default_factory=list)  # What's NOT covered
+    sample_questions: list[str] = field(default_factory=list)  # Example queries
+
+    def to_prompt_text(self, max_tokens: int = 500) -> str:
         """Format summary for inclusion in query enrichment prompts.
 
         Args:
@@ -51,13 +62,31 @@ class KBSummary:
         """
         parts = []
 
-        # Domains
-        if self.domains:
-            parts.append(f"Домены: {', '.join(self.domains[:10])}")
+        # v4.4 LLM-enhanced fields (prioritized at top)
+        if self.domain_description:
+            parts.append(f"ДОМЕН: {self.domain_description}")
+
+        if self.capabilities:
+            cap_lines = ["ВОЗМОЖНОСТИ (какие вопросы можно задать):"]
+            for cap in self.capabilities[:7]:
+                cap_lines.append(f"  - {cap}")
+            parts.append("\n".join(cap_lines))
+
+        if self.limitations:
+            lim_lines = ["ОГРАНИЧЕНИЯ (чего НЕТ в базе):"]
+            for lim in self.limitations[:5]:
+                lim_lines.append(f"  - {lim}")
+            parts.append("\n".join(lim_lines))
+
+        if self.sample_questions:
+            q_lines = ["ПРИМЕРЫ ХОРОШИХ ВОПРОСОВ:"]
+            for q in self.sample_questions[:5]:
+                q_lines.append(f"  - {q}")
+            parts.append("\n".join(q_lines))
 
         # Entity types (top 3 per type)
         if self.entity_types:
-            entity_lines = []
+            entity_lines = ["Типы сущностей:"]
             for etype, entities in list(self.entity_types.items())[:5]:
                 sample = entities[:3]
                 if len(entities) > 3:
@@ -65,18 +94,8 @@ class KBSummary:
                 else:
                     sample_str = ', '.join(sample)
                 entity_lines.append(f"  - {etype}: {sample_str}")
-            if entity_lines:
-                parts.append("Типы сущностей:\n" + "\n".join(entity_lines))
-
-        # Info types
-        if self.info_types:
-            parts.append(f"Типы информации: {', '.join(self.info_types[:8])}")
-
-        # Key terms (top 15)
-        if self.key_terms:
-            top_terms = sorted(self.key_terms.items(), key=lambda x: x[1], reverse=True)[:15]
-            terms_str = ", ".join(t[0] for t in top_terms)
-            parts.append(f"Ключевые термины: {terms_str}")
+            if len(entity_lines) > 1:
+                parts.append("\n".join(entity_lines))
 
         # Statistics
         if self.statistics:
@@ -108,6 +127,11 @@ class KBSummary:
             "out_of_scope": self.out_of_scope,
             "key_terms": json.dumps(self.key_terms, ensure_ascii=False),
             "statistics": json.dumps(self.statistics, ensure_ascii=False),
+            # v4.4 LLM-enhanced fields
+            "domain_description": self.domain_description or "",
+            "capabilities": self.capabilities,
+            "limitations": self.limitations,
+            "sample_questions": self.sample_questions,
         }
 
     @classmethod
@@ -125,6 +149,11 @@ class KBSummary:
         if isinstance(statistics, str):
             statistics = json.loads(statistics)
 
+        # Handle domain_description (empty string -> None)
+        domain_description = data.get("domain_description")
+        if domain_description == "":
+            domain_description = None
+
         return cls(
             domains=data.get("domains", []),
             entity_types=entity_types,
@@ -132,6 +161,11 @@ class KBSummary:
             out_of_scope=data.get("out_of_scope", []),
             key_terms=key_terms,
             statistics=statistics,
+            # v4.4 LLM-enhanced fields
+            domain_description=domain_description,
+            capabilities=data.get("capabilities", []),
+            limitations=data.get("limitations", []),
+            sample_questions=data.get("sample_questions", []),
         )
 
 
@@ -279,6 +313,255 @@ class KBSummaryGenerator:
         return {r["term"]: r["cnt"] for r in result if r["term"]}
 
 
+class LLMKBSummaryEnhancer:
+    """Enhances KB summary using LLM for better query understanding.
+
+    v4.4: Uses enrichment LLM (qwen3:4b) to generate:
+    - Domain description ("This KB is about...")
+    - Capabilities (what questions can be answered)
+    - Limitations (what's NOT covered)
+    - Sample questions (HyDE-style examples)
+    """
+
+    # LLM prompt in Russian for better quality with Russian content
+    ENHANCEMENT_PROMPT = """Проанализируй выборку знаний из базы и создай её описание.
+
+=== ВЫБОРКА ЗНАНИЙ ===
+{sampled_memories}
+
+=== СТАТИСТИКА ===
+{statistics}
+
+Определи:
+1. ДОМЕН: Кратко опиши, о чём эта база знаний (1-2 предложения)
+2. ВОЗМОЖНОСТИ: Какие типы вопросов можно задать? (5-7 пунктов)
+3. ОГРАНИЧЕНИЯ: Чего точно НЕТ в базе? (2-3 пункта, основываясь на анализе контента)
+4. ПРИМЕРЫ_ВОПРОСОВ: Сгенерируй {max_questions} конкретных вопросов, на которые можно ответить
+
+Формат ответа (каждый пункт на новой строке):
+DOMAIN|описание домена
+CAPABILITY|тип вопросов
+CAPABILITY|другой тип вопросов
+LIMITATION|чего нет
+QUESTION|пример вопроса
+QUESTION|другой пример вопроса"""
+
+    def __init__(self, db: Neo4jClient) -> None:
+        self.db = db
+        self.sample_size = settings.kb_summary_sample_size
+        self.max_questions = settings.kb_summary_max_questions
+
+    async def enhance(self, summary: KBSummary) -> KBSummary:
+        """Enhance KB summary with LLM-generated fields.
+
+        Args:
+            summary: Base KBSummary from Neo4j queries
+
+        Returns:
+            Enhanced KBSummary with domain_description, capabilities,
+            limitations, and sample_questions
+        """
+        logger.info("Enhancing KB summary with LLM...")
+
+        try:
+            # Sample diverse memories for LLM context
+            sampled_memories = await self._sample_memories()
+
+            if not sampled_memories:
+                logger.warning("No memories to sample, skipping LLM enhancement")
+                return summary
+
+            # Format statistics for prompt
+            stats_text = self._format_statistics(summary.statistics)
+
+            # Format sampled memories
+            memories_text = "\n".join(
+                f"- {m['content'][:200]}..." if len(m.get('content', '')) > 200
+                else f"- {m.get('content', '')}"
+                for m in sampled_memories
+            )
+
+            # Build prompt
+            prompt = self.ENHANCEMENT_PROMPT.format(
+                sampled_memories=memories_text,
+                statistics=stats_text,
+                max_questions=self.max_questions,
+            )
+
+            # Call enrichment LLM
+            from engram.ingestion.llm_client import get_enrichment_llm_client
+            llm = get_enrichment_llm_client()
+
+            response = await llm.generate(
+                prompt=prompt,
+                temperature=0.3,  # Lower for more consistent output
+                max_tokens=1024,
+            )
+
+            # Parse response
+            enhanced = self._parse_response(response, summary)
+            logger.info(
+                f"KB summary enhanced: domain={bool(enhanced.domain_description)}, "
+                f"capabilities={len(enhanced.capabilities)}, "
+                f"limitations={len(enhanced.limitations)}, "
+                f"sample_questions={len(enhanced.sample_questions)}"
+            )
+            return enhanced
+
+        except Exception as e:
+            logger.error(f"LLM enhancement failed: {e}, using base summary")
+            return summary
+
+    async def _sample_memories(self) -> list[dict[str, Any]]:
+        """Sample diverse memories for LLM context.
+
+        Sampling strategy (total = sample_size):
+        - 25% most accessed (popular)
+        - 25% highest importance
+        - 25% from diverse concept types
+        - 25% random for coverage
+        """
+        sample_per_category = self.sample_size // 4
+        all_memories: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+
+        # 1. Most accessed memories
+        popular_query = """
+        MATCH (m:SemanticMemory)
+        WHERE m.content IS NOT NULL AND m.content <> ''
+        RETURN m.id as id, m.content as content
+        ORDER BY coalesce(m.access_count, 0) DESC
+        LIMIT $limit
+        """
+        popular = await self.db.execute_query(popular_query, limit=sample_per_category)
+        for m in popular:
+            if m["id"] not in seen_ids:
+                all_memories.append(m)
+                seen_ids.add(m["id"])
+
+        # 2. Highest importance memories
+        importance_query = """
+        MATCH (m:SemanticMemory)
+        WHERE m.content IS NOT NULL AND m.content <> ''
+        AND m.id NOT IN $seen
+        RETURN m.id as id, m.content as content
+        ORDER BY coalesce(m.importance, 0) DESC
+        LIMIT $limit
+        """
+        important = await self.db.execute_query(
+            importance_query, limit=sample_per_category, seen=list(seen_ids)
+        )
+        for m in important:
+            if m["id"] not in seen_ids:
+                all_memories.append(m)
+                seen_ids.add(m["id"])
+
+        # 3. Diverse concept types
+        diverse_query = """
+        MATCH (c:Concept)-[:RELATES_TO]-(m:SemanticMemory)
+        WHERE m.content IS NOT NULL AND m.content <> ''
+        AND c.type IS NOT NULL
+        AND m.id NOT IN $seen
+        WITH c.type as concept_type, collect(DISTINCT {id: m.id, content: m.content})[0..2] as memories
+        UNWIND memories as m
+        RETURN m.id as id, m.content as content
+        LIMIT $limit
+        """
+        diverse = await self.db.execute_query(
+            diverse_query, limit=sample_per_category, seen=list(seen_ids)
+        )
+        for m in diverse:
+            if m["id"] not in seen_ids:
+                all_memories.append(m)
+                seen_ids.add(m["id"])
+
+        # 4. Random sampling for coverage
+        random_query = """
+        MATCH (m:SemanticMemory)
+        WHERE m.content IS NOT NULL AND m.content <> ''
+        AND m.id NOT IN $seen
+        RETURN m.id as id, m.content as content
+        ORDER BY rand()
+        LIMIT $limit
+        """
+        random_memories = await self.db.execute_query(
+            random_query, limit=sample_per_category, seen=list(seen_ids)
+        )
+        for m in random_memories:
+            if m["id"] not in seen_ids:
+                all_memories.append(m)
+                seen_ids.add(m["id"])
+
+        logger.debug(f"Sampled {len(all_memories)} diverse memories for LLM enhancement")
+
+        # Shuffle to avoid ordering bias
+        random.shuffle(all_memories)
+        return all_memories[:self.sample_size]
+
+    def _format_statistics(self, stats: dict[str, Any]) -> str:
+        """Format statistics for LLM prompt."""
+        parts = []
+        if stats.get("concept_count"):
+            parts.append(f"Концептов: {stats['concept_count']}")
+        if stats.get("memory_count"):
+            parts.append(f"Фактов: {stats['memory_count']}")
+        if stats.get("document_count"):
+            parts.append(f"Документов: {stats['document_count']}")
+        return "\n".join(parts) if parts else "Статистика недоступна"
+
+    def _parse_response(self, response: str, base_summary: KBSummary) -> KBSummary:
+        """Parse LLM response into enhanced summary fields.
+
+        Expected format:
+        DOMAIN|description
+        CAPABILITY|capability1
+        CAPABILITY|capability2
+        LIMITATION|limitation1
+        QUESTION|question1
+        """
+        domain_description: str | None = None
+        capabilities: list[str] = []
+        limitations: list[str] = []
+        sample_questions: list[str] = []
+
+        for line in response.strip().split("\n"):
+            line = line.strip()
+            if not line or "|" not in line:
+                continue
+
+            parts = line.split("|", 1)
+            if len(parts) != 2:
+                continue
+
+            tag, value = parts[0].strip().upper(), parts[1].strip()
+            if not value:
+                continue
+
+            if tag == "DOMAIN":
+                domain_description = value
+            elif tag == "CAPABILITY":
+                capabilities.append(value)
+            elif tag == "LIMITATION":
+                limitations.append(value)
+            elif tag == "QUESTION":
+                sample_questions.append(value)
+
+        # Create enhanced summary with all original fields
+        return KBSummary(
+            domains=base_summary.domains,
+            entity_types=base_summary.entity_types,
+            info_types=base_summary.info_types,
+            out_of_scope=base_summary.out_of_scope,
+            key_terms=base_summary.key_terms,
+            statistics=base_summary.statistics,
+            # Enhanced fields
+            domain_description=domain_description,
+            capabilities=capabilities[:7],  # Limit to max 7
+            limitations=limitations[:5],  # Limit to max 5
+            sample_questions=sample_questions[:self.max_questions],
+        )
+
+
 class KBSummaryStore:
     """Stores and retrieves KB summary from Neo4j."""
 
@@ -305,6 +588,10 @@ class KBSummaryStore:
             out_of_scope: $out_of_scope,
             key_terms: $key_terms,
             statistics: $statistics,
+            domain_description: $domain_description,
+            capabilities: $capabilities,
+            limitations: $limitations,
+            sample_questions: $sample_questions,
             created_at: datetime()
         }})
         """
@@ -316,6 +603,10 @@ class KBSummaryStore:
             out_of_scope=data["out_of_scope"],
             key_terms=data["key_terms"],
             statistics=data["statistics"],
+            domain_description=data["domain_description"],
+            capabilities=data["capabilities"],
+            limitations=data["limitations"],
+            sample_questions=data["sample_questions"],
         )
         logger.info("KB summary saved to Neo4j")
 
@@ -344,12 +635,31 @@ class KBSummaryStore:
         return result and result[0]["cnt"] > 0
 
 
-async def generate_kb_summary(db: Neo4jClient) -> KBSummary:
-    """Convenience function to generate and save KB summary."""
+async def generate_kb_summary(
+    db: Neo4jClient,
+    use_llm: bool | None = None,
+) -> KBSummary:
+    """Convenience function to generate and save KB summary.
+
+    Args:
+        db: Neo4j client
+        use_llm: Whether to use LLM enhancement. If None, uses config setting.
+
+    Returns:
+        Generated (and optionally enhanced) KBSummary
+    """
     generator = KBSummaryGenerator(db)
     store = KBSummaryStore(db)
 
+    # Generate base summary from Neo4j
     summary = await generator.generate()
+
+    # Optionally enhance with LLM
+    should_use_llm = use_llm if use_llm is not None else settings.kb_summary_use_llm
+    if should_use_llm:
+        enhancer = LLMKBSummaryEnhancer(db)
+        summary = await enhancer.enhance(summary)
+
     await store.save(summary)
 
     return summary

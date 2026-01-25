@@ -427,6 +427,23 @@ class Settings(BaseSettings):
         description="Max concurrent requests to enrichment LLM"
     )
 
+    # =========================================================================
+    # v4.4 KB Summary LLM Enhancement
+    # =========================================================================
+
+    kb_summary_use_llm: bool = Field(
+        default=False,
+        description="Use LLM to enhance KB summary with domain description, capabilities, limitations"
+    )
+    kb_summary_sample_size: int = Field(
+        default=40,
+        description="Number of memories to sample for LLM analysis"
+    )
+    kb_summary_max_questions: int = Field(
+        default=7,
+        description="Maximum sample questions to generate"
+    )
+
 
 def get_dev_settings() -> Settings:
     """Get development environment settings."""
