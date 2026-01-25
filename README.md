@@ -583,6 +583,7 @@ question;answer;url
 - [x] Dedicated fast LLM for query enrichment (Qwen3-4B)
 - [x] Startup health check with automatic fallback
 - [x] Docker deployment support (vLLM)
+- [x] Thinking model support (handles reasoning field when content is empty)
 
 ### Planned
 
