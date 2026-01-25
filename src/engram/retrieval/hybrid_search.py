@@ -14,7 +14,7 @@ import numpy as np
 from engram.config import settings
 from engram.models import EpisodicMemory, SemanticMemory
 from engram.retrieval.embeddings import cosine_similarity
-from engram.retrieval.fusion import rrf_scores_only
+from engram.retrieval.fusion import rrf_scores_only, weighted_rrf
 from engram.storage.neo4j_client import Neo4jClient
 
 logger = logging.getLogger(__name__)
@@ -256,9 +256,22 @@ class HybridSearch:
             ]
             graph_ranked.sort(key=lambda x: x[1], reverse=True)
 
-        # Combine using RRF (uses settings.rrf_k)
-        ranked_lists = [r for r in [vector_ranked, bm25_ranked, graph_ranked] if r]
-        fused_scores = rrf_scores_only(ranked_lists)
+        # Combine using weighted RRF (v4.6)
+        # Order: vector, bm25, graph (weights applied in same order)
+        ranked_lists: list[list[tuple[str, float]]] = []
+        weights: list[float] = []
+
+        if vector_ranked:
+            ranked_lists.append(vector_ranked)
+            weights.append(settings.rrf_vector_weight)
+        if bm25_ranked:
+            ranked_lists.append(bm25_ranked)
+            weights.append(settings.rrf_bm25_weight)
+        if graph_ranked:
+            ranked_lists.append(graph_ranked)
+            weights.append(settings.rrf_graph_weight)
+
+        fused_scores = weighted_rrf(ranked_lists, weights, k=settings.rrf_k)
 
         # Build memory lookup
         all_memories: dict[str, SemanticMemory] = {}
@@ -586,6 +599,7 @@ class HybridSearch:
             List of ScoredMemory fused and reranked
         """
         all_ranked_lists: list[list[tuple[str, float]]] = []
+        all_weights: list[float] = []  # v4.6: Track weights for each ranked list
         all_memories: dict[str, SemanticMemory] = {}
         memory_sources: dict[str, list[str]] = {}
 
@@ -600,6 +614,7 @@ class HybridSearch:
         # Vector ranked list
         orig_vector_ranked = [(m.id, score) for m, score in orig_vector_results]
         all_ranked_lists.append(orig_vector_ranked)
+        all_weights.append(settings.rrf_vector_weight)
         for m, _ in orig_vector_results:
             all_memories[m.id] = m
             memory_sources.setdefault(m.id, []).append("V")  # Vector
@@ -607,6 +622,7 @@ class HybridSearch:
         # BM25 ranked list
         orig_bm25_ranked = [(m.id, score) for m, score in orig_bm25_results]
         all_ranked_lists.append(orig_bm25_ranked)
+        all_weights.append(settings.rrf_bm25_weight)
         for m, _ in orig_bm25_results:
             all_memories[m.id] = m
             memory_sources.setdefault(m.id, []).append("B")  # BM25
@@ -619,39 +635,43 @@ class HybridSearch:
             ]
             graph_ranked.sort(key=lambda x: x[1], reverse=True)
             all_ranked_lists.append(graph_ranked)
+            all_weights.append(settings.rrf_graph_weight)
             for m in graph_memories:
                 all_memories[m.id] = m
                 memory_sources.setdefault(m.id, []).append("G")  # Graph
 
-        # 2. BM25 expanded → BM25 only
+        # 2. BM25 expanded → BM25 only (uses BM25 weight)
         if bm25_expanded and bm25_expanded != original_query:
             bm25_exp_results = await self._retrieve_bm25_only(bm25_expanded)
             bm25_exp_ranked = [(m.id, score) for m, score in bm25_exp_results]
             all_ranked_lists.append(bm25_exp_ranked)
+            all_weights.append(settings.rrf_bm25_weight)
             for m, _ in bm25_exp_results:
                 all_memories[m.id] = m
                 memory_sources.setdefault(m.id, []).append("BE")  # BM25 Expanded
 
-        # 3. Semantic rewrite → Vector only
+        # 3. Semantic rewrite → Vector only (uses vector weight)
         if semantic_rewrite_embedding:
             sem_results = await self._retrieve_vector_only(semantic_rewrite_embedding)
             sem_ranked = [(m.id, score) for m, score in sem_results]
             all_ranked_lists.append(sem_ranked)
+            all_weights.append(settings.rrf_vector_weight)
             for m, _ in sem_results:
                 all_memories[m.id] = m
                 memory_sources.setdefault(m.id, []).append("S")  # Semantic
 
-        # 4. HyDE → Vector only
+        # 4. HyDE → Vector only (uses vector weight)
         if hyde_embedding:
             hyde_results = await self._retrieve_vector_only(hyde_embedding)
             hyde_ranked = [(m.id, score) for m, score in hyde_results]
             all_ranked_lists.append(hyde_ranked)
+            all_weights.append(settings.rrf_vector_weight)
             for m, _ in hyde_results:
                 all_memories[m.id] = m
                 memory_sources.setdefault(m.id, []).append("H")  # HyDE
 
-        # RRF fusion of all ranked lists
-        fused_scores = rrf_scores_only(all_ranked_lists)
+        # Weighted RRF fusion of all ranked lists (v4.6)
+        fused_scores = weighted_rrf(all_ranked_lists, all_weights, k=settings.rrf_k)
 
         # Build scored memories with composite scores
         scored_memories = self._rerank_memories(

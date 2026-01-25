@@ -112,6 +112,18 @@ class Settings(BaseSettings):
         default=60,
         description="RRF constant k, higher values reduce top rank dominance"
     )
+    rrf_bm25_weight: float = Field(
+        default=0.45,
+        description="BM25 weight in weighted RRF fusion"
+    )
+    rrf_vector_weight: float = Field(
+        default=0.35,
+        description="Vector search weight in weighted RRF fusion"
+    )
+    rrf_graph_weight: float = Field(
+        default=0.20,
+        description="Graph traversal weight in weighted RRF fusion"
+    )
 
     # Reranker Parameters
     reranker_enabled: bool = Field(
