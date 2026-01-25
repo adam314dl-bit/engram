@@ -388,13 +388,13 @@ QUESTION|другой пример вопроса"""
                 max_questions=self.max_questions,
             )
 
-            # Call enrichment LLM with extended timeout for KB summary
+            # Use main LLM for KB summary (one-time task, stability over speed)
             from engram.ingestion.llm_client import LLMClient
             llm = LLMClient(
-                base_url=settings.enrichment_llm_base_url,
-                model=settings.enrichment_llm_model,
-                api_key=settings.enrichment_llm_api_key,
-                timeout=120.0,  # Extended timeout for KB summary (lots of content)
+                base_url=settings.llm_base_url,
+                model=settings.llm_model,
+                api_key=settings.llm_api_key,
+                timeout=settings.llm_timeout,  # Use main LLM timeout
                 max_concurrent=1,
             )
 
