@@ -576,13 +576,13 @@ class Neo4jClient:
     ) -> list[tuple[SemanticMemory, float]]:
         """Search semantic memories using full-text (BM25) on content field.
 
-        v4.6: Uses semantic_content_bm25 index (content only) for weighted retrieval.
-        BM25 searches original content while vector search uses search_content.
+        v4.6: BM25 searches content field while vector search uses search_content embedding.
+        Uses semantic_content index which covers the content field.
         """
         # Escape Lucene special characters to prevent query parsing errors
         escaped_query = escape_lucene_query(query_text)
         query = """
-        CALL db.index.fulltext.queryNodes('semantic_content_bm25', $query_text)
+        CALL db.index.fulltext.queryNodes('semantic_content', $query_text)
         YIELD node, score
         WHERE node.status IN ['active', 'deprioritized']
         RETURN node, score
