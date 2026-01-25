@@ -10,6 +10,7 @@ import logging
 import uuid
 from datetime import datetime
 
+from engram.config import settings
 from engram.models import EpisodicMemory
 from engram.reasoning.synthesizer import SynthesisResult
 from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
@@ -52,10 +53,13 @@ class EpisodeManager:
         Returns:
             Created EpisodicMemory
         """
-        # Generate embedding for behavior instruction
-        behavior_embedding = await self.embeddings.embed(
-            synthesis.behavior.instruction
-        )
+        # Generate embedding for behavior instruction (skip in bm25_graph mode)
+        if settings.retrieval_mode != "bm25_graph":
+            behavior_embedding = await self.embeddings.embed(
+                synthesis.behavior.instruction
+            )
+        else:
+            behavior_embedding = None
 
         # Generate answer summary if not provided
         if answer_summary is None:
