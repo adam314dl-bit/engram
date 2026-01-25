@@ -386,7 +386,7 @@ class Settings(BaseSettings):
         description="Enable intent classification in standard pipeline"
     )
     standard_crag_enabled: bool = Field(
-        default=True,
+        default=False,
         description="Enable light CRAG (grade top N docs) in standard pipeline"
     )
     standard_crag_top_k: int = Field(
