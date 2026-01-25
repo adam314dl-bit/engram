@@ -346,7 +346,7 @@ class Neo4jClient:
         query = """
         MATCH (s:SemanticMemory)-[:ABOUT]->(c:Concept)
         WHERE c.id IN $concept_ids
-          AND s.status = 'active'
+          AND s.status IN ['active', 'deprioritized']
           AND NOT s.id IN $exclude_ids
         WITH s, count(c) as concept_match_count
         ORDER BY concept_match_count DESC, s.importance DESC
@@ -543,7 +543,7 @@ class Neo4jClient:
         query = """
         CALL db.index.vector.queryNodes('semantic_embeddings', $k, $embedding)
         YIELD node, score
-        WHERE node.status = 'active'
+        WHERE node.status IN ['active', 'deprioritized']
         RETURN node, score
         """
         results: list[tuple[SemanticMemory, float]] = []
@@ -580,7 +580,7 @@ class Neo4jClient:
         query = """
         CALL db.index.fulltext.queryNodes('semantic_content', $query_text)
         YIELD node, score
-        WHERE node.status = 'active'
+        WHERE node.status IN ['active', 'deprioritized']
         RETURN node, score
         LIMIT $k
         """

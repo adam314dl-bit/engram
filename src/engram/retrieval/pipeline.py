@@ -189,7 +189,7 @@ class RetrievalPipeline:
                 embedding=query_embedding, k=5
             )
             for concept, score in vector_concepts:
-                if score > 0.5:  # Similarity threshold
+                if score > 0.3:  # Similarity threshold (lowered from 0.5 to improve retrieval)
                     seed_concept_ids.append(concept.id)
                     matched_concepts.append(concept)
 
@@ -383,7 +383,7 @@ class RetrievalPipeline:
                 embedding=query_embedding, k=5
             )
             for concept, score in vector_concepts:
-                if score > 0.5:
+                if score > 0.3:  # Lowered from 0.5 to improve retrieval
                     seed_concept_ids.append(concept.id)
                     matched_concepts.append(concept)
 

@@ -91,7 +91,7 @@ class Settings(BaseSettings):
 
     # Spreading Activation Parameters
     activation_decay: float = 0.85
-    activation_threshold: float = 0.3
+    activation_threshold: float = 0.15  # Lowered from 0.3 to improve retrieval
     activation_max_hops: int = 3
     activation_rescale: float = 0.4
     activation_top_k_per_hop: int = 20
