@@ -174,6 +174,7 @@ Optional fast model for query enrichment. Reduces latency from ~300ms to ~50ms p
 docker run -d --name engram-enrichment \
   --runtime nvidia --gpus '"device=1"' \
   -v /data/cache/huggingface:/root/.cache/huggingface \
+  -e HF_HUB_OFFLINE=1 \
   -p 8889:8000 \
   --ipc=host \
   --restart unless-stopped \
