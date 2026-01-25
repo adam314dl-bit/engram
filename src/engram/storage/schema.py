@@ -47,9 +47,11 @@ VECTOR_INDEX_QUERIES = [
 ]
 
 # Full-text index for BM25 search on semantic memories
+# v4.5: Include both search_content and content for backward compatibility
+# search_content is searched first (optimized for search), falls back to content
 FULLTEXT_INDEX_QUERY = """
 CREATE FULLTEXT INDEX semantic_content IF NOT EXISTS
-FOR (s:SemanticMemory) ON EACH [s.content]
+FOR (s:SemanticMemory) ON EACH [s.search_content, s.content]
 """
 
 # Full-text index for BM25 search on raw document chunks

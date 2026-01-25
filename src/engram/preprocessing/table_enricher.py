@@ -581,7 +581,7 @@ def create_memory_from_table(
     Create a single semantic memory from an enriched table (v4.1).
 
     Creates exactly 1 memory per table (atomic unit).
-    Uses description for embedding, raw_markdown for generation.
+    v4.5: Uses search_content for embedding, content for LLM generation.
 
     Args:
         enriched: Enriched table
@@ -591,7 +591,20 @@ def create_memory_from_table(
     Returns:
         SemanticMemory for the table
     """
-    # Build content: description + raw for generation
+    # v4.5: Build search_content for embedding (description + search queries)
+    search_parts = []
+    if enriched.belonging_context:
+        search_parts.append(enriched.belonging_context)
+    if enriched.description:
+        search_parts.append(enriched.description)
+    if enriched.search_queries:
+        search_parts.append(" | ".join(enriched.search_queries))
+    if enriched.key_facts:
+        search_parts.append(" | ".join(enriched.key_facts[:3]))
+
+    search_content = " | ".join(search_parts) if search_parts else None
+
+    # Build content: raw data for LLM generation
     content_parts = []
 
     # Add belonging context as header
@@ -627,6 +640,7 @@ def create_memory_from_table(
     return SemanticMemory(
         id=generate_id(),
         content=content,
+        search_content=search_content,
         concept_ids=concept_ids or [],
         source_doc_ids=[doc_id] if doc_id else [],
         memory_type="fact",
@@ -776,7 +790,7 @@ def create_multi_vector_memories(
     Create multi-vector memories from a table (v3.3).
 
     Creates two linked memories:
-    1. Summary memory: embedded, searchable
+    1. Summary memory: embedded, searchable (v4.5: uses search_content)
     2. Raw table memory: not indexed, fetched at generation time
 
     Args:
@@ -787,19 +801,26 @@ def create_multi_vector_memories(
     Returns:
         Tuple of (summary_memory, raw_table_memory)
     """
-    # Summary memory - this is embedded and searched
-    summary_content = table_summary.summary_ru
+    # v4.5: Build search_content for embedding (summary + key facts)
+    search_parts = []
     if table_summary.title:
-        summary_content = f"{table_summary.title}: {summary_content}"
-
-    # Add key facts to summary for better search
+        search_parts.append(table_summary.title)
+    if table_summary.summary_ru:
+        search_parts.append(table_summary.summary_ru)
     if table_summary.key_facts:
-        facts_text = " | ".join(table_summary.key_facts[:3])
-        summary_content = f"{summary_content}\nКлючевые факты: {facts_text}"
+        search_parts.append(" | ".join(table_summary.key_facts[:3]))
+
+    search_content = " | ".join(search_parts) if search_parts else None
+
+    # Content for LLM generation: raw table markdown
+    summary_content = table_summary.raw_markdown
+    if table_summary.surrounding_context:
+        summary_content = f"{table_summary.surrounding_context}\n\n{summary_content}"
 
     summary_memory = SemanticMemory(
         id=generate_id(),
         content=summary_content,
+        search_content=search_content,
         concept_ids=concept_ids or [],
         source_doc_ids=[doc_id] if doc_id else [],
         memory_type="table_summary",

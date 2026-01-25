@@ -94,7 +94,13 @@ class MemoryExtractor:
         text: str,
         doc_id: str | None,
     ) -> MemoryExtractionResult:
-        """Parse MEMORY|... and PERSON|... lines."""
+        """Parse MEMORY|... and PERSON|... lines.
+
+        Supports three formats:
+        - v4.5 (7 parts): MEMORY|search_summary|keywords|actual_content|type|concepts|importance
+        - v3 (6 parts): MEMORY|summary|keywords|type|concepts|importance
+        - v2 (5 parts): MEMORY|content|type|concepts|importance
+        """
         memories: list[SemanticMemory] = []
         all_concepts: dict[str, Concept] = {}  # name -> Concept
         persons: list[tuple[str, str | None, str | None]] = []
@@ -104,30 +110,63 @@ class MemoryExtractor:
 
             if line.startswith("MEMORY|"):
                 parts = line.split("|")
-                # New format: MEMORY|summary|keywords|type|concepts|importance (6 parts)
-                # Old format: MEMORY|content|type|concepts|importance (5 parts)
                 if len(parts) < 5:
                     continue
 
-                # Detect format by checking if parts[2] looks like a type
-                is_new_format = len(parts) >= 6 and parts[3].strip().lower() in {"fact", "procedure", "relationship"}
+                content: str = ""
+                search_content: str | None = None
+                memory_type: MemoryType = "fact"
+                concepts_str: str = ""
+                importance: float = 5.0
 
-                if is_new_format:
-                    # New format: summary + keywords
+                # Detect format by checking where the type field is
+                # v4.5 (7 parts): type is at parts[4]
+                # v3 (6 parts): type is at parts[3]
+                # v2 (5 parts): type is at parts[2]
+
+                is_v45_format = (
+                    len(parts) >= 7 and
+                    parts[4].strip().lower() in {"fact", "procedure", "relationship"}
+                )
+                is_v3_format = (
+                    not is_v45_format and
+                    len(parts) >= 6 and
+                    parts[3].strip().lower() in {"fact", "procedure", "relationship"}
+                )
+
+                if is_v45_format:
+                    # v4.5 format: search_summary|keywords|actual_content|type|concepts|importance
+                    search_summary = parts[1].strip()
+                    keywords = parts[2].strip()
+                    actual_content = parts[3].strip()
+                    memory_type = validate_memory_type(parts[4])
+                    concepts_str = parts[5] if len(parts) > 5 else ""
+                    importance = validate_importance(parts[6]) if len(parts) > 6 else 5.0
+
+                    # search_content: summary + keywords (for embedding/BM25)
+                    search_content = f"{search_summary} | {keywords}"
+                    # content: actual data (for LLM context)
+                    content = actual_content
+
+                elif is_v3_format:
+                    # v3 format: summary + keywords → both go to content (legacy)
                     summary = parts[1].strip()
                     keywords = parts[2].strip()
                     memory_type = validate_memory_type(parts[3])
                     concepts_str = parts[4] if len(parts) > 4 else ""
                     importance = validate_importance(parts[5]) if len(parts) > 5 else 5.0
 
-                    # Combine summary and keywords for content
+                    # Legacy: combine summary and keywords for content
                     content = f"Summary: {summary} | Keywords: {keywords}"
+                    search_content = None  # Use content for search
+
                 else:
-                    # Old format: content only
+                    # v2 format: content only
                     content = parts[1].strip()
                     memory_type = validate_memory_type(parts[2]) if len(parts) > 2 else "fact"
                     concepts_str = parts[3] if len(parts) > 3 else ""
                     importance = validate_importance(parts[4]) if len(parts) > 4 else 5.0
+                    search_content = None  # Use content for search
 
                 if not content or len(content) < 10:
                     continue
@@ -150,6 +189,7 @@ class MemoryExtractor:
                 memory = SemanticMemory(
                     id=generate_id(),
                     content=content,
+                    search_content=search_content,
                     concept_ids=concept_ids,
                     source_doc_ids=[doc_id] if doc_id else [],
                     memory_type=memory_type,

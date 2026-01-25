@@ -254,7 +254,7 @@ def create_memory_from_list(
     Create a semantic memory from an enriched list.
 
     Creates exactly 1 memory per list (atomic unit).
-    Uses description for embedding, raw_markdown for generation.
+    v4.5: Uses search_content for embedding, content for LLM generation.
 
     Args:
         enriched: Enriched list
@@ -264,7 +264,20 @@ def create_memory_from_list(
     Returns:
         SemanticMemory for the list
     """
-    # Build content: description + raw for generation
+    # v4.5: Build search_content for embedding (description + search queries)
+    search_parts = []
+    if enriched.belonging_context:
+        search_parts.append(enriched.belonging_context)
+    if enriched.description:
+        search_parts.append(enriched.description)
+    if enriched.search_queries:
+        search_parts.append(" | ".join(enriched.search_queries))
+    if enriched.key_facts:
+        search_parts.append(" | ".join(enriched.key_facts[:3]))
+
+    search_content = " | ".join(search_parts) if search_parts else None
+
+    # Build content: raw data for LLM generation
     content_parts = []
 
     # Add belonging context as header
@@ -298,6 +311,7 @@ def create_memory_from_list(
     return SemanticMemory(
         id=generate_id(),
         content=content,
+        search_content=search_content,
         concept_ids=concept_ids or [],
         source_doc_ids=[doc_id] if doc_id else [],
         memory_type="fact",

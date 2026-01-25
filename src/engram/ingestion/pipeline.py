@@ -379,8 +379,10 @@ class IngestionPipeline:
                 all_texts.append(c.name + (f": {c.description}" if c.description else ""))
 
             # Collect texts for memories
+            # v4.5: Use search_content for embedding if available, fallback to content
             for m in memories:
-                all_texts.append(m.content)
+                text = m.search_content if m.search_content else m.content
+                all_texts.append(text)
 
             # Single batch embedding call
             if all_texts:

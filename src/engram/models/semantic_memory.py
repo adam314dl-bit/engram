@@ -87,6 +87,12 @@ class SemanticMemory:
     # v3.3: Flexible metadata for source type, person info, table links, etc.
     metadata: dict[str, Any] | None = None
 
+    # v4.5: Dual-content - separate search vs display content
+    # search_content: Summary + keywords optimized for vector/BM25 search
+    # content: Actual facts/data sent to LLM as context
+    # If search_content is None, content is used for both purposes (backward compatible)
+    search_content: str | None = None
+
     def to_dict(self) -> dict:
         """Convert to dictionary for Neo4j storage."""
         return {
@@ -118,6 +124,8 @@ class SemanticMemory:
             "embedding": self.embedding,
             # Serialize metadata to JSON string for Neo4j (doesn't support nested maps)
             "metadata": json.dumps(self.metadata) if self.metadata else None,
+            # v4.5: Dual-content search field
+            "search_content": self.search_content,
         }
 
     @classmethod
@@ -159,6 +167,8 @@ class SemanticMemory:
             embedding=data.get("embedding"),
             # Deserialize metadata from JSON string
             metadata=json.loads(data["metadata"]) if data.get("metadata") else None,
+            # v4.5: Dual-content search field
+            search_content=data.get("search_content"),
         )
 
     def is_valid(self) -> bool:
