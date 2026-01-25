@@ -138,6 +138,9 @@ class RetrievalPipeline:
         Returns:
             RetrievalResult with all retrieved information
         """
+        # Check retrieval mode
+        use_vector = settings.retrieval_mode != "bm25_graph"
+
         # 1. Classify query (person/role, complexity)
         person_query_type, person_entity = classify_person_query(query)
         query_complexity, recommended_k = classify_query_complexity(query)
@@ -152,7 +155,8 @@ class RetrievalPipeline:
 
         logger.debug(
             f"Query classification: complexity={query_complexity}, "
-            f"person_type={person_query_type.value}, k={top_k_memories}"
+            f"person_type={person_query_type.value}, k={top_k_memories}, "
+            f"retrieval_mode={settings.retrieval_mode}"
         )
 
         # 2. Expand query with transliteration variants
@@ -162,9 +166,13 @@ class RetrievalPipeline:
             if len(transliteration_variants) > 1:
                 logger.debug(f"Transliteration variants: {transliteration_variants}")
 
-        # 3. Embed query (and variants if needed)
-        logger.debug(f"Embedding query: {query[:50]}...")
-        query_embedding = await self.embeddings.embed(query)
+        # 3. Embed query (only in hybrid mode)
+        query_embedding: list[float] = []
+        if use_vector:
+            logger.debug(f"Embedding query: {query[:50]}...")
+            query_embedding = await self.embeddings.embed(query)
+        else:
+            logger.debug("BM25+Graph mode: skipping query embedding")
 
         # 4. Extract concepts from query
         logger.debug("Extracting concepts from query")
@@ -182,16 +190,28 @@ class RetrievalPipeline:
                 seed_concept_ids.append(existing.id)
                 matched_concepts.append(existing)
 
-        # If no concepts matched, use vector search to find similar concepts
+        # If no concepts matched by name
         if not seed_concept_ids:
-            logger.debug("No exact concept matches, using vector search")
-            vector_concepts = await self.db.vector_search_concepts(
-                embedding=query_embedding, k=5
-            )
-            for concept, score in vector_concepts:
-                if score > 0.3:  # Similarity threshold (lowered from 0.5 to improve retrieval)
-                    seed_concept_ids.append(concept.id)
-                    matched_concepts.append(concept)
+            if use_vector and query_embedding:
+                # Use vector search to find similar concepts
+                logger.debug("No exact concept matches, using vector search")
+                vector_concepts = await self.db.vector_search_concepts(
+                    embedding=query_embedding, k=5
+                )
+                for concept, score in vector_concepts:
+                    if score > 0.3:  # Similarity threshold
+                        seed_concept_ids.append(concept.id)
+                        matched_concepts.append(concept)
+            else:
+                # In bm25_graph mode, use BM25 to find concepts by searching query terms
+                logger.debug("No exact concept matches, using BM25 concept search")
+                bm25_concepts = await self.db.fulltext_search_concepts(
+                    query_text=query, k=5
+                )
+                for concept, score in bm25_concepts:
+                    if score > 0.5:  # BM25 score threshold
+                        seed_concept_ids.append(concept.id)
+                        matched_concepts.append(concept)
 
         # 6. Spread activation through concept network
         logger.debug(f"Spreading activation from {len(seed_concept_ids)} seed concepts")
@@ -199,8 +219,9 @@ class RetrievalPipeline:
         activated_concepts: dict[str, float] = {}
 
         if seed_concept_ids:
+            # Pass empty embedding in bm25_graph mode
             activation_result = await self.spreading.activate(
-                seed_concept_ids, query_embedding
+                seed_concept_ids, query_embedding if query_embedding else []
             )
             activated_concepts = activation_result.activations
 
@@ -234,7 +255,7 @@ class RetrievalPipeline:
         logger.debug("Performing hybrid search")
         scored_memories = await self.hybrid.search_memories(
             query=query,
-            query_embedding=query_embedding,
+            query_embedding=query_embedding if query_embedding else None,
             graph_memories=graph_memories,
             graph_memory_scores=graph_memory_scores,
             use_dynamic_k=False,  # Already applied dynamic k above
@@ -271,14 +292,16 @@ class RetrievalPipeline:
             for source in sm.sources:
                 retrieval_sources[source] = retrieval_sources.get(source, 0) + 1
 
-        # 11. Find similar episodes (reasoning templates)
+        # 11. Find similar episodes (reasoning templates) - only in hybrid mode
         episodes: list[ScoredEpisode] = []
-        if include_episodes:
+        if include_episodes and use_vector and query_embedding:
             logger.debug("Finding similar episodes")
             episodes = await self.hybrid.search_similar_episodes(
                 query_embedding=query_embedding,
                 k=top_k_episodes,
             )
+        elif include_episodes:
+            logger.debug("BM25+Graph mode: skipping episode search (requires embeddings)")
 
         # Update access counts for retrieved memories
         for sm in scored_memories:
@@ -319,10 +342,10 @@ class RetrievalPipeline:
         Execute retrieval with multiple query variants (v4.3).
 
         Uses EnrichedQuery variants for multi-signal retrieval:
-        - Original → full hybrid (BM25 + vector + graph)
+        - Original → full hybrid (BM25 + vector + graph) or BM25 + graph in bm25_graph mode
         - BM25 expanded → BM25 only
-        - Semantic rewrite → Vector only
-        - HyDE document → Vector only
+        - Semantic rewrite → Vector only (skipped in bm25_graph mode)
+        - HyDE document → Vector only (skipped in bm25_graph mode)
 
         All results fused with RRF, reranked against original query.
 
@@ -338,6 +361,9 @@ class RetrievalPipeline:
         Returns:
             RetrievalResult with multi-query retrieved information
         """
+        # Check retrieval mode
+        use_vector = settings.retrieval_mode != "bm25_graph"
+
         top_k_memories = top_k_memories or settings.retrieval_top_k
         top_k_episodes = top_k_episodes or 3
 
@@ -349,19 +375,24 @@ class RetrievalPipeline:
         if settings.dynamic_topk_enabled and top_k_memories == settings.retrieval_top_k:
             top_k_memories = recommended_k
 
-        # 2. Embed all variants
-        logger.debug("Embedding query variants...")
-        query_embedding = await self.embeddings.embed(query)
+        # 2. Embed variants (only in hybrid mode)
+        query_embedding: list[float] = []
+        semantic_rewrite_embedding: list[float] | None = None
+        hyde_embedding: list[float] | None = None
 
-        # Embed semantic rewrite if different from original
-        semantic_rewrite_embedding = None
-        if semantic_rewrite and semantic_rewrite != query:
-            semantic_rewrite_embedding = await self.embeddings.embed(semantic_rewrite)
+        if use_vector:
+            logger.debug("Embedding query variants...")
+            query_embedding = await self.embeddings.embed(query)
 
-        # Embed HyDE document if present
-        hyde_embedding = None
-        if hyde_document:
-            hyde_embedding = await self.embeddings.embed(hyde_document)
+            # Embed semantic rewrite if different from original
+            if semantic_rewrite and semantic_rewrite != query:
+                semantic_rewrite_embedding = await self.embeddings.embed(semantic_rewrite)
+
+            # Embed HyDE document if present
+            if hyde_document:
+                hyde_embedding = await self.embeddings.embed(hyde_document)
+        else:
+            logger.debug("BM25+Graph mode: skipping query embedding")
 
         # 3. Extract concepts from query
         concept_result = await self.concept_extractor.extract(query)
@@ -377,15 +408,26 @@ class RetrievalPipeline:
                 seed_concept_ids.append(existing.id)
                 matched_concepts.append(existing)
 
-        # If no concepts matched, use vector search
+        # If no concepts matched
         if not seed_concept_ids:
-            vector_concepts = await self.db.vector_search_concepts(
-                embedding=query_embedding, k=5
-            )
-            for concept, score in vector_concepts:
-                if score > 0.3:  # Lowered from 0.5 to improve retrieval
-                    seed_concept_ids.append(concept.id)
-                    matched_concepts.append(concept)
+            if use_vector and query_embedding:
+                # Use vector search to find similar concepts
+                vector_concepts = await self.db.vector_search_concepts(
+                    embedding=query_embedding, k=5
+                )
+                for concept, score in vector_concepts:
+                    if score > 0.3:
+                        seed_concept_ids.append(concept.id)
+                        matched_concepts.append(concept)
+            else:
+                # In bm25_graph mode, use BM25 to find concepts
+                bm25_concepts = await self.db.fulltext_search_concepts(
+                    query_text=query, k=5
+                )
+                for concept, score in bm25_concepts:
+                    if score > 0.5:
+                        seed_concept_ids.append(concept.id)
+                        matched_concepts.append(concept)
 
         # 5. Spread activation through concept network
         activation_result: ActivationResult | None = None
@@ -393,7 +435,7 @@ class RetrievalPipeline:
 
         if seed_concept_ids:
             activation_result = await self.spreading.activate(
-                seed_concept_ids, query_embedding
+                seed_concept_ids, query_embedding if query_embedding else []
             )
             activated_concepts = activation_result.activations
 
@@ -423,7 +465,7 @@ class RetrievalPipeline:
         logger.debug("Performing multi-query hybrid search")
         scored_memories = await self.hybrid.search_memories_multi_query(
             original_query=query,
-            original_embedding=query_embedding,
+            original_embedding=query_embedding if query_embedding else None,
             bm25_expanded=bm25_expanded,
             semantic_rewrite=semantic_rewrite,
             semantic_rewrite_embedding=semantic_rewrite_embedding,
@@ -459,13 +501,15 @@ class RetrievalPipeline:
             for source in sm.sources:
                 retrieval_sources[source] = retrieval_sources.get(source, 0) + 1
 
-        # 11. Find similar episodes
+        # 11. Find similar episodes (only in hybrid mode)
         episodes: list[ScoredEpisode] = []
-        if include_episodes:
+        if include_episodes and use_vector and query_embedding:
             episodes = await self.hybrid.search_similar_episodes(
                 query_embedding=query_embedding,
                 k=top_k_episodes,
             )
+        elif include_episodes:
+            logger.debug("BM25+Graph mode: skipping episode search (requires embeddings)")
 
         # 12. Update access counts
         for sm in scored_memories:

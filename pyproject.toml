@@ -23,7 +23,7 @@ dependencies = [
     "igraph>=0.11.0",
     "python-dotenv>=1.0.0",
     "pymorphy3>=2.0.0",
-    "FlagEmbedding>=1.2.0",
+    "transformers>=4.40.0",  # For Jina Reranker v3
     # v3.3 additions
     "cyrtranslit>=1.0.0",  # Russian/Latin transliteration
     "natasha>=1.6.0",  # Russian NER for person extraction
@@ -45,8 +45,8 @@ gpu = [
     "cugraph-cu12>=24.0.0",
     "cudf-cu12>=24.0.0",
 ]
-nli = [
-    "transformers>=4.35.0",  # For mDeBERTa NLI model in v4 hallucination detection
+bge = [
+    "FlagEmbedding>=1.2.0",  # Alternative BGE reranker (set RERANKER_MODEL=BAAI/bge-reranker-v2-m3)
 ]
 
 [build-system]

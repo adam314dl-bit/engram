@@ -62,6 +62,13 @@ CREATE FULLTEXT INDEX chunk_content IF NOT EXISTS
 FOR (c:Chunk) ON EACH [c.text]
 """
 
+# Full-text index for BM25 search on concepts (v4.7 - bm25_graph mode)
+# Allows concept matching without vector search
+CONCEPT_FULLTEXT_INDEX_QUERY = """
+CREATE FULLTEXT INDEX concept_content IF NOT EXISTS
+FOR (c:Concept) ON EACH [c.name]
+"""
+
 # Relationship types used in the graph:
 # (c1:Concept)-[:RELATED_TO {weight: 0.8, type: "uses"}]->(c2:Concept)
 # (c:Concept)-[:IS_A]->(parent:Concept)
@@ -78,6 +85,7 @@ def get_all_schema_queries() -> list[str]:
     queries.extend(VECTOR_INDEX_QUERIES)
     queries.append(FULLTEXT_INDEX_QUERY)
     queries.append(CHUNK_FULLTEXT_INDEX_QUERY)
+    queries.append(CONCEPT_FULLTEXT_INDEX_QUERY)
     return queries
 
 

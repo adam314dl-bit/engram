@@ -107,6 +107,12 @@ class Settings(BaseSettings):
     retrieval_bm25_k: int = 200
     retrieval_vector_k: int = 200
 
+    # Retrieval Mode
+    retrieval_mode: str = Field(
+        default="bm25_graph",
+        description="Retrieval mode: 'bm25_graph' (default, no embeddings) or 'hybrid' (with vector search)"
+    )
+
     # RRF Fusion Parameters
     rrf_k: int = Field(
         default=60,
@@ -118,7 +124,7 @@ class Settings(BaseSettings):
     )
     rrf_vector_weight: float = Field(
         default=0.35,
-        description="Vector search weight in weighted RRF fusion"
+        description="Vector search weight in weighted RRF fusion (only for hybrid mode)"
     )
     rrf_graph_weight: float = Field(
         default=0.20,
@@ -128,15 +134,19 @@ class Settings(BaseSettings):
     # Reranker Parameters
     reranker_enabled: bool = Field(
         default=True,
-        description="Enable BGE cross-encoder reranking"
+        description="Enable Jina cross-encoder reranking"
     )
     reranker_model: str = Field(
-        default="BAAI/bge-reranker-v2-m3",
-        description="Cross-encoder model for reranking"
+        default="jinaai/jina-reranker-v3",
+        description="Cross-encoder model for reranking (Jina v3 replaces BGE)"
     )
     reranker_candidates: int = Field(
-        default=150,
-        description="Number of candidates to pass to reranker"
+        default=64,
+        description="Number of candidates to pass to reranker (batch size for single pass)"
+    )
+    reranker_device: str = Field(
+        default="cuda:0",
+        description="Device for reranker model (cuda:0, cpu, etc.)"
     )
 
     # BM25 Parameters
@@ -460,6 +470,7 @@ class Settings(BaseSettings):
 def get_dev_settings() -> Settings:
     """Get development environment settings."""
     return Settings(
+        retrieval_mode="bm25_graph",  # No vector search in dev
         embedding_model="all-MiniLM-L6-v2",
         embedding_dimensions=384,
         embedding_query_prefix="",
@@ -474,8 +485,11 @@ def get_prod_settings() -> Settings:
     """Get production environment settings.
 
     Optimized for high-core servers with multiple GPUs (e.g., H100/H200).
+    Default: bm25_graph mode (no vector search).
+    Set retrieval_mode='hybrid' to enable vector search.
     """
     return Settings(
+        retrieval_mode="bm25_graph",  # Default: BM25 + Graph only (no embeddings)
         embedding_model="ai-sage/Giga-Embeddings-instruct",
         embedding_dimensions=2048,
         embedding_query_prefix="Instruct: Найди релевантные факты для ответа на вопрос\nQuery: ",
@@ -493,6 +507,7 @@ def get_prod_settings() -> Settings:
 def get_test_settings() -> Settings:
     """Get test environment settings."""
     return Settings(
+        retrieval_mode="bm25_graph",  # No vector search in tests
         embedding_model="all-MiniLM-L6-v2",
         embedding_dimensions=384,
         embedding_query_prefix="",

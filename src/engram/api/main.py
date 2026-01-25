@@ -39,16 +39,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Startup
     logger.info("Starting Engram API...")
+    logger.info(f"Retrieval mode: {settings.retrieval_mode}")
 
     # Initialize database
     db = Neo4jClient()
     await db.connect()
     logger.info("Connected to Neo4j")
 
-    # Preload embedding model to avoid race conditions on first parallel requests
-    logger.info("Preloading embedding model...")
-    preload_embedding_model()
-    logger.info("Embedding model ready")
+    # Preload embedding model only in hybrid mode (skip in bm25_graph mode)
+    if settings.retrieval_mode != "bm25_graph":
+        logger.info("Preloading embedding model...")
+        preload_embedding_model()
+        logger.info("Embedding model ready")
+    else:
+        logger.info("BM25+Graph mode: skipping embedding model preload")
 
     # Preload reranker model (if enabled) to avoid delay on first query
     preload_reranker()

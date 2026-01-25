@@ -536,6 +536,30 @@ class Neo4jClient:
                 results.append((concept, record["score"]))
         return results
 
+    async def fulltext_search_concepts(
+        self, query_text: str, k: int = 10
+    ) -> list[tuple[Concept, float]]:
+        """Search concepts by full-text (BM25) on name field.
+
+        Used in bm25_graph mode when vector search is disabled.
+        Uses concept_content fulltext index.
+        """
+        # Escape Lucene special characters
+        escaped_query = escape_lucene_query(query_text)
+        query = """
+        CALL db.index.fulltext.queryNodes('concept_content', $query_text)
+        YIELD node, score
+        RETURN node, score
+        LIMIT $k
+        """
+        results: list[tuple[Concept, float]] = []
+        async with self.session() as session:
+            result = await session.run(query, query_text=escaped_query, k=k)
+            async for record in result:
+                concept = Concept.from_dict(dict(record["node"]))
+                results.append((concept, record["score"]))
+        return results
+
     async def vector_search_memories(
         self, embedding: list[float], k: int = 20
     ) -> list[tuple[SemanticMemory, float]]:

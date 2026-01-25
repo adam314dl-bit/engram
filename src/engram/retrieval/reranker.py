@@ -1,6 +1,6 @@
-"""BGE cross-encoder reranker for improved retrieval precision.
+"""Jina Reranker v3 for improved retrieval precision.
 
-Uses FlagEmbedding's BGE-reranker-v2-m3 model which supports Russian
+Uses jinaai/jina-reranker-v3 model which supports Russian
 and provides strong cross-lingual reranking capabilities.
 """
 
@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from engram.config import settings
 
 if TYPE_CHECKING:
-    from FlagEmbedding import FlagReranker
+    from transformers import AutoModel
 
 logger = logging.getLogger(__name__)
 
@@ -29,33 +29,42 @@ class RerankedItem:
 
 
 @lru_cache(maxsize=1)
-def get_reranker() -> "FlagReranker":
+def get_reranker() -> "AutoModel":
     """
-    Get or create cached BGE reranker (singleton with lazy loading).
+    Get or create cached Jina reranker (singleton with lazy loading).
 
     The model is loaded on first call and cached for subsequent calls.
 
     Returns:
-        FlagReranker instance
+        Jina Reranker v3 model instance
     """
     if not settings.reranker_enabled:
         raise RuntimeError("Reranker is disabled in settings")
 
     logger.info(f"Loading reranker model: {settings.reranker_model}")
 
-    from FlagEmbedding import FlagReranker
+    import torch
+    from transformers import AutoModel
 
-    # Load model with settings
-    # use_fp16=True for faster inference on supported GPUs
-    # devices=["cuda:0"] limits to single GPU (reranker doesn't need multi-GPU)
-    reranker = FlagReranker(
+    # Determine device
+    device = settings.reranker_device
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        logger.warning("CUDA requested but not available, falling back to CPU")
+        device = "cpu"
+
+    # Load Jina Reranker v3
+    model = AutoModel.from_pretrained(
         settings.reranker_model,
-        use_fp16=True,
-        devices=["cuda:0"],  # Single GPU is enough for reranking
+        torch_dtype="auto",
+        trust_remote_code=True,
     )
 
-    logger.info("Reranker model loaded successfully")
-    return reranker
+    # Move to device
+    model = model.to(device)
+    model.eval()
+
+    logger.info(f"Reranker model loaded successfully on {device}")
+    return model
 
 
 def rerank(
@@ -64,7 +73,7 @@ def rerank(
     top_k: int | None = None,
 ) -> list[RerankedItem]:
     """
-    Rerank candidates using cross-encoder.
+    Rerank candidates using Jina cross-encoder.
 
     Args:
         query: Query text
@@ -91,33 +100,32 @@ def rerank(
         return []
 
     top_k = top_k if top_k is not None else settings.retrieval_top_k
-    reranker = get_reranker()
+    model = get_reranker()
 
-    # Prepare query-passage pairs
-    pairs = [(query, content) for _, content, _ in candidates]
+    # Extract documents from candidates
+    documents = [content for _, content, _ in candidates]
 
-    # Get reranker scores
-    scores = reranker.compute_score(pairs, normalize=True)
+    # Use Jina's rerank method (returns list of dicts with 'index' and 'relevance_score')
+    results = model.rerank(query, documents, top_n=min(top_k, len(candidates)))
 
-    # Handle single item case (reranker returns float instead of list)
-    if isinstance(scores, float):
-        scores = [scores]
+    # Build output mapping results back to original candidates
+    reranked_items: list[RerankedItem] = []
+    for result in results:
+        idx = result["index"]
+        score = result["relevance_score"]
+        id_, content, original_score = candidates[idx]
 
-    # Build results with both scores
-    results = [
-        RerankedItem(
-            id=id_,
-            content=content,
-            rerank_score=float(score),
-            original_score=original_score,
-            original_rank=i,
+        reranked_items.append(
+            RerankedItem(
+                id=id_,
+                content=content,
+                rerank_score=float(score),
+                original_score=original_score,
+                original_rank=idx,
+            )
         )
-        for i, ((id_, content, original_score), score) in enumerate(zip(candidates, scores, strict=True))
-    ]
 
-    # Sort by rerank score descending
-    results.sort(key=lambda x: x.rerank_score, reverse=True)
-    return results[:top_k]
+    return reranked_items
 
 
 def rerank_with_fallback(

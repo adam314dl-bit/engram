@@ -210,7 +210,7 @@ class HybridSearch:
     async def search_memories(
         self,
         query: str,
-        query_embedding: list[float],
+        query_embedding: list[float] | None = None,
         graph_memories: list[SemanticMemory] | None = None,
         graph_memory_scores: dict[str, float] | None = None,
         use_dynamic_k: bool = True,
@@ -220,7 +220,7 @@ class HybridSearch:
 
         Args:
             query: User query text
-            query_embedding: Query embedding vector
+            query_embedding: Query embedding vector (optional in bm25_graph mode)
             graph_memories: Memories from spreading activation (optional)
             graph_memory_scores: Scores from graph traversal (optional)
             use_dynamic_k: Whether to use dynamic top_k based on query complexity
@@ -235,13 +235,18 @@ class HybridSearch:
             final_k = recommended_k
             logger.debug(f"Query complexity: {complexity}, using k={final_k}")
 
-        # 1. Vector search
-        vector_results = await self.db.vector_search_memories(
-            embedding=query_embedding, k=self.vector_k
-        )
+        # Check retrieval mode
+        use_vector = settings.retrieval_mode != "bm25_graph" and query_embedding is not None
+
+        # 1. Vector search (skip in bm25_graph mode)
+        vector_results: list[tuple[SemanticMemory, float]] = []
+        if use_vector:
+            vector_results = await self.db.vector_search_memories(
+                embedding=query_embedding, k=self.vector_k
+            )
         vector_ranked = [(m.id, score) for m, score in vector_results]
 
-        # 2. BM25 full-text search
+        # 2. BM25 full-text search (always)
         bm25_results = await self.db.fulltext_search_memories(
             query_text=query, k=self.bm25_k
         )
@@ -279,16 +284,16 @@ class HybridSearch:
 
         for m, _ in vector_results:
             all_memories[m.id] = m
-            memory_sources.setdefault(m.id, []).append("vector")
+            memory_sources.setdefault(m.id, []).append("V")  # Vector
 
         for m, _ in bm25_results:
             all_memories[m.id] = m
-            memory_sources.setdefault(m.id, []).append("bm25")
+            memory_sources.setdefault(m.id, []).append("B")  # BM25
 
         if graph_memories:
             for m in graph_memories:
                 all_memories[m.id] = m
-                memory_sources.setdefault(m.id, []).append("graph")
+                memory_sources.setdefault(m.id, []).append("G")  # Graph
 
         # Rerank with recency + importance + relevance
         scored_memories = self._rerank_memories(
@@ -306,10 +311,10 @@ class HybridSearch:
                 candidates_k=settings.reranker_candidates,
             )
 
-        # Apply MMR for diversity if enabled
-        if settings.mmr_enabled and len(scored_memories) > final_k:
+        # Apply MMR for diversity if enabled (requires embeddings)
+        if settings.mmr_enabled and use_vector and len(scored_memories) > final_k:
             scored_memories = self._apply_mmr(
-                query_embedding=query_embedding,
+                query_embedding=query_embedding,  # type: ignore
                 scored_memories=scored_memories,
                 k=final_k,
             )
@@ -421,7 +426,7 @@ class HybridSearch:
         self,
         memories: dict[str, SemanticMemory],
         fused_scores: dict[str, float],
-        query_embedding: list[float],
+        query_embedding: list[float] | None,
         sources: dict[str, list[str]],
     ) -> list[ScoredMemory]:
         """
@@ -432,7 +437,7 @@ class HybridSearch:
         Where:
         - recency = decay^hours_since_access
         - importance = importance_score / 10
-        - relevance = cosine_similarity(query, memory)
+        - relevance = cosine_similarity(query, memory) or 0.5 if no embedding
         """
         scored: list[ScoredMemory] = []
 
@@ -443,17 +448,22 @@ class HybridSearch:
             # Importance score (normalized to 0-1)
             importance = memory.importance / 10.0
 
-            # Relevance score (cosine similarity)
+            # Relevance score (cosine similarity) - skip if no query embedding
             relevance = 0.5  # Default if no embedding
-            if memory.embedding:
+            if query_embedding and memory.embedding:
                 relevance = cosine_similarity(query_embedding, memory.embedding)
 
             # RRF score (normalized)
             rrf_score = fused_scores.get(memory_id, 0)
 
             # Combined score
-            # Weight RRF higher since it already combines multiple signals
-            final_score = (recency * 0.2) + (importance * 0.2) + (relevance * 0.3) + (rrf_score * 10 * 0.3)
+            # In bm25_graph mode (no embeddings), give more weight to RRF
+            if query_embedding is None:
+                # No relevance signal, boost RRF and importance
+                final_score = (recency * 0.2) + (importance * 0.3) + (rrf_score * 10 * 0.5)
+            else:
+                # Standard hybrid with all signals
+                final_score = (recency * 0.2) + (importance * 0.2) + (relevance * 0.3) + (rrf_score * 10 * 0.3)
 
             scored.append(ScoredMemory(
                 memory=memory,
@@ -564,7 +574,7 @@ class HybridSearch:
     async def search_memories_multi_query(
         self,
         original_query: str,
-        original_embedding: list[float],
+        original_embedding: list[float] | None = None,
         bm25_expanded: str | None = None,
         semantic_rewrite: str | None = None,
         semantic_rewrite_embedding: list[float] | None = None,
@@ -576,17 +586,22 @@ class HybridSearch:
         """
         Search using multiple query variants with RRF fusion.
 
-        Retrieval strategy:
+        Retrieval strategy (in hybrid mode):
         - Original query → Full hybrid (BM25 + vector + graph)
         - BM25 expanded → BM25 only
         - Semantic rewrite → Vector only
         - HyDE document → Vector only (if present)
 
+        In bm25_graph mode:
+        - Original query → BM25 + graph only
+        - BM25 expanded → BM25 only
+        - Semantic rewrite and HyDE → Skipped
+
         All results fused with RRF, then reranked against ORIGINAL query.
 
         Args:
             original_query: Original user query
-            original_embedding: Embedding of original query
+            original_embedding: Embedding of original query (optional in bm25_graph mode)
             bm25_expanded: BM25-expanded query (synonyms, lemmas)
             semantic_rewrite: Semantically rewritten query
             semantic_rewrite_embedding: Embedding of semantic rewrite
@@ -603,23 +618,26 @@ class HybridSearch:
         all_memories: dict[str, SemanticMemory] = {}
         memory_sources: dict[str, list[str]] = {}
 
-        # 1. Original query → Full hybrid search
-        orig_vector_results = await self.db.vector_search_memories(
-            embedding=original_embedding, k=self.vector_k
-        )
+        # Check retrieval mode
+        use_vector = settings.retrieval_mode != "bm25_graph" and original_embedding is not None
+
+        # 1. Original query → Hybrid search (vector only in hybrid mode)
+        if use_vector:
+            orig_vector_results = await self.db.vector_search_memories(
+                embedding=original_embedding, k=self.vector_k
+            )
+            # Vector ranked list
+            orig_vector_ranked = [(m.id, score) for m, score in orig_vector_results]
+            all_ranked_lists.append(orig_vector_ranked)
+            all_weights.append(settings.rrf_vector_weight)
+            for m, _ in orig_vector_results:
+                all_memories[m.id] = m
+                memory_sources.setdefault(m.id, []).append("V")  # Vector
+
+        # BM25 always runs
         orig_bm25_results = await self.db.fulltext_search_memories(
             query_text=original_query, k=self.bm25_k
         )
-
-        # Vector ranked list
-        orig_vector_ranked = [(m.id, score) for m, score in orig_vector_results]
-        all_ranked_lists.append(orig_vector_ranked)
-        all_weights.append(settings.rrf_vector_weight)
-        for m, _ in orig_vector_results:
-            all_memories[m.id] = m
-            memory_sources.setdefault(m.id, []).append("V")  # Vector
-
-        # BM25 ranked list
         orig_bm25_ranked = [(m.id, score) for m, score in orig_bm25_results]
         all_ranked_lists.append(orig_bm25_ranked)
         all_weights.append(settings.rrf_bm25_weight)
@@ -627,7 +645,7 @@ class HybridSearch:
             all_memories[m.id] = m
             memory_sources.setdefault(m.id, []).append("B")  # BM25
 
-        # Graph ranked list
+        # Graph ranked list (always if provided)
         if graph_memories and graph_memory_scores:
             graph_ranked = [
                 (m.id, graph_memory_scores.get(m.id, 0))
@@ -650,8 +668,8 @@ class HybridSearch:
                 all_memories[m.id] = m
                 memory_sources.setdefault(m.id, []).append("BE")  # BM25 Expanded
 
-        # 3. Semantic rewrite → Vector only (uses vector weight)
-        if semantic_rewrite_embedding:
+        # 3. Semantic rewrite → Vector only (skip in bm25_graph mode)
+        if use_vector and semantic_rewrite_embedding:
             sem_results = await self._retrieve_vector_only(semantic_rewrite_embedding)
             sem_ranked = [(m.id, score) for m, score in sem_results]
             all_ranked_lists.append(sem_ranked)
@@ -660,8 +678,8 @@ class HybridSearch:
                 all_memories[m.id] = m
                 memory_sources.setdefault(m.id, []).append("S")  # Semantic
 
-        # 4. HyDE → Vector only (uses vector weight)
-        if hyde_embedding:
+        # 4. HyDE → Vector only (skip in bm25_graph mode)
+        if use_vector and hyde_embedding:
             hyde_results = await self._retrieve_vector_only(hyde_embedding)
             hyde_ranked = [(m.id, score) for m, score in hyde_results]
             all_ranked_lists.append(hyde_ranked)
@@ -677,7 +695,7 @@ class HybridSearch:
         scored_memories = self._rerank_memories(
             memories=all_memories,
             fused_scores=fused_scores,
-            query_embedding=original_embedding,  # Always use original for relevance
+            query_embedding=original_embedding,  # May be None in bm25_graph mode
             sources=memory_sources,
         )
 
@@ -689,10 +707,10 @@ class HybridSearch:
                 candidates_k=settings.reranker_candidates,
             )
 
-        # Apply MMR for diversity
-        if settings.mmr_enabled and len(scored_memories) > self.final_k:
+        # Apply MMR for diversity (requires embeddings)
+        if settings.mmr_enabled and use_vector and len(scored_memories) > self.final_k:
             scored_memories = self._apply_mmr(
-                query_embedding=original_embedding,
+                query_embedding=original_embedding,  # type: ignore
                 scored_memories=scored_memories,
                 k=self.final_k,
             )
@@ -721,7 +739,7 @@ class HybridSearch:
 async def hybrid_search(
     db: Neo4jClient,
     query: str,
-    query_embedding: list[float],
+    query_embedding: list[float] | None = None,
     graph_memories: list[SemanticMemory] | None = None,
     k: int = 10,
 ) -> list[ScoredMemory]:
