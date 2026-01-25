@@ -342,6 +342,27 @@ async def chat_completions(
             force_exclude_nodes=body.force_exclude_nodes if body.force_exclude_nodes else None,
         )
 
+        # Handle v4.3 early returns (NO_RETRIEVE, CLARIFY) where synthesis is None
+        if result.synthesis is None:
+            # No memories used for direct responses
+            confidence_pct = int(result.confidence * 100)
+            content_with_stats = result.answer + f"\n\n---\n**Confidence: {confidence_pct}%**"
+
+            return ChatCompletionResponse(
+                id=f"engram-{result.episode_id or 'direct'}",
+                created=int(time.time()),
+                model="engram",
+                choices=[
+                    ChatCompletionChoice(
+                        index=0,
+                        message=ChatMessage(role="assistant", content=content_with_stats),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=ChatCompletionUsage(),
+                confidence=result.confidence,
+            )
+
         # Fetch source documents for memories used
         source_documents = await db.get_source_documents_for_memories(
             memory_ids=result.synthesis.memories_used
