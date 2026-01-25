@@ -543,7 +543,7 @@ class RetrievalPipeline:
 async def retrieve(
     db: Neo4jClient,
     query: str,
-    top_k: int = 100,
+    top_k: int = 200,
 ) -> RetrievalResult:
     """Convenience function for retrieval."""
     pipeline = RetrievalPipeline(db=db)

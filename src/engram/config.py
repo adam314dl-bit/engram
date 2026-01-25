@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     reflection_importance_threshold: float = 150.0
 
     # Retrieval Parameters
-    retrieval_top_k: int = 100
+    retrieval_top_k: int = 200
     retrieval_bm25_k: int = 200
     retrieval_vector_k: int = 200
 

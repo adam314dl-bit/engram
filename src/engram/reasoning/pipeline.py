@@ -149,7 +149,7 @@ class ReasoningPipeline:
     async def reason(
         self,
         query: str,
-        top_k_memories: int = 100,
+        top_k_memories: int = 200,
         top_k_episodes: int = 3,
         temperature: float = 0.4,
         force_include_nodes: list[str] | None = None,
@@ -610,7 +610,7 @@ class ReasoningPipeline:
 async def reason(
     db: Neo4jClient,
     query: str,
-    top_k: int = 100,
+    top_k: int = 200,
 ) -> ReasoningResult:
     """Convenience function for reasoning."""
     pipeline = ReasoningPipeline(db=db)
