@@ -548,6 +548,156 @@ class HybridSearch:
         return episodes
 
 
+    async def search_memories_multi_query(
+        self,
+        original_query: str,
+        original_embedding: list[float],
+        bm25_expanded: str | None = None,
+        semantic_rewrite: str | None = None,
+        semantic_rewrite_embedding: list[float] | None = None,
+        hyde_document: str | None = None,
+        hyde_embedding: list[float] | None = None,
+        graph_memories: list[SemanticMemory] | None = None,
+        graph_memory_scores: dict[str, float] | None = None,
+    ) -> list[ScoredMemory]:
+        """
+        Search using multiple query variants with RRF fusion.
+
+        Retrieval strategy:
+        - Original query → Full hybrid (BM25 + vector + graph)
+        - BM25 expanded → BM25 only
+        - Semantic rewrite → Vector only
+        - HyDE document → Vector only (if present)
+
+        All results fused with RRF, then reranked against ORIGINAL query.
+
+        Args:
+            original_query: Original user query
+            original_embedding: Embedding of original query
+            bm25_expanded: BM25-expanded query (synonyms, lemmas)
+            semantic_rewrite: Semantically rewritten query
+            semantic_rewrite_embedding: Embedding of semantic rewrite
+            hyde_document: Hypothetical document for HyDE
+            hyde_embedding: Embedding of HyDE document
+            graph_memories: Memories from spreading activation
+            graph_memory_scores: Scores from graph traversal
+
+        Returns:
+            List of ScoredMemory fused and reranked
+        """
+        all_ranked_lists: list[list[tuple[str, float]]] = []
+        all_memories: dict[str, SemanticMemory] = {}
+        memory_sources: dict[str, list[str]] = {}
+
+        # 1. Original query → Full hybrid search
+        orig_vector_results = await self.db.vector_search_memories(
+            embedding=original_embedding, k=self.vector_k
+        )
+        orig_bm25_results = await self.db.fulltext_search_memories(
+            query_text=original_query, k=self.bm25_k
+        )
+
+        # Vector ranked list
+        orig_vector_ranked = [(m.id, score) for m, score in orig_vector_results]
+        all_ranked_lists.append(orig_vector_ranked)
+        for m, _ in orig_vector_results:
+            all_memories[m.id] = m
+            memory_sources.setdefault(m.id, []).append("V")  # Vector
+
+        # BM25 ranked list
+        orig_bm25_ranked = [(m.id, score) for m, score in orig_bm25_results]
+        all_ranked_lists.append(orig_bm25_ranked)
+        for m, _ in orig_bm25_results:
+            all_memories[m.id] = m
+            memory_sources.setdefault(m.id, []).append("B")  # BM25
+
+        # Graph ranked list
+        if graph_memories and graph_memory_scores:
+            graph_ranked = [
+                (m.id, graph_memory_scores.get(m.id, 0))
+                for m in graph_memories
+            ]
+            graph_ranked.sort(key=lambda x: x[1], reverse=True)
+            all_ranked_lists.append(graph_ranked)
+            for m in graph_memories:
+                all_memories[m.id] = m
+                memory_sources.setdefault(m.id, []).append("G")  # Graph
+
+        # 2. BM25 expanded → BM25 only
+        if bm25_expanded and bm25_expanded != original_query:
+            bm25_exp_results = await self._retrieve_bm25_only(bm25_expanded)
+            bm25_exp_ranked = [(m.id, score) for m, score in bm25_exp_results]
+            all_ranked_lists.append(bm25_exp_ranked)
+            for m, _ in bm25_exp_results:
+                all_memories[m.id] = m
+                memory_sources.setdefault(m.id, []).append("BE")  # BM25 Expanded
+
+        # 3. Semantic rewrite → Vector only
+        if semantic_rewrite_embedding:
+            sem_results = await self._retrieve_vector_only(semantic_rewrite_embedding)
+            sem_ranked = [(m.id, score) for m, score in sem_results]
+            all_ranked_lists.append(sem_ranked)
+            for m, _ in sem_results:
+                all_memories[m.id] = m
+                memory_sources.setdefault(m.id, []).append("S")  # Semantic
+
+        # 4. HyDE → Vector only
+        if hyde_embedding:
+            hyde_results = await self._retrieve_vector_only(hyde_embedding)
+            hyde_ranked = [(m.id, score) for m, score in hyde_results]
+            all_ranked_lists.append(hyde_ranked)
+            for m, _ in hyde_results:
+                all_memories[m.id] = m
+                memory_sources.setdefault(m.id, []).append("H")  # HyDE
+
+        # RRF fusion of all ranked lists
+        fused_scores = rrf_scores_only(all_ranked_lists)
+
+        # Build scored memories with composite scores
+        scored_memories = self._rerank_memories(
+            memories=all_memories,
+            fused_scores=fused_scores,
+            query_embedding=original_embedding,  # Always use original for relevance
+            sources=memory_sources,
+        )
+
+        # Apply cross-encoder reranking against ORIGINAL query
+        if settings.reranker_enabled:
+            scored_memories = self._apply_reranker(
+                query=original_query,  # Rerank against original
+                scored_memories=scored_memories,
+                candidates_k=settings.reranker_candidates,
+            )
+
+        # Apply MMR for diversity
+        if settings.mmr_enabled and len(scored_memories) > self.final_k:
+            scored_memories = self._apply_mmr(
+                query_embedding=original_embedding,
+                scored_memories=scored_memories,
+                k=self.final_k,
+            )
+
+        return scored_memories[:self.final_k]
+
+    async def _retrieve_bm25_only(
+        self,
+        query: str,
+        k: int | None = None,
+    ) -> list[tuple[SemanticMemory, float]]:
+        """BM25-only retrieval for expanded queries."""
+        k = k or self.bm25_k
+        return await self.db.fulltext_search_memories(query_text=query, k=k)
+
+    async def _retrieve_vector_only(
+        self,
+        embedding: list[float],
+        k: int | None = None,
+    ) -> list[tuple[SemanticMemory, float]]:
+        """Vector-only retrieval for semantic queries."""
+        k = k or self.vector_k
+        return await self.db.vector_search_memories(embedding=embedding, k=k)
+
+
 async def hybrid_search(
     db: Neo4jClient,
     query: str,

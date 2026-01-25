@@ -41,6 +41,13 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 - **Source Matching**: Fuzzy URL/path/pageId comparison
 - **LLM Judge**: Semantic evaluation with weighted scoring by answer type
 
+**v4.3 Query Enrichment:**
+- **Query Understanding**: Type, complexity, and entity detection
+- **BM25 Expansion**: Synonyms, lemmas, domain terms, transliteration
+- **Semantic Rewrite**: Intent clarification for better retrieval
+- **Multi-Query Retrieval**: Original + expanded + rewritten variants with RRF fusion
+- **Dedicated Enrichment LLM**: Fast Qwen3-4B for low-latency query processing
+
 **NLP & Processing:**
 - **Russian NLP**: PyMorphy3 lemmatization and stopword removal for Russian content
 - **Transliteration**: Handles mixed Cyrillic/Latin content with query expansion
@@ -151,6 +158,38 @@ RETRIEVAL_TOP_K=100       # Final memories sent to LLM
 RETRIEVAL_BM25_K=200      # BM25 candidates before fusion
 RETRIEVAL_VECTOR_K=200    # Vector candidates before fusion
 MMR_FETCH_K=200           # MMR candidate pool size
+
+# v4.3.1 Enrichment LLM (optional, falls back to main LLM)
+ENRICHMENT_LLM_ENABLED=true
+ENRICHMENT_LLM_BASE_URL=http://localhost:8889/v1
+ENRICHMENT_LLM_MODEL=Qwen/Qwen3-4B
+```
+
+### Enrichment LLM Setup (v4.3.1)
+
+Optional fast model for query enrichment. Reduces latency from ~300ms to ~50ms per query. Falls back to main LLM if unavailable.
+
+**Production (vLLM Docker on GPU 1):**
+```bash
+docker run -d --name engram-enrichment \
+  --runtime nvidia --gpus '"device=1"' \
+  -v /data/cache/huggingface:/root/.cache/huggingface \
+  -p 8889:8000 \
+  --ipc=host \
+  --restart unless-stopped \
+  vllm/vllm-openai:latest \
+  --model Qwen/Qwen3-4B \
+  --gpu-memory-utilization 0.3 \
+  --max-model-len 8192 \
+  --dtype bfloat16
+```
+
+**Local Development (Ollama):**
+```bash
+ollama pull qwen3:4b
+# Uses same Ollama server, configure in .env:
+# ENRICHMENT_LLM_BASE_URL=http://localhost:11434/v1
+# ENRICHMENT_LLM_MODEL=qwen3:4b
 ```
 
 ## Running the Server
@@ -345,6 +384,9 @@ uv run python scripts/run_ingestion.py /path/to/docs
 
 # Reset database and re-ingest (clears all data first)
 uv run python scripts/run_ingestion.py --clear /path/to/docs
+
+# Generate KB summary (required for v4.3 query enrichment)
+uv run python scripts/generate_kb_summary.py
 ```
 
 **Confluence Export Support:**
@@ -527,6 +569,20 @@ question;answer;url
 - [x] Weighted scoring by answer type
 - [x] CLI with parallel evaluation
 - [x] Startup availability checks for Engram API and Judge LLM
+
+**v4.3 Query Understanding & Enrichment:**
+- [x] KB summary generation for domain awareness
+- [x] Query understanding (type, complexity, entity detection)
+- [x] BM25 expansion (synonyms, lemmas, domain terms)
+- [x] Semantic query rewrite (intent clarification)
+- [x] Optional HyDE for complex queries
+- [x] Multi-query retrieval with RRF fusion
+
+**v4.3.1 Enrichment LLM:**
+- [x] Named LLM client registry (main, enrichment)
+- [x] Dedicated fast LLM for query enrichment (Qwen3-4B)
+- [x] Startup health check with automatic fallback
+- [x] Docker deployment support (vLLM)
 
 ### Planned
 

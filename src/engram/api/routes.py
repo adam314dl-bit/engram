@@ -104,6 +104,19 @@ class DebugInfo(BaseModel):
     thresholds: dict = {}
 
 
+class QueryEnrichmentDebugInfo(BaseModel):
+    """Debug information for v4.3 query enrichment."""
+
+    enabled: bool = False
+    query_type: str | None = None  # factual, procedural, person, comparison, etc.
+    complexity: str | None = None  # simple, multi_hop, ambiguous, out_of_scope
+    variants: list[str] = []  # All query variants generated
+    bm25_expanded: str | None = None
+    semantic_rewrite: str | None = None
+    hyde_document: str | None = None
+    enrichment_ms: float | None = None
+
+
 class AgenticDebugInfo(BaseModel):
     """Debug information for v4 agentic pipeline."""
 
@@ -111,6 +124,9 @@ class AgenticDebugInfo(BaseModel):
     intent_decision: str | None = None  # retrieve, no_retrieve, clarify
     intent_complexity: str | None = None  # simple, moderate, complex
     intent_confidence: float | None = None
+
+    # v4.3 Query Enrichment
+    query_enrichment: QueryEnrichmentDebugInfo | None = None
 
     # CRAG
     crag_quality: str | None = None  # correct, incorrect, ambiguous
@@ -403,11 +419,30 @@ async def chat_completions(
                     included=concept_id in result.synthesis.concepts_activated,
                 ))
 
+            # Build thresholds dict
+            thresholds = {"top_k_memories": body.top_k_memories}
+
+            # Add v4.3 info if used
+            if result.used_v43_pipeline:
+                thresholds["v43_pipeline"] = True
+                if result.intent:
+                    thresholds["intent_decision"] = result.intent.decision.value
+                if result.enriched_query:
+                    thresholds["query_type"] = result.enriched_query.query_type.value
+                    thresholds["query_complexity"] = result.enriched_query.complexity.value
+                    thresholds["query_variants"] = len(result.enriched_query.get_all_variants())
+                if result.crag:
+                    thresholds["crag_quality"] = result.crag.quality.value
+                    thresholds["crag_relevant_ratio"] = result.crag.relevant_ratio
+                if result.confidence_result:
+                    thresholds["confidence_level"] = result.confidence_result.level.value
+                    thresholds["confidence_score"] = result.confidence_result.combined_score
+
             debug_info = DebugInfo(
                 retrieved_memories=debug_memories,
                 activated_concepts=debug_concepts,
                 query_concepts=[c.name for c in result.retrieval.query_concepts],
-                thresholds={"top_k_memories": body.top_k_memories},
+                thresholds=thresholds,
             )
 
         return ChatCompletionResponse(
@@ -529,6 +564,19 @@ async def _handle_agentic_request(
             agentic_debug.intent_decision = result.intent.decision.value
             agentic_debug.intent_complexity = result.intent.complexity.value
             agentic_debug.intent_confidence = result.intent.confidence
+
+        # v4.3 Query Enrichment
+        if result.metadata.used_query_enrichment:
+            agentic_debug.query_enrichment = QueryEnrichmentDebugInfo(
+                enabled=True,
+                variants=result.metadata.query_variants or [],
+                enrichment_ms=result.metadata.enrichment_ms,
+            )
+            # Try to get more details from retrieval result
+            if result.retrieval and result.retrieval.query_variants:
+                agentic_debug.query_enrichment.bm25_expanded = result.retrieval.query_variants.get("bm25_expanded")
+                agentic_debug.query_enrichment.semantic_rewrite = result.retrieval.query_variants.get("semantic_rewrite")
+                agentic_debug.query_enrichment.hyde_document = result.retrieval.query_variants.get("hyde")
 
         if result.crag:
             agentic_debug.crag_quality = result.crag.quality.value

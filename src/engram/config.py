@@ -362,6 +362,71 @@ class Settings(BaseSettings):
         description="Maximum concurrent subtasks in research mode"
     )
 
+    # =========================================================================
+    # v4.3 Query Enrichment Settings (works in BOTH standard and agentic modes)
+    # =========================================================================
+
+    # Master switch for v4.3 features
+    query_enrichment_enabled: bool = Field(
+        default=False,
+        description="Enable v4.3 query enrichment pipeline (opt-in)"
+    )
+    query_enrichment_use_hyde: bool = Field(
+        default=False,
+        description="Use HyDE (Hypothetical Document Embedding) for complex queries"
+    )
+    query_enrichment_max_variants: int = Field(
+        default=4,
+        description="Maximum query variants to generate"
+    )
+
+    # Standard Pipeline Enhancements (active when query_enrichment_enabled=true)
+    standard_intent_enabled: bool = Field(
+        default=True,
+        description="Enable intent classification in standard pipeline"
+    )
+    standard_crag_enabled: bool = Field(
+        default=True,
+        description="Enable light CRAG (grade top N docs) in standard pipeline"
+    )
+    standard_crag_top_k: int = Field(
+        default=10,
+        description="Number of documents to grade in light CRAG (limits LLM calls)"
+    )
+    standard_confidence_enabled: bool = Field(
+        default=True,
+        description="Enable confidence calibration in standard pipeline"
+    )
+
+    # =========================================================================
+    # v4.3.1 Enrichment LLM Settings (fast model for query enrichment)
+    # =========================================================================
+
+    enrichment_llm_enabled: bool = Field(
+        default=True,
+        description="Use dedicated LLM for query enrichment (falls back to main if unavailable)"
+    )
+    enrichment_llm_base_url: str = Field(
+        default="http://localhost:11434/v1",
+        description="Base URL for enrichment LLM (default: Ollama)"
+    )
+    enrichment_llm_model: str = Field(
+        default="qwen3:4b",
+        description="Model name for enrichment (default: qwen3:4b)"
+    )
+    enrichment_llm_api_key: str = Field(
+        default="ollama",
+        description="API key for enrichment LLM"
+    )
+    enrichment_llm_timeout: float = Field(
+        default=30.0,
+        description="Timeout for enrichment LLM requests"
+    )
+    enrichment_llm_max_concurrent: int = Field(
+        default=24,
+        description="Max concurrent requests to enrichment LLM"
+    )
+
 
 def get_dev_settings() -> Settings:
     """Get development environment settings."""

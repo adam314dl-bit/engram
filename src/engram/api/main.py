@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from engram.api.graph import router as graph_router
 from engram.api.routes import router
 from engram.config import settings
+from engram.ingestion.llm_client import get_enrichment_llm_client
 from engram.retrieval.embeddings import preload_embedding_model
 from engram.retrieval.reranker import preload_reranker
 from engram.storage.neo4j_client import Neo4jClient
@@ -51,6 +52,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Preload reranker model (if enabled) to avoid delay on first query
     preload_reranker()
+
+    # Check enrichment LLM availability (if enabled)
+    if settings.query_enrichment_enabled and settings.enrichment_llm_enabled:
+        try:
+            client = get_enrichment_llm_client()
+            # Use max_tokens=50 to allow thinking models to produce actual content
+            response = await client.generate(prompt="Say OK", max_tokens=50)
+            if response and len(response.strip()) > 0:
+                logger.info(
+                    f"Enrichment LLM ready: {settings.enrichment_llm_model} "
+                    f"at {settings.enrichment_llm_base_url}"
+                )
+            else:
+                raise ValueError("Empty response from enrichment LLM")
+        except Exception as e:
+            logger.warning(
+                f"Enrichment LLM unavailable ({settings.enrichment_llm_base_url}): {e}. "
+                "Falling back to main LLM for query enrichment."
+            )
+            # Disable enrichment LLM to use main LLM as fallback
+            settings.enrichment_llm_enabled = False
 
     # Store db in app state for routes
     app.state.db = db

@@ -1,22 +1,29 @@
 """Agentic RAG pipeline integrating all v4 components.
 
-Complete flow:
+Complete flow (v4.3 with query enrichment):
 1. Intent Classification -> Decide whether to retrieve
-2. Retrieval (if needed) -> Get relevant documents
-3. CRAG Evaluation -> Grade documents, rewrite query if needed
-4. IRCoT (for complex queries) -> Multi-hop reasoning
-5. Generation with Citations -> Create response with sources
-6. Self-RAG Validation -> Verify response is supported
-7. NLI Hallucination Check -> Additional verification
-8. Confidence Calibration -> Decide on caveats/abstention
-9. Return AgenticResult
+2. Query Enrichment -> Generate multi-query variants (v4.3)
+3. Multi-Query Retrieval -> Get relevant documents
+4. CRAG Evaluation -> Grade documents, rewrite query if needed
+5. IRCoT (for complex queries) -> Multi-hop reasoning
+6. Generation with Citations -> Create response with sources
+7. Self-RAG Validation -> Verify response is supported
+8. NLI Hallucination Check -> Additional verification
+9. Confidence Calibration -> Decide on caveats/abstention
+10. Return AgenticResult
 
 Each component can be enabled/disabled via configuration.
 """
 
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from engram.query.enrichment import QueryEnrichmentPipeline
 
 from engram.config import settings
 from engram.ingestion.llm_client import LLMClient, get_llm_client
@@ -64,6 +71,12 @@ class AgenticMetadata:
     query_rewritten: bool = False
     rewritten_query: str | None = None
     processing_time_ms: float = 0.0
+
+    # v4.3 additions
+    used_query_enrichment: bool = False
+    enriched_query: str | None = None
+    query_variants: list[str] | None = None
+    enrichment_ms: float = 0.0
 
 
 @dataclass
@@ -123,6 +136,10 @@ class AgenticPipeline:
     Complete agentic RAG pipeline for Engram v4.
 
     Orchestrates all v4 components with configurable feature flags.
+
+    v4.3 additions:
+    - Query enrichment stage after intent classification
+    - Multi-query retrieval using enriched variants
     """
 
     def __init__(
@@ -156,6 +173,26 @@ class AgenticPipeline:
             db=db,
             embedding_service=self.embeddings,
         )
+
+        # v4.3: Query enrichment (initialized lazily)
+        self._query_enrichment: "QueryEnrichmentPipeline | None" = None
+        self._enrichment_initialized = False
+
+    async def _init_query_enrichment(self) -> None:
+        """Lazily initialize query enrichment pipeline."""
+        if self._enrichment_initialized:
+            return
+
+        if settings.query_enrichment_enabled:
+            from engram.query.enrichment import QueryEnrichmentPipeline
+            self._query_enrichment = QueryEnrichmentPipeline(
+                db=self.db,
+                llm_client=self.llm,
+            )
+            await self._query_enrichment.initialize()
+            logger.info("Query enrichment pipeline initialized for agentic mode")
+
+        self._enrichment_initialized = True
 
     async def reason(
         self,
@@ -209,12 +246,53 @@ class AgenticPipeline:
                     metadata=metadata,
                 )
 
-        # 2. Retrieval
+        # 2. Query Enrichment (v4.3)
+        enriched = None
+        if settings.query_enrichment_enabled:
+            await self._init_query_enrichment()
+            if self._query_enrichment:
+                enrichment_start = datetime.utcnow()
+                from engram.query.enrichment import EnrichedQuery
+                enriched: EnrichedQuery | None = await self._query_enrichment.enrich(query)
+                metadata.enrichment_ms = self._elapsed_ms(enrichment_start)
+                metadata.used_query_enrichment = True
+
+                if enriched:
+                    metadata.enriched_query = enriched.semantic_rewrite or query
+                    metadata.query_variants = enriched.get_all_variants()
+
+                    # Handle out-of-scope from enrichment
+                    if enriched.understanding and enriched.understanding.is_out_of_scope:
+                        answer = "К сожалению, этот вопрос выходит за рамки доступной базы знаний."
+                        if enriched.understanding.clarification_question:
+                            answer += f"\n\n{enriched.understanding.clarification_question}"
+                        metadata.processing_time_ms = self._elapsed_ms(start_time)
+                        return AgenticResult(
+                            answer=answer,
+                            intent=intent,
+                            metadata=metadata,
+                        )
+
+                logger.info(
+                    f"Query enriched: {len(enriched.get_all_variants())} variants, "
+                    f"{metadata.enrichment_ms:.0f}ms"
+                )
+
+        # 3. Retrieval (with multi-query if enriched)
         metadata.used_retrieval = True
-        retrieval_result = await self.retrieval.retrieve(
-            query=query,
-            top_k_memories=top_k_memories,
-        )
+        if enriched:
+            retrieval_result = await self.retrieval.retrieve_multi_query(
+                query=query,
+                bm25_expanded=enriched.bm25_expanded,
+                semantic_rewrite=enriched.semantic_rewrite,
+                hyde_document=enriched.hyde_document,
+                top_k_memories=top_k_memories,
+            )
+        else:
+            retrieval_result = await self.retrieval.retrieve(
+                query=query,
+                top_k_memories=top_k_memories,
+            )
 
         # Apply force exclude
         if force_exclude_nodes:
@@ -230,7 +308,7 @@ class AgenticPipeline:
                 force_include_nodes, retrieval_result
             )
 
-        # 3. CRAG Evaluation
+        # 4. CRAG Evaluation
         crag_result: CRAGResult | None = None
         if settings.crag_enabled:
             metadata.used_crag = True
@@ -258,7 +336,7 @@ class AgenticPipeline:
                     retrieval_result.memories, crag_result
                 )
 
-        # 4. IRCoT for complex queries
+        # 5. IRCoT for complex queries
         ircot_result: IRCoTResult | None = None
         synthesis: SynthesisResult | None = None
         answer: str = ""
@@ -278,7 +356,7 @@ class AgenticPipeline:
             answer = ircot_result.final_answer
             logger.info(f"IRCoT: {ircot_result.step_count} steps, {ircot_result.paragraph_count} paragraphs")
         else:
-            # 5. Standard synthesis
+            # 6. Standard synthesis
             synthesis = await self.synthesizer.synthesize(
                 query=query,
                 retrieval=retrieval_result,
@@ -286,7 +364,7 @@ class AgenticPipeline:
             )
             answer = synthesis.answer
 
-        # 6. Add citations
+        # 7. Add citations
         cited_response: CitedResponse | None = None
         if settings.citations_enabled:
             metadata.used_citations = True
@@ -299,7 +377,7 @@ class AgenticPipeline:
             if cited_response.references:
                 answer += cited_response.references
 
-        # 7. Self-RAG validation
+        # 8. Self-RAG validation
         self_rag_result: SelfRAGResult | None = None
         if settings.self_rag_enabled:
             metadata.used_self_rag = True
@@ -315,7 +393,7 @@ class AgenticPipeline:
                 metadata.abstained = True
                 logger.info("Self-RAG: abstained")
 
-        # 8. NLI hallucination check
+        # 9. NLI hallucination check
         hallucination_result: HallucinationResult | None = None
         if settings.nli_enabled and not metadata.abstained:
             metadata.used_nli = True
@@ -325,7 +403,7 @@ class AgenticPipeline:
             )
             logger.info(f"NLI: faithfulness={hallucination_result.faithfulness_score:.2f}")
 
-        # 9. Confidence calibration
+        # 10. Confidence calibration
         confidence_result: ConfidenceResult | None = None
         if not metadata.abstained:
             confidence_result = await self.confidence_calibrator.calibrate(
@@ -343,7 +421,7 @@ class AgenticPipeline:
             if confidence_result.action == ResponseAction.ABSTAIN:
                 metadata.abstained = True
 
-        # 10. Create episode
+        # 11. Create episode
         episode: EpisodicMemory | None = None
         if synthesis and not metadata.abstained:
             episode = await self.episode_manager.create_episode(synthesis)

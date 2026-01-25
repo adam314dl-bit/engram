@@ -410,6 +410,90 @@ class ConfidenceCalibrator:
 
         return response
 
+    def calibrate_light(
+        self,
+        crag_result: CRAGResult | None,
+        memories: list[ScoredMemory],
+    ) -> ConfidenceResult:
+        """Lightweight confidence calibration without LLM call.
+
+        For use in standard pipeline (v4.3) where we want confidence
+        but can't afford the extra LLM latency.
+
+        Uses only retrieval signals:
+        - CRAG quality and relevant ratio
+        - Memory scores statistics
+
+        Args:
+            crag_result: Optional CRAG evaluation result
+            memories: Retrieved memories
+
+        Returns:
+            ConfidenceResult with level, action, and reasoning
+        """
+        # Calculate retrieval confidence from CRAG
+        retrieval_conf = self._retrieval_confidence(crag_result, memories)
+
+        # Calculate generation confidence from memory scores (no LLM)
+        generation_conf = 0.6  # Default moderate
+        if memories:
+            scores = [m.score for m in memories]
+            avg_score = sum(scores) / len(scores)
+            max_score = max(scores)
+            # Blend average and max for robustness
+            generation_conf = (avg_score + max_score) / 2
+            # Clamp to 0.3-0.9 range
+            generation_conf = max(0.3, min(0.9, generation_conf))
+
+        # Validation confidence - use heuristics
+        validation_conf = 0.7  # Default
+        if crag_result:
+            # Higher if more docs are relevant
+            validation_conf = 0.5 + (crag_result.relevant_ratio * 0.4)
+
+        signals = ConfidenceSignals(
+            retrieval_confidence=retrieval_conf,
+            validation_confidence=validation_conf,
+            generation_confidence=generation_conf,
+        )
+
+        # Calculate combined score (same weights as full calibration)
+        combined = (
+            self.retrieval_weight * retrieval_conf +
+            self.validation_weight * validation_conf +
+            self.generation_weight * generation_conf
+        )
+
+        # Determine level
+        if combined >= self.high_threshold:
+            level = ConfidenceLevel.HIGH
+        elif combined >= self.medium_threshold:
+            level = ConfidenceLevel.MEDIUM
+        elif combined >= self.low_threshold:
+            level = ConfidenceLevel.LOW
+        else:
+            level = ConfidenceLevel.VERY_LOW
+
+        # Determine action
+        action, caveat = self._determine_action(level, signals)
+
+        # Build reasoning
+        reasoning = f"Light calibration: {combined:.2f} ({level.value})"
+
+        logger.debug(
+            f"Light confidence calibration: {level.value} ({combined:.2f}), "
+            f"action={action.value}"
+        )
+
+        return ConfidenceResult(
+            level=level,
+            action=action,
+            combined_score=combined,
+            signals=signals,
+            reasoning=reasoning,
+            caveat_text=caveat,
+        )
+
 
 async def calibrate_confidence(
     query: str,
