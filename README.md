@@ -19,6 +19,7 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 **Core Retrieval:**
 - **Spreading Activation**: Brain-like associative retrieval through concept networks
 - **Hybrid Search**: Combines graph traversal, vector similarity, and BM25 with RRF fusion
+- **Weighted RRF** (v4.6): Prioritized fusion with BM25 (0.45) > Vector (0.35) > Graph (0.20)
 - **Cross-Encoder Reranking**: BGE-reranker-v2-m3 for improved retrieval precision
 - **MMR Diversity**: Maximal Marginal Relevance prevents redundant results
 - **Dynamic top_k**: Query complexity classification adjusts retrieval depth
@@ -600,6 +601,13 @@ question;answer;url
 - [x] Parser backward-compatible with v3/v2 formats
 - [x] Table/list enrichers set `search_content` with descriptions + queries
 - [x] Neo4j fulltext index includes both fields
+
+**v4.6 Weighted Retrieval:**
+- [x] Configurable RRF weights: BM25 (0.45) > Vector (0.35) > Graph (0.20)
+- [x] BM25 searches `content` field (original facts)
+- [x] Vector searches `search_content` embedding (summary + keywords)
+- [x] `weighted_rrf()` function for source-prioritized fusion
+- [x] Works with both single-query and multi-query retrieval
 
 ### Planned
 
