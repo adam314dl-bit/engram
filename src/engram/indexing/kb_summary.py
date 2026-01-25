@@ -388,9 +388,15 @@ QUESTION|другой пример вопроса"""
                 max_questions=self.max_questions,
             )
 
-            # Call enrichment LLM
-            from engram.ingestion.llm_client import get_enrichment_llm_client
-            llm = get_enrichment_llm_client()
+            # Call enrichment LLM with extended timeout for KB summary
+            from engram.ingestion.llm_client import LLMClient
+            llm = LLMClient(
+                base_url=settings.enrichment_llm_base_url,
+                model=settings.enrichment_llm_model,
+                api_key=settings.enrichment_llm_api_key,
+                timeout=120.0,  # Extended timeout for KB summary (lots of content)
+                max_concurrent=1,
+            )
 
             response = await llm.generate(
                 prompt=prompt,
@@ -443,7 +449,7 @@ QUESTION|другой пример вопроса"""
         importance_query = """
         MATCH (m:SemanticMemory)
         WHERE m.content IS NOT NULL AND m.content <> ''
-        AND m.id NOT IN $seen
+        AND NOT m.id IN $seen
         RETURN m.id as id, m.content as content
         ORDER BY coalesce(m.importance, 0) DESC
         LIMIT $limit
@@ -461,7 +467,7 @@ QUESTION|другой пример вопроса"""
         MATCH (c:Concept)-[:RELATES_TO]-(m:SemanticMemory)
         WHERE m.content IS NOT NULL AND m.content <> ''
         AND c.type IS NOT NULL
-        AND m.id NOT IN $seen
+        AND NOT m.id IN $seen
         WITH c.type as concept_type, collect(DISTINCT {id: m.id, content: m.content})[0..2] as memories
         UNWIND memories as m
         RETURN m.id as id, m.content as content
@@ -479,7 +485,7 @@ QUESTION|другой пример вопроса"""
         random_query = """
         MATCH (m:SemanticMemory)
         WHERE m.content IS NOT NULL AND m.content <> ''
-        AND m.id NOT IN $seen
+        AND NOT m.id IN $seen
         RETURN m.id as id, m.content as content
         ORDER BY rand()
         LIMIT $limit
