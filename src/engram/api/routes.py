@@ -966,7 +966,7 @@ async def get_concept_neighbors(request: Request, concept_name: str) -> ConceptN
                    r.type as semantic_type,
                    r.weight as weight,
                    CASE WHEN startNode(r) = c THEN 'outgoing' ELSE 'incoming' END as direction
-            ORDER BY r.weight DESC NULLS LAST, neighbor.name
+            ORDER BY COALESCE(r.weight, 0) DESC, neighbor.name
             """,
             concept_id=concept["id"],
         )
