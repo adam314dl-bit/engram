@@ -285,16 +285,21 @@ class SemanticEnricher:
     async def enrich_all_concepts(
         self,
         batch_size: int | None = None,
+        max_concurrent: int | None = None,
     ) -> EnrichmentResult:
         """Enrich all concepts with world knowledge.
 
         Args:
             batch_size: Number of concepts to process per batch
+            max_concurrent: Max parallel LLM requests (default: from settings)
 
         Returns:
             EnrichmentResult with statistics
         """
+        import asyncio
+
         batch_size = batch_size or self.config.max_definitions_per_batch
+        max_concurrent = max_concurrent or settings.llm_max_concurrent
         errors: list[str] = []
         concepts_enriched = 0
         definitions_generated = 0
@@ -312,21 +317,37 @@ class SemanticEnricher:
         from engram.models import Concept
 
         concepts = [Concept.from_dict(dict(r["c"])) for r in results]
-        logger.info(f"Enriching {len(concepts)} concepts")
+        logger.info(f"Enriching {len(concepts)} concepts with {max_concurrent} parallel requests")
 
-        for i in range(0, len(concepts), batch_size):
-            batch = concepts[i : i + batch_size]
-            for concept in batch:
+        # Semaphore to limit concurrent LLM requests
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def enrich_with_semaphore(concept: Concept) -> tuple[int, int, list[str]]:
+            """Enrich a concept with semaphore-controlled concurrency."""
+            async with semaphore:
                 try:
                     edges = await self.enrich_concept(concept)
-                    concepts_enriched += 1
-                    if self._definition_cache.get(concept.id, ConceptDefinition(
+                    has_def = 1 if self._definition_cache.get(concept.id, ConceptDefinition(
                         "", "", "", [], [], [], []
-                    )).definition:
-                        definitions_generated += 1
-                    world_knowledge_edges += len(edges)
+                    )).definition else 0
+                    return (1, has_def, len(edges), [])
                 except Exception as e:
-                    errors.append(f"Failed to enrich {concept.name}: {e}")
+                    return (0, 0, 0, [f"Failed to enrich {concept.name}: {e}"])
+
+        # Process in batches with parallel requests within each batch
+        for i in range(0, len(concepts), batch_size):
+            batch = concepts[i : i + batch_size]
+
+            # Run batch in parallel
+            tasks = [enrich_with_semaphore(c) for c in batch]
+            results_batch = await asyncio.gather(*tasks)
+
+            # Aggregate results
+            for enriched, has_def, edge_count, errs in results_batch:
+                concepts_enriched += enriched
+                definitions_generated += has_def
+                world_knowledge_edges += edge_count
+                errors.extend(errs)
 
             logger.info(f"Enriched {min(i + batch_size, len(concepts))}/{len(concepts)} concepts")
 
