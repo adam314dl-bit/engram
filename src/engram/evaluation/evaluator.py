@@ -451,7 +451,7 @@ RESULT|<key_info_match>|<relevance>|<no_contradiction>|<причина>
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.1,
-            "max_tokens": 256,
+            "max_tokens": 1024,  # Enough for thinking + response
         }
 
         response = self._http.post(url, payload)
@@ -473,7 +473,10 @@ RESULT|<key_info_match>|<relevance>|<no_contradiction>|<причина>
             return self._default_scores("LLM returned None content")
 
         # Strip <think>...</think> blocks from thinking models
-        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+        # Also handle unclosed <think> tags (when output is truncated)
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+        content = re.sub(r"<think>.*", "", content, flags=re.DOTALL)  # unclosed
+        content = content.strip()
 
         logger.debug(f"Judge LLM response (after strip): {content[:300]}")
 
