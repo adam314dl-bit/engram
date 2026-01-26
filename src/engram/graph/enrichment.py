@@ -122,19 +122,23 @@ class SemanticEnricher:
 Используй только общеизвестные факты."""
 
         try:
-            response = requests.post(
-                f"{base_url}/chat/completions",
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.1,
-                },
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=timeout,
-            )
-            response.raise_for_status()
+            import asyncio
 
-            content = response.json()["choices"][0]["message"]["content"].strip()
+            def make_request() -> str:
+                resp = requests.post(
+                    f"{base_url}/chat/completions",
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.1,
+                    },
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=timeout,
+                )
+                resp.raise_for_status()
+                return resp.json()["choices"][0]["message"]["content"].strip()
+
+            content = await asyncio.to_thread(make_request)
 
             # Parse pipe-delimited format
             definition_text = ""
@@ -524,19 +528,23 @@ S = семантическая (общеизвестный факт)
 C = контекстная (специфично для документа)"""
 
             try:
-                response = requests.post(
-                    f"{base_url}/chat/completions",
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": 0.1,
-                    },
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    timeout=timeout,
-                )
-                response.raise_for_status()
+                import asyncio
 
-                content = response.json()["choices"][0]["message"]["content"].strip()
+                def make_request() -> str:
+                    resp = requests.post(
+                        f"{base_url}/chat/completions",
+                        json={
+                            "model": model,
+                            "messages": [{"role": "user", "content": prompt}],
+                            "temperature": 0.1,
+                        },
+                        headers={"Authorization": f"Bearer {api_key}"},
+                        timeout=timeout,
+                    )
+                    resp.raise_for_status()
+                    return resp.json()["choices"][0]["message"]["content"].strip()
+
+                content = await asyncio.to_thread(make_request)
 
                 # Parse pipe-delimited format (one per line)
                 for line in content.split("\n"):
