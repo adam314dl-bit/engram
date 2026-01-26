@@ -187,6 +187,12 @@ class SemanticEnricher:
                 needs=[],
             )
 
+    def _find_concept_id(self, name: str) -> str | None:
+        """Find concept ID by name using cache (no DB query)."""
+        if hasattr(self, "_concept_name_cache"):
+            return self._concept_name_cache.get(name.lower())
+        return None
+
     async def generate_semantic_relations(
         self,
         concept: "Concept",
@@ -203,70 +209,28 @@ class SemanticEnricher:
         """
         edges: list[EnrichedEdge] = []
 
-        # Create edges for is_a relations
-        for target_name in definition.is_a[: self.config.max_relations_per_concept]:
-            # Find or note the target concept
-            target = await self.db.get_concept_by_name(target_name)
-            if target:
-                edges.append(
-                    EnrichedEdge(
-                        source_id=concept.id,
-                        target_id=target.id,
-                        relation_type="is_a",
-                        weight=0.9,
-                        is_semantic=True,
-                        is_universal=True,
-                        source_type=EdgeSourceType.WORLD_KNOWLEDGE,
-                    )
-                )
+        relation_configs = [
+            (definition.is_a, "is_a", 0.9),
+            (definition.contains, "contains", 0.8),
+            (definition.uses, "uses", 0.7),
+            (definition.needs, "needs", 0.7),
+        ]
 
-        # Create edges for contains relations
-        for target_name in definition.contains[: self.config.max_relations_per_concept]:
-            target = await self.db.get_concept_by_name(target_name)
-            if target:
-                edges.append(
-                    EnrichedEdge(
-                        source_id=concept.id,
-                        target_id=target.id,
-                        relation_type="contains",
-                        weight=0.8,
-                        is_semantic=True,
-                        is_universal=True,
-                        source_type=EdgeSourceType.WORLD_KNOWLEDGE,
+        for relations, rel_type, weight in relation_configs:
+            for target_name in relations[: self.config.max_relations_per_concept]:
+                target_id = self._find_concept_id(target_name)
+                if target_id:
+                    edges.append(
+                        EnrichedEdge(
+                            source_id=concept.id,
+                            target_id=target_id,
+                            relation_type=rel_type,
+                            weight=weight,
+                            is_semantic=True,
+                            is_universal=True,
+                            source_type=EdgeSourceType.WORLD_KNOWLEDGE,
+                        )
                     )
-                )
-
-        # Create edges for uses relations
-        for target_name in definition.uses[: self.config.max_relations_per_concept]:
-            target = await self.db.get_concept_by_name(target_name)
-            if target:
-                edges.append(
-                    EnrichedEdge(
-                        source_id=concept.id,
-                        target_id=target.id,
-                        relation_type="uses",
-                        weight=0.7,
-                        is_semantic=True,
-                        is_universal=True,
-                        source_type=EdgeSourceType.WORLD_KNOWLEDGE,
-                    )
-                )
-
-        # Create edges for needs relations
-        for target_name in definition.needs[: self.config.max_relations_per_concept]:
-            target = await self.db.get_concept_by_name(target_name)
-            if target:
-                edges.append(
-                    EnrichedEdge(
-                        source_id=concept.id,
-                        target_id=target.id,
-                        relation_type="needs",
-                        weight=0.7,
-                        is_semantic=True,
-                        is_universal=True,
-                        source_type=EdgeSourceType.WORLD_KNOWLEDGE,
-                    )
-                )
 
         return edges
 
@@ -323,17 +287,22 @@ class SemanticEnricher:
         self,
         batch_size: int | None = None,
         max_concurrent: int | None = None,
+        limit: int | None = None,
+        min_degree: int = 0,
     ) -> EnrichmentResult:
         """Enrich all concepts with world knowledge.
 
         Args:
             batch_size: Number of concepts to process per batch
             max_concurrent: Max parallel LLM requests (default: from settings)
+            limit: Max concepts to enrich (for testing)
+            min_degree: Only enrich concepts with at least N edges
 
         Returns:
             EnrichmentResult with statistics
         """
         import asyncio
+        import time
 
         batch_size = batch_size or self.config.max_definitions_per_batch
         if max_concurrent is None:
@@ -346,18 +315,39 @@ class SemanticEnricher:
         definitions_generated = 0
         world_knowledge_edges = 0
 
+        # Build concept name cache for fast lookups
+        logger.info("Building concept name cache...")
+        cache_query = "MATCH (c:Concept) WHERE c.status IS NULL OR c.status = 'active' RETURN c.id as id, c.name as name"
+        cache_results = await self.db.execute_query(cache_query)
+        self._concept_name_cache: dict[str, str] = {r["name"].lower(): r["id"] for r in cache_results}
+        logger.info(f"Cached {len(self._concept_name_cache)} concept names")
+
         # Get concepts that haven't been enriched
-        query = """
-        MATCH (c:Concept)
-        WHERE c.enriched_at IS NULL
-          AND (c.status IS NULL OR c.status = 'active')
-        RETURN c
-        """
+        if min_degree > 0:
+            query = f"""
+            MATCH (c:Concept)
+            WHERE c.enriched_at IS NULL
+              AND (c.status IS NULL OR c.status = 'active')
+            WITH c, COUNT {{ (c)-[:RELATED_TO]-() }} + COUNT {{ ()-[:RELATED_TO]->(c) }} as degree
+            WHERE degree >= {min_degree}
+            RETURN c
+            """
+        else:
+            query = """
+            MATCH (c:Concept)
+            WHERE c.enriched_at IS NULL
+              AND (c.status IS NULL OR c.status = 'active')
+            RETURN c
+            """
         results = await self.db.execute_query(query)
 
         from engram.models import Concept
 
         concepts = [Concept.from_dict(dict(r["c"])) for r in results]
+
+        if limit:
+            concepts = concepts[:limit]
+            logger.info(f"Limited to {limit} concepts")
 
         # Log LLM configuration
         if settings.enrichment_llm_enabled:
@@ -368,7 +358,9 @@ class SemanticEnricher:
         else:
             logger.info(f"Using main LLM: {settings.llm_model} at {settings.llm_base_url}")
 
-        logger.info(f"Enriching {len(concepts)} concepts with {max_concurrent} parallel requests")
+        total = len(concepts)
+        logger.info(f"Enriching {total} concepts with {max_concurrent} parallel requests")
+        start_time = time.time()
 
         # Semaphore to limit concurrent LLM requests
         semaphore = asyncio.Semaphore(max_concurrent)
@@ -400,7 +392,14 @@ class SemanticEnricher:
                 world_knowledge_edges += edge_count
                 errors.extend(errs)
 
-            logger.info(f"Enriched {min(i + batch_size, len(concepts))}/{len(concepts)} concepts")
+            done = min(i + batch_size, total)
+            elapsed = time.time() - start_time
+            rate = done / elapsed if elapsed > 0 else 0
+            remaining = (total - done) / rate if rate > 0 else 0
+            logger.info(
+                f"Enriched {done}/{total} concepts "
+                f"({rate:.1f}/s, ETA: {remaining/60:.1f}m)"
+            )
 
         # Classify existing edges
         edges_classified = await self.classify_existing_edges()

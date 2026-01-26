@@ -78,6 +78,8 @@ async def run_enrichment(
     db: Neo4jClient,
     config: GraphQualityConfig,
     dry_run: bool = False,
+    limit: int | None = None,
+    min_degree: int = 0,
 ) -> None:
     """Run semantic enrichment."""
     print("\n=== Running Semantic Enrichment ===\n")
@@ -96,7 +98,7 @@ async def run_enrichment(
     )
 
     enricher = SemanticEnricher(db, enrich_config)
-    result = await enricher.enrich_all_concepts()
+    result = await enricher.enrich_all_concepts(limit=limit, min_degree=min_degree)
 
     print(f"\nEnrichment Report:")
     print(f"  Concepts enriched: {result.concepts_enriched}")
@@ -151,6 +153,18 @@ async def main() -> None:
         action="store_true",
         help="Enable verbose logging",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Limit number of concepts to enrich (for testing)",
+    )
+    parser.add_argument(
+        "--min-degree",
+        type=int,
+        default=0,
+        help="Only enrich concepts with at least N edges",
+    )
 
     args = parser.parse_args()
 
@@ -171,11 +185,11 @@ async def main() -> None:
             await run_deduplication(db, config, args.dry_run)
 
         elif args.command == "enrich":
-            await run_enrichment(db, config, args.dry_run)
+            await run_enrichment(db, config, args.dry_run, args.limit, args.min_degree)
 
         elif args.command == "all":
             await run_deduplication(db, config, args.dry_run)
-            await run_enrichment(db, config, args.dry_run)
+            await run_enrichment(db, config, args.dry_run, args.limit, args.min_degree)
 
         elif args.command == "stats":
             await show_stats(db)
