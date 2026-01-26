@@ -246,10 +246,18 @@ class HealthResponse(BaseModel):
 class StatsResponse(BaseModel):
     """System statistics."""
 
+    # Node counts
     concepts_count: int
     semantic_memories_count: int
     episodic_memories_count: int
     documents_count: int
+
+    # Edge counts
+    concept_to_concept: int = 0
+    memory_to_concept: int = 0
+    memory_to_document: int = 0
+    episode_to_concept: int = 0
+    episode_to_memory: int = 0
 
 
 class ConceptInfo(BaseModel):
@@ -797,11 +805,12 @@ async def list_models() -> dict:
 
 @router.get("/admin/stats", response_model=StatsResponse, include_in_schema=False)
 async def get_stats(request: Request) -> StatsResponse:
-    """Get system statistics."""
+    """Get system statistics including node and edge counts."""
     db = get_db(request)
 
     try:
-        result = await db.execute_query(
+        # Node counts
+        node_result = await db.execute_query(
             """
             MATCH (c:Concept) WITH count(c) as concepts
             MATCH (s:SemanticMemory) WITH concepts, count(s) as semantic
@@ -811,20 +820,35 @@ async def get_stats(request: Request) -> StatsResponse:
             """
         )
 
-        if result:
-            row = result[0]
-            return StatsResponse(
-                concepts_count=row["concepts"],
-                semantic_memories_count=row["semantic"],
-                episodic_memories_count=row["episodic"],
-                documents_count=row["docs"],
-            )
+        # Edge counts (run separately to avoid cartesian product issues)
+        edge_result = await db.execute_query(
+            """
+            OPTIONAL MATCH (:Concept)-[r1:RELATED_TO]->(:Concept)
+            WITH count(r1) as c2c
+            OPTIONAL MATCH (:SemanticMemory)-[r2:ABOUT]->(:Concept)
+            WITH c2c, count(r2) as m2c
+            OPTIONAL MATCH (:SemanticMemory)-[r3:EXTRACTED_FROM]->(:Document)
+            WITH c2c, m2c, count(r3) as m2d
+            OPTIONAL MATCH (:EpisodicMemory)-[r4:ACTIVATED]->(:Concept)
+            WITH c2c, m2c, m2d, count(r4) as e2c
+            OPTIONAL MATCH (:EpisodicMemory)-[r5:USED]->(:SemanticMemory)
+            RETURN c2c, m2c, m2d, e2c, count(r5) as e2m
+            """
+        )
+
+        nodes = node_result[0] if node_result else {}
+        edges = edge_result[0] if edge_result else {}
 
         return StatsResponse(
-            concepts_count=0,
-            semantic_memories_count=0,
-            episodic_memories_count=0,
-            documents_count=0,
+            concepts_count=nodes.get("concepts", 0),
+            semantic_memories_count=nodes.get("semantic", 0),
+            episodic_memories_count=nodes.get("episodic", 0),
+            documents_count=nodes.get("docs", 0),
+            concept_to_concept=edges.get("c2c", 0),
+            memory_to_concept=edges.get("m2c", 0),
+            memory_to_document=edges.get("m2d", 0),
+            episode_to_concept=edges.get("e2c", 0),
+            episode_to_memory=edges.get("e2m", 0),
         )
 
     except Exception as e:

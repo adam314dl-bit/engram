@@ -253,17 +253,51 @@ async def get_graph_data(
 @router.get("/constellation/stats", include_in_schema=False)
 async def get_graph_stats(request: Request) -> dict:
     db = get_db(request)
+
+    # Node counts
     concepts = await db.execute_query("MATCH (c:Concept) RETURN count(c) as count")
     semantic = await db.execute_query("MATCH (s:SemanticMemory) RETURN count(s) as count")
     episodic = await db.execute_query("MATCH (e:EpisodicMemory) RETURN count(e) as count")
-    clusters = await db.execute_query("MATCH (n) WHERE n.cluster IS NOT NULL RETURN count(DISTINCT n.cluster) as count")
+    clusters = await db.execute_query(
+        "MATCH (n) WHERE n.cluster IS NOT NULL RETURN count(DISTINCT n.cluster) as count"
+    )
+
+    # Edge counts
+    edges = await db.execute_query(
+        """
+        OPTIONAL MATCH (:Concept)-[r1:RELATED_TO]->(:Concept)
+        WITH count(r1) as c2c
+        OPTIONAL MATCH (:SemanticMemory)-[r2:ABOUT]->(:Concept)
+        WITH c2c, count(r2) as m2c
+        OPTIONAL MATCH (:SemanticMemory)-[r3:EXTRACTED_FROM]->(:Document)
+        WITH c2c, m2c, count(r3) as m2d
+        OPTIONAL MATCH (:EpisodicMemory)-[r4:ACTIVATED]->(:Concept)
+        WITH c2c, m2c, m2d, count(r4) as e2c
+        OPTIONAL MATCH (:EpisodicMemory)-[r5:USED]->(:SemanticMemory)
+        RETURN c2c, m2c, m2d, e2c, count(r5) as e2m
+        """
+    )
 
     c = concepts[0]["count"] if concepts else 0
     s = semantic[0]["count"] if semantic else 0
     e = episodic[0]["count"] if episodic else 0
     cl = clusters[0]["count"] if clusters else 0
+    edge_data = edges[0] if edges else {}
 
-    return {"concepts": c, "semantic": s, "episodic": e, "total": c + s + e, "clusters": cl}
+    return {
+        "concepts": c,
+        "semantic": s,
+        "episodic": e,
+        "total": c + s + e,
+        "clusters": cl,
+        "edges": {
+            "concept_to_concept": edge_data.get("c2c", 0),
+            "memory_to_concept": edge_data.get("m2c", 0),
+            "memory_to_document": edge_data.get("m2d", 0),
+            "episode_to_concept": edge_data.get("e2c", 0),
+            "episode_to_memory": edge_data.get("e2m", 0),
+        },
+    }
 
 
 @router.get("/constellation/cluster-meta", include_in_schema=False)
