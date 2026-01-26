@@ -351,6 +351,72 @@ uv run python scripts/create_concept_index.py
 - Strips metadata header before sending content to LLM
 - Sources displayed in chat responses with clickable links
 
+## Graph Quality Optimization (v4.4)
+
+Improves knowledge graph quality through concept deduplication and semantic enrichment.
+
+### Server Commands
+
+```bash
+# 1. Show graph quality statistics
+uv run python scripts/improve_graph_quality.py stats
+
+# 2. Run concept deduplication (finds and merges duplicate concepts)
+uv run python scripts/improve_graph_quality.py dedup
+
+# 3. Run semantic enrichment (adds world knowledge edges)
+uv run python scripts/improve_graph_quality.py enrich
+
+# 4. Run both deduplication and enrichment
+uv run python scripts/improve_graph_quality.py all
+
+# 5. Preview changes without applying (dry run)
+uv run python scripts/improve_graph_quality.py dedup --dry-run
+
+# 6. Interactive review of medium-confidence duplicates
+uv run python scripts/review_duplicates.py
+```
+
+### Recommended Workflow
+
+After ingestion, run graph quality optimization:
+
+```bash
+# Full workflow after fresh ingest
+uv run python scripts/run_ingestion.py --clear /path/to/docs
+uv run python scripts/improve_graph_quality.py all    # Dedup + enrich
+uv run python scripts/compute_layout.py               # Recompute layout
+
+# Quality check on existing graph
+uv run python scripts/improve_graph_quality.py stats  # View metrics
+uv run python scripts/improve_graph_quality.py dedup  # Merge duplicates
+uv run python scripts/improve_graph_quality.py enrich # Add world knowledge
+```
+
+### Features
+
+**Deduplication:**
+- Cross-lingual duplicate detection using LaBSE embeddings
+- Phonetic matching via transliteration (Jaro-Winkler)
+- Auto-merge high-confidence duplicates (≥0.95)
+- POSSIBLE_DUPLICATE edges for medium confidence (≥0.80)
+
+**Enrichment:**
+- LLM-generated concept definitions
+- World knowledge relations (is_a, contains, uses, needs)
+- Edge classification (is_semantic, is_universal)
+- 1.5x activation boost for semantic edges
+
+### Configuration
+
+```bash
+# Add to .env
+SEMANTIC_EDGE_BOOST=1.5           # Boost for semantic edges
+DEDUP_AUTO_MERGE_THRESHOLD=0.95   # Auto-merge threshold
+DEDUP_REVIEW_THRESHOLD=0.80       # Review threshold
+DEDUP_POSSIBLE_THRESHOLD=0.60     # Tracking threshold
+```
+
 ## Project Structure
 
 ```
@@ -476,11 +542,22 @@ uv run ruff check src/engram
 - [x] BM25 concept search fallback when vector search disabled
 - [x] Batch reranking with 64 candidates per pass
 
+**v4.4 Graph Quality Optimization:**
+- [x] Concept deduplication with LaBSE cross-lingual embeddings
+- [x] Phonetic matching via transliteration (Jaro-Winkler)
+- [x] Auto-merge high-confidence duplicates (≥0.95)
+- [x] POSSIBLE_DUPLICATE edges for medium confidence (≥0.80)
+- [x] Interactive duplicate review CLI
+- [x] LLM-based semantic enrichment (definitions, relations)
+- [x] Edge classification (is_semantic, is_universal, source_type)
+- [x] Semantic edge boost in spreading activation (1.5x)
+- [x] ConceptResolver for duplicate prevention during ingestion
+- [x] Graph quality metrics and reporting
+
 ### Planned
 
 - [ ] Spatial indexing (Neo4j point indexes)
-- [ ] Feedback buttons in chat (👍/👎)
-- [ ] Permanent graph fixes (add edges, boost weights, aliases)
+- [ ] Feedback buttons in chat
 - [ ] Test query collection (save/replay, pass/fail tracking)
 
 ## License
