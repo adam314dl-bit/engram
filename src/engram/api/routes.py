@@ -243,6 +243,25 @@ class HealthResponse(BaseModel):
     version: str = "0.1.0"
 
 
+class EdgeTypeDistribution(BaseModel):
+    """Distribution of concept-to-concept edge types."""
+
+    is_a: int = 0
+    contains: int = 0
+    uses: int = 0
+    needs: int = 0
+    causes: int = 0
+    related_to: int = 0
+
+    # Percentages (computed)
+    is_a_pct: float = 0.0
+    contains_pct: float = 0.0
+    uses_pct: float = 0.0
+    needs_pct: float = 0.0
+    causes_pct: float = 0.0
+    related_to_pct: float = 0.0
+
+
 class StatsResponse(BaseModel):
     """System statistics."""
 
@@ -258,6 +277,9 @@ class StatsResponse(BaseModel):
     memory_to_document: int = 0
     episode_to_concept: int = 0
     episode_to_memory: int = 0
+
+    # Edge type distribution (concept-to-concept)
+    edge_distribution: EdgeTypeDistribution | None = None
 
 
 class ConceptInfo(BaseModel):
@@ -856,8 +878,35 @@ async def get_stats(request: Request) -> StatsResponse:
             """
         )
 
+        # Edge type distribution (concept-to-concept by semantic type)
+        dist_result = await db.execute_query(
+            """
+            MATCH (:Concept)-[r:RELATED_TO]->(:Concept)
+            RETURN r.type as edge_type, count(r) as cnt
+            """
+        )
+
         nodes = node_result[0] if node_result else {}
         edges = edge_result[0] if edge_result else {}
+
+        # Build edge distribution
+        dist_counts = {row["edge_type"]: row["cnt"] for row in dist_result if row["edge_type"]}
+        total_c2c = edges.get("c2c", 0) or 1  # Avoid division by zero
+
+        edge_dist = EdgeTypeDistribution(
+            is_a=dist_counts.get("is_a", 0),
+            contains=dist_counts.get("contains", 0),
+            uses=dist_counts.get("uses", 0),
+            needs=dist_counts.get("needs", 0),
+            causes=dist_counts.get("causes", 0),
+            related_to=dist_counts.get("related_to", 0),
+            is_a_pct=round(dist_counts.get("is_a", 0) / total_c2c * 100, 1),
+            contains_pct=round(dist_counts.get("contains", 0) / total_c2c * 100, 1),
+            uses_pct=round(dist_counts.get("uses", 0) / total_c2c * 100, 1),
+            needs_pct=round(dist_counts.get("needs", 0) / total_c2c * 100, 1),
+            causes_pct=round(dist_counts.get("causes", 0) / total_c2c * 100, 1),
+            related_to_pct=round(dist_counts.get("related_to", 0) / total_c2c * 100, 1),
+        )
 
         return StatsResponse(
             concepts_count=nodes.get("concepts", 0),
@@ -869,6 +918,7 @@ async def get_stats(request: Request) -> StatsResponse:
             memory_to_document=edges.get("m2d", 0),
             episode_to_concept=edges.get("e2c", 0),
             episode_to_memory=edges.get("e2m", 0),
+            edge_distribution=edge_dist,
         )
 
     except Exception as e:
