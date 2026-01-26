@@ -468,18 +468,29 @@ class EdgeClassifier:
     async def classify_all_edges(
         self,
         batch_size: int = 50,
+        max_concurrent: int | None = None,
     ) -> int:
         """Classify all unclassified edges.
 
         Args:
             batch_size: Number of edges to process per LLM call
+            max_concurrent: Max parallel LLM requests
 
         Returns:
             Number of edges classified
         """
+        import asyncio
+        import time
+
         import requests
 
         base_url, model, api_key, timeout = self._get_llm_config()
+
+        if max_concurrent is None:
+            if settings.enrichment_llm_enabled:
+                max_concurrent = settings.enrichment_llm_max_concurrent
+            else:
+                max_concurrent = settings.llm_max_concurrent
 
         # Get unclassified edges
         query = """
@@ -499,19 +510,28 @@ class EdgeClassifier:
                 f"at {settings.enrichment_llm_base_url}"
             )
 
-        logger.info(f"Classifying {len(results)} edges")
-        classified = 0
+        total_edges = len(results)
+        total_batches = (total_edges + batch_size - 1) // batch_size
+        logger.info(f"Classifying {total_edges} edges in {total_batches} batches with {max_concurrent} parallel requests")
 
+        # Split into batches
+        batches = []
         for i in range(0, len(results), batch_size):
-            batch = results[i : i + batch_size]
+            batches.append(results[i : i + batch_size])
 
-            # Format edges for LLM
-            edges_text = "\n".join(
-                f"- {r['source']} --{r['type']}--> {r['target']}"
-                for r in batch
-            )
+        classified = 0
+        semaphore = asyncio.Semaphore(max_concurrent)
+        start_time = time.time()
 
-            prompt = f"""Классифицируй каждую связь как семантическую (S) или контекстную (C).
+        async def classify_batch(batch: list, batch_idx: int) -> int:
+            """Classify a single batch of edges."""
+            async with semaphore:
+                edges_text = "\n".join(
+                    f"- {r['source']} --{r['type']}--> {r['target']}"
+                    for r in batch
+                )
+
+                prompt = f"""Классифицируй каждую связь как семантическую (S) или контекстную (C).
 
 Связи:
 {edges_text}
@@ -526,51 +546,62 @@ docker|контейнер|S
 S = семантическая (общеизвестный факт)
 C = контекстная (специфично для документа)"""
 
-            try:
-                import asyncio
-
-                def make_request() -> str:
-                    resp = requests.post(
-                        f"{base_url}/chat/completions",
-                        json={
-                            "model": model,
-                            "messages": [{"role": "user", "content": prompt}],
-                            "temperature": 0.1,
-                        },
-                        headers={"Authorization": f"Bearer {api_key}"},
-                        timeout=timeout,
-                    )
-                    resp.raise_for_status()
-                    return resp.json()["choices"][0]["message"]["content"].strip()
-
-                content = await asyncio.to_thread(make_request)
-
-                # Parse pipe-delimited format (one per line)
-                for line in content.split("\n"):
-                    line = line.strip()
-                    if not line or "|" not in line:
-                        continue
-                    parts = line.split("|")
-                    if len(parts) >= 3:
-                        source = parts[0].strip()
-                        target = parts[1].strip()
-                        classification_type = parts[2].strip().upper()
-                        is_semantic = classification_type == "S"
-
-                        update_query = """
-                        MATCH (a:Concept {name: $source})-[r:RELATED_TO]->(b:Concept {name: $target})
-                        SET r.is_semantic = $is_semantic,
-                            r.is_universal = $is_semantic
-                        """
-                        await self.db.execute_query(
-                            update_query,
-                            source=source,
-                            target=target,
-                            is_semantic=is_semantic,
+                try:
+                    def make_request() -> str:
+                        resp = requests.post(
+                            f"{base_url}/chat/completions",
+                            json={
+                                "model": model,
+                                "messages": [{"role": "user", "content": prompt}],
+                                "temperature": 0.1,
+                            },
+                            headers={"Authorization": f"Bearer {api_key}"},
+                            timeout=timeout,
                         )
-                        classified += 1
+                        resp.raise_for_status()
+                        return resp.json()["choices"][0]["message"]["content"].strip()
 
-            except Exception as e:
-                logger.warning(f"Failed to classify batch: {e}")
+                    content = await asyncio.to_thread(make_request)
+
+                    batch_classified = 0
+                    # Parse pipe-delimited format (one per line)
+                    for line in content.split("\n"):
+                        line = line.strip()
+                        if not line or "|" not in line:
+                            continue
+                        parts = line.split("|")
+                        if len(parts) >= 3:
+                            source = parts[0].strip()
+                            target = parts[1].strip()
+                            classification_type = parts[2].strip().upper()
+                            is_semantic = classification_type == "S"
+
+                            update_query = """
+                            MATCH (a:Concept {name: $source})-[r:RELATED_TO]->(b:Concept {name: $target})
+                            SET r.is_semantic = $is_semantic,
+                                r.is_universal = $is_semantic
+                            """
+                            await self.db.execute_query(
+                                update_query,
+                                source=source,
+                                target=target,
+                                is_semantic=is_semantic,
+                            )
+                            batch_classified += 1
+
+                    return batch_classified
+
+                except Exception as e:
+                    logger.warning(f"Failed to classify batch {batch_idx}: {e}")
+                    return 0
+
+        # Run all batches in parallel
+        tasks = [classify_batch(batch, idx) for idx, batch in enumerate(batches)]
+        results_list = await asyncio.gather(*tasks)
+
+        classified = sum(results_list)
+        elapsed = time.time() - start_time
+        rate = classified / elapsed if elapsed > 0 else 0
+        logger.info(f"Classified {classified} edges in {elapsed:.1f}s ({rate:.1f}/s)")
 
         return classified
