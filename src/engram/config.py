@@ -241,6 +241,32 @@ class Settings(BaseSettings):
         description="Minimum similarity to track as potential duplicate"
     )
 
+    # v4.4: Enrichment LLM Configuration (separate fast model for enrichment)
+    enrichment_llm_enabled: bool = Field(
+        default=False,
+        description="Use separate LLM for enrichment (faster, dedicated endpoint)"
+    )
+    enrichment_llm_base_url: str = Field(
+        default="http://localhost:8889/v1",
+        description="Base URL for enrichment LLM (e.g., vLLM server)"
+    )
+    enrichment_llm_model: str = Field(
+        default="Qwen/Qwen3-4B",
+        description="Model name for enrichment LLM"
+    )
+    enrichment_llm_api_key: str = Field(
+        default="EMPTY",
+        description="API key for enrichment LLM (use EMPTY for vLLM)"
+    )
+    enrichment_llm_timeout: float = Field(
+        default=30.0,
+        description="Timeout for enrichment LLM requests"
+    )
+    enrichment_llm_max_concurrent: int = Field(
+        default=24,
+        description="Max concurrent requests to enrichment LLM"
+    )
+
 def get_dev_settings() -> Settings:
     """Get development environment settings."""
     return Settings(

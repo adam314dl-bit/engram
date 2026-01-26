@@ -73,6 +73,26 @@ class SemanticEnricher:
         self.config = config or EnrichmentConfig()
         self._definition_cache: dict[str, ConceptDefinition] = {}
 
+    def _get_llm_config(self) -> tuple[str, str, str, float]:
+        """Get LLM configuration for enrichment.
+
+        Returns:
+            Tuple of (base_url, model, api_key, timeout)
+        """
+        if settings.enrichment_llm_enabled:
+            return (
+                settings.enrichment_llm_base_url,
+                settings.enrichment_llm_model,
+                settings.enrichment_llm_api_key,
+                settings.enrichment_llm_timeout,
+            )
+        return (
+            settings.llm_base_url,
+            settings.llm_model,
+            settings.llm_api_key,
+            settings.llm_timeout,
+        )
+
     async def extract_definition(self, concept: "Concept") -> ConceptDefinition:
         """Extract definition and relations from LLM for a concept.
 
@@ -87,6 +107,8 @@ class SemanticEnricher:
             return self._definition_cache[concept.id]
 
         import requests
+
+        base_url, model, api_key, timeout = self._get_llm_config()
 
         prompt = f"""Дай краткое определение понятия "{concept.name}" и его связи.
 
@@ -104,14 +126,14 @@ class SemanticEnricher:
 
         try:
             response = requests.post(
-                f"{settings.llm_base_url}/chat/completions",
+                f"{base_url}/chat/completions",
                 json={
-                    "model": settings.llm_model,
+                    "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.1,
                 },
-                headers={"Authorization": f"Bearer {settings.llm_api_key}"},
-                timeout=settings.llm_timeout,
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=timeout,
             )
             response.raise_for_status()
 
@@ -299,7 +321,11 @@ class SemanticEnricher:
         import asyncio
 
         batch_size = batch_size or self.config.max_definitions_per_batch
-        max_concurrent = max_concurrent or settings.llm_max_concurrent
+        if max_concurrent is None:
+            if settings.enrichment_llm_enabled:
+                max_concurrent = settings.enrichment_llm_max_concurrent
+            else:
+                max_concurrent = settings.llm_max_concurrent
         errors: list[str] = []
         concepts_enriched = 0
         definitions_generated = 0
@@ -317,6 +343,16 @@ class SemanticEnricher:
         from engram.models import Concept
 
         concepts = [Concept.from_dict(dict(r["c"])) for r in results]
+
+        # Log LLM configuration
+        if settings.enrichment_llm_enabled:
+            logger.info(
+                f"Using enrichment LLM: {settings.enrichment_llm_model} "
+                f"at {settings.enrichment_llm_base_url}"
+            )
+        else:
+            logger.info(f"Using main LLM: {settings.llm_model} at {settings.llm_base_url}")
+
         logger.info(f"Enriching {len(concepts)} concepts with {max_concurrent} parallel requests")
 
         # Semaphore to limit concurrent LLM requests
@@ -395,6 +431,26 @@ class EdgeClassifier:
     def __init__(self, db: "Neo4jClient") -> None:
         self.db = db
 
+    def _get_llm_config(self) -> tuple[str, str, str, float]:
+        """Get LLM configuration for edge classification.
+
+        Returns:
+            Tuple of (base_url, model, api_key, timeout)
+        """
+        if settings.enrichment_llm_enabled:
+            return (
+                settings.enrichment_llm_base_url,
+                settings.enrichment_llm_model,
+                settings.enrichment_llm_api_key,
+                settings.enrichment_llm_timeout,
+            )
+        return (
+            settings.llm_base_url,
+            settings.llm_model,
+            settings.llm_api_key,
+            settings.llm_timeout,
+        )
+
     async def classify_all_edges(
         self,
         batch_size: int = 50,
@@ -409,6 +465,8 @@ class EdgeClassifier:
         """
         import requests
 
+        base_url, model, api_key, timeout = self._get_llm_config()
+
         # Get unclassified edges
         query = """
         MATCH (a:Concept)-[r:RELATED_TO]->(b:Concept)
@@ -419,6 +477,13 @@ class EdgeClassifier:
 
         if not results:
             return 0
+
+        # Log LLM configuration
+        if settings.enrichment_llm_enabled:
+            logger.info(
+                f"Using enrichment LLM: {settings.enrichment_llm_model} "
+                f"at {settings.enrichment_llm_base_url}"
+            )
 
         logger.info(f"Classifying {len(results)} edges")
         classified = 0
@@ -449,14 +514,14 @@ class EdgeClassifier:
 
             try:
                 response = requests.post(
-                    f"{settings.llm_base_url}/chat/completions",
+                    f"{base_url}/chat/completions",
                     json={
-                        "model": settings.llm_model,
+                        "model": model,
                         "messages": [{"role": "user", "content": prompt}],
                         "temperature": 0.1,
                     },
-                    headers={"Authorization": f"Bearer {settings.llm_api_key}"},
-                    timeout=settings.llm_timeout,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=timeout,
                 )
                 response.raise_for_status()
 
