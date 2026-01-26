@@ -117,6 +117,15 @@ async def run_enrichment(
             print(f"    - {error}")
 
 
+async def run_classify_edges(db: Neo4jClient) -> None:
+    """Run edge classification only."""
+    print("\n=== Running Edge Classification ===\n")
+
+    classifier = EdgeClassifier(db)
+    classified = await classifier.classify_all_edges()
+    print(f"\nEdges classified: {classified}")
+
+
 async def show_stats(db: Neo4jClient) -> None:
     """Show graph quality statistics."""
     print("\n=== Graph Quality Statistics ===\n")
@@ -134,7 +143,7 @@ async def main() -> None:
     )
     parser.add_argument(
         "command",
-        choices=["dedup", "enrich", "all", "stats"],
+        choices=["dedup", "enrich", "classify", "all", "stats"],
         help="Command to run",
     )
     parser.add_argument(
@@ -186,6 +195,9 @@ async def main() -> None:
 
         elif args.command == "enrich":
             await run_enrichment(db, config, args.dry_run, args.limit, args.min_degree)
+
+        elif args.command == "classify":
+            await run_classify_edges(db)
 
         elif args.command == "all":
             await run_deduplication(db, config, args.dry_run)
