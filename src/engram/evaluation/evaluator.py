@@ -712,6 +712,7 @@ class EngramEvaluator:
         self,
         csv_path: str | Path,
         output_path: str | Path | None = None,
+        limit: int | None = None,
     ) -> EvaluationSummary:
         """
         Evaluate all questions from CSV file.
@@ -719,6 +720,7 @@ class EngramEvaluator:
         Args:
             csv_path: Path to input CSV (question,answer,url)
             output_path: Optional path for results CSV
+            limit: Max number of questions to evaluate (for testing)
 
         Returns:
             EvaluationSummary with aggregate statistics
@@ -739,6 +741,11 @@ class EngramEvaluator:
             skipped = original_count - len(questions)
             if skipped > 0:
                 logger.info(f"Skipped {skipped} url_only questions")
+
+        # Apply limit if specified
+        if limit is not None and limit > 0:
+            questions = questions[:limit]
+            logger.info(f"Limited to {len(questions)} questions")
 
         # Evaluate in parallel
         results = self._evaluate_parallel(questions)
@@ -1100,6 +1107,12 @@ def main() -> None:
         action="store_true",
         help="Skip questions that only have URL (no text answer)",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Limit number of questions to evaluate (for testing)",
+    )
 
     args = parser.parse_args()
 
@@ -1155,7 +1168,7 @@ def main() -> None:
     print()
 
     # Run evaluation
-    summary = evaluator.evaluate_csv(args.csv_path, args.output)
+    summary = evaluator.evaluate_csv(args.csv_path, args.output, args.limit)
 
     # Print summary
     print("\n" + "=" * 60)
