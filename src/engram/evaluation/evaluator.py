@@ -355,17 +355,17 @@ class JudgeLLM:
         self, question: str, engram_answer: str
     ) -> dict[str, float]:
         """Evaluate only relevance when no human answer provided."""
-        prompt = f"""Оцени, отвечает ли ответ на вопрос.
+        prompt = f"""Оцени, отвечает ли ответ на вопрос (0.0-1.0).
 
 Вопрос: {question}
+Ответ: {engram_answer}
 
-Ответ:
-{engram_answer}
+ВАЖНО: Ответь ТОЛЬКО одной строкой:
+RESULT|0.0|<relevance>|1.0|<причина>
 
-Верни ТОЛЬКО одну строку в формате:
-RESULT|0.0|<relevance 0-1>|1.0|<краткое объяснение>
+Пример: RESULT|0.0|0.9|1.0|по теме
 
-Пример: RESULT|0.0|0.9|1.0|Ответ по теме вопроса"""
+НЕ ПИШИ НИЧЕГО КРОМЕ СТРОКИ RESULT|..."""
 
         try:
             response = self._call_llm(prompt)
@@ -410,10 +410,12 @@ RESULT|0.0|<relevance 0-1>|1.0|<краткое объяснение>
    - 0.5 = незначительные расхождения
    - 0.0 = прямые противоречия
 
-Верни ТОЛЬКО одну строку в формате:
-RESULT|<key_info_match>|<relevance>|<no_contradiction>|<краткое объяснение>
+ВАЖНО: Ответь ТОЛЬКО одной строкой без объяснений:
+RESULT|<key_info_match>|<relevance>|<no_contradiction>|<причина>
 
-Пример: RESULT|0.9|1.0|1.0|Ответ содержит имя Или и дополнительные контакты"""
+Пример ответа: RESULT|0.9|1.0|1.0|информация присутствует
+
+НЕ ПИШИ НИЧЕГО КРОМЕ СТРОКИ RESULT|..."""
 
     def check_availability(self) -> tuple[bool, str]:
         """
@@ -470,7 +472,10 @@ RESULT|<key_info_match>|<relevance>|<no_contradiction>|<краткое объя�
         if content is None:
             return self._default_scores("LLM returned None content")
 
-        logger.debug(f"Judge LLM raw response:\n{content[:500]}")
+        # Strip <think>...</think> blocks from thinking models
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+
+        logger.debug(f"Judge LLM response (after strip): {content[:300]}")
 
         for line in content.strip().split("\n"):
             line = line.strip()
