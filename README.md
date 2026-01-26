@@ -17,42 +17,17 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 ## Features
 
 **Core Retrieval:**
-- **BM25+Graph Mode** (v4.7): Default mode - no embedding model required, uses BM25 + graph traversal
+- **BM25+Graph Mode**: Default mode - no embedding model required, uses BM25 + graph traversal
 - **Hybrid Mode**: Optional - adds vector similarity search (set `RETRIEVAL_MODE=hybrid`)
 - **Spreading Activation**: Brain-like associative retrieval through concept networks
-- **Weighted RRF** (v4.6): Prioritized fusion with BM25 (0.45) > Vector (0.35) > Graph (0.20)
+- **Weighted RRF**: Prioritized fusion with BM25 (0.45) > Vector (0.35) > Graph (0.20)
 - **Jina Reranker v3**: Multilingual cross-encoder for improved retrieval precision
 - **MMR Diversity**: Maximal Marginal Relevance prevents redundant results (hybrid mode only)
 - **Dynamic top_k**: Query complexity classification adjusts retrieval depth
 
-**v4 Agentic RAG (opt-in):**
-- **Intent Classification**: Decides whether to retrieve, respond directly, or ask for clarification
-- **CRAG Document Grading**: Grades retrieved docs as CORRECT/INCORRECT/AMBIGUOUS before generation
-- **Self-RAG Validation**: Validates response against context, regenerates if unsupported (max 3 iterations)
-- **Hallucination Detection**: NLI-based claim verification (LLM or mDeBERTa model)
-- **Inline Citations**: `[1]`, `[2]` style citations with optional NLI verification
-- **Confidence Calibration**: Knows when to abstain or respond with caveats
-- **IRCoT Multi-Hop**: Interleaved retrieval + reasoning for complex queries (max 7 steps)
-- **RAGAS Evaluation**: Automated quality metrics (faithfulness, relevancy, precision, recall)
-- **Async Research Mode**: Long-running queries with progress tracking and checkpointing
-
-**v4.2 Test Set Evaluation:**
-- **Regression Testing**: Evaluate Engram against human reference answers
-- **Incomplete Annotations**: Designed for lazy/partial annotations (URL-only, short snippets)
-- **Containment Check**: Verifies human answer ⊆ Engram answer (not equality)
-- **Source Matching**: Fuzzy URL/path/pageId comparison
-- **LLM Judge**: Semantic evaluation with weighted scoring by answer type
-
-**v4.3 Query Enrichment:**
-- **Query Understanding**: Type, complexity, and entity detection
-- **BM25 Expansion**: Synonyms, lemmas, domain terms, transliteration
-- **Semantic Rewrite**: Intent clarification for better retrieval
-- **Multi-Query Retrieval**: Original + expanded + rewritten variants with RRF fusion
-- **Dedicated Enrichment LLM**: Fast Qwen3-4B for low-latency query processing
-
-**v4.5 Dual-Content Memory:**
+**Dual-Content Memory:**
 - **Separate Search vs Display**: `search_content` for search, `content` for LLM generation
-- **Search-Optimized**: Summary + keywords embedded for vector/BM25 search
+- **Search-Optimized**: Summary + keywords for BM25 search
 - **Near-Verbatim Facts**: Actual data preserved for accurate LLM responses
 - **Backward Compatible**: Works with existing memories (falls back to content)
 
@@ -174,39 +149,6 @@ RETRIEVAL_VECTOR_K=200    # Vector candidates (only in hybrid mode)
 RERANKER_ENABLED=true     # Enable Jina cross-encoder
 RERANKER_MODEL=jinaai/jina-reranker-v3
 RERANKER_CANDIDATES=64    # Candidates per batch
-
-# v4.3.1 Enrichment LLM (optional, falls back to main LLM)
-ENRICHMENT_LLM_ENABLED=true
-ENRICHMENT_LLM_BASE_URL=http://localhost:8889/v1
-ENRICHMENT_LLM_MODEL=Qwen/Qwen3-4B
-```
-
-### Enrichment LLM Setup (v4.3.1)
-
-Optional fast model for query enrichment. Reduces latency from ~300ms to ~50ms per query. Falls back to main LLM if unavailable.
-
-**Production (vLLM Docker on GPU 1):**
-```bash
-docker run -d --name engram-enrichment \
-  --runtime nvidia --gpus '"device=1"' \
-  -v /data/cache/huggingface:/root/.cache/huggingface \
-  -e HF_HUB_OFFLINE=1 \
-  -p 8889:8000 \
-  --ipc=host \
-  --restart unless-stopped \
-  vllm/vllm-openai:latest \
-  --model Qwen/Qwen3-4B \
-  --gpu-memory-utilization 0.3 \
-  --max-model-len 8192 \
-  --dtype bfloat16
-```
-
-**Local Development (Ollama):**
-```bash
-ollama pull qwen3:4b
-# Uses same Ollama server, configure in .env:
-# ENRICHMENT_LLM_BASE_URL=http://localhost:11434/v1
-# ENRICHMENT_LLM_MODEL=qwen3:4b
 ```
 
 ## Running the Server
@@ -252,7 +194,7 @@ Now you can chat with your knowledge base through Open WebUI.
 POST /v1/chat/completions
 ```
 
-**Standard request:**
+**Request:**
 ```json
 {
   "messages": [{"role": "user", "content": "What is Docker?"}],
@@ -260,19 +202,14 @@ POST /v1/chat/completions
 }
 ```
 
-**With v4 agentic mode (opt-in):**
+**With debug info:**
 ```json
 {
-  "messages": [{"role": "user", "content": "Compare Kubernetes and Docker Swarm"}],
+  "messages": [{"role": "user", "content": "What is Docker?"}],
   "model": "engram",
-  "agentic": true
+  "debug": true
 }
 ```
-
-When `agentic: true`, the system uses the full v4 pipeline:
-- Intent classification → CRAG grading → Self-RAG validation → Hallucination check → Confidence calibration
-- Complex queries automatically use IRCoT multi-hop reasoning
-- Response includes inline citations and confidence indicators
 
 ### Feedback
 
@@ -404,10 +341,7 @@ uv run python scripts/run_ingestion.py /path/to/docs
 # Reset database and re-ingest (clears all data first)
 uv run python scripts/run_ingestion.py --clear /path/to/docs
 
-# Generate KB summary (required for v4.3 query enrichment)
-uv run python scripts/generate_kb_summary.py
-
-# Create concept index (required for v4.7 BM25+Graph mode)
+# Create concept index (required for BM25+Graph mode)
 uv run python scripts/create_concept_index.py
 ```
 
@@ -425,23 +359,20 @@ engram/
 │   ├── models/          # Concept, SemanticMemory, EpisodicMemory
 │   ├── ingestion/       # Document parsing, concept/memory extraction
 │   ├── storage/         # Neo4j client and schema
-│   ├── retrieval/       # Embeddings, spreading activation, hybrid search, CRAG
-│   ├── reasoning/       # Synthesis, v4 agentic components (intent, self-rag, etc.)
-│   ├── evaluation/      # RAGAS metrics, v4.2 test set evaluation
+│   ├── retrieval/       # Embeddings, spreading activation, hybrid search
+│   ├── reasoning/       # Synthesis, episode management
 │   ├── learning/        # Feedback, consolidation, memory strength
 │   └── api/             # FastAPI routes
 ├── tests/
-│   ├── unit/            # 169 unit tests
+│   ├── unit/
 │   ├── integration/
-│   └── fixtures/mock_docs/  # 32 sample documents
+│   └── fixtures/mock_docs/
 ├── scripts/
 │   ├── setup_rhel.sh    # Production setup
 │   ├── chat.py          # Interactive CLI
-│   ├── generate_mock_docs.py
 │   ├── run_ingestion.py
 │   ├── compute_layout.py      # Pre-compute graph layout
-│   ├── generate_kb_summary.py # KB summary for query enrichment
-│   └── create_concept_index.py # v4.7 concept fulltext index
+│   └── create_concept_index.py # Concept fulltext index
 └── CLAUDE.md            # AI assistant instructions
 ```
 
@@ -460,57 +391,6 @@ uv run mypy src/engram
 # Linting
 uv run ruff check src/engram
 ```
-
-## Test Set Evaluation (v4.2)
-
-Evaluate Engram against human reference answers for regression testing. Designed for incomplete/lazy annotations where human answers may be just a URL or short snippet.
-
-**Key insight:** Checks if human answer is CONTAINED in Engram answer (not equality).
-
-```bash
-# Basic usage (uses LLM from .env as judge)
-uv run python -m engram.evaluation.evaluator test_data.csv
-
-# Full options
-uv run python -m engram.evaluation.evaluator test_data.csv \
-  --engram-url http://localhost:7777/v1 \
-  --judge-url http://localhost:11434/v1 \
-  --judge-model qwen3:8b \
-  --workers 8
-```
-
-**Startup checks:** Before evaluation begins, the tool verifies:
-- Engram API is available (health check)
-- Judge LLM responds correctly (test prompt)
-
-If either check fails, you'll see a clear error with troubleshooting tips.
-
-**Input CSV format:**
-```csv
-question;answer;url
-Кто лид фронтенда?;Или;https://confluence.example.com/team
-Как задеплоить?;;https://confluence.example.com/deploy
-```
-
-**Supported formats:**
-- Delimiters: `;` or `,` (auto-detected)
-- Encoding: UTF-8 with or without BOM
-- Columns: `question,answer,url` or `Вопрос,Правильный ответ,Ссылка на правильный ответ`
-
-**Output:**
-- `{input}_results.csv` - Full results per question
-- `{input}_results.summary.json` - Aggregate metrics
-
-**Metrics:**
-| Metric | Description |
-|--------|-------------|
-| `source_match` | Does Engram use same source as human URL? |
-| `key_info_match` | Does Engram CONTAIN key info from human answer? |
-| `relevance` | Does Engram answer the question? |
-| `no_contradiction` | No conflicts with human answer? |
-| `overall` | Weighted combination by answer type |
-
-**Answer types:** `url_only`, `short`, `full`, `empty` — each has different metric weights.
 
 ## Roadmap
 
@@ -573,71 +453,28 @@ question;answer;url
 - [x] Combined embedding calls (single batch for concepts + memories)
 - [x] High concurrency config (32 docs parallel)
 - [x] Separate extractors with table enrichment (2 + N LLM calls per doc)
+- [x] Skip embeddings in `bm25_graph` mode for faster ingestion
 
-**v4 Agentic RAG:**
-- [x] Intent classification (RETRIEVE/NO_RETRIEVE/CLARIFY)
-- [x] CRAG document grading with query rewrite
-- [x] Self-RAG validation loop (max 3 iterations)
-- [x] NLI hallucination detection (LLM or mDeBERTa)
-- [x] Inline citations with NLI verification
-- [x] Confidence calibration with abstention
-- [x] IRCoT multi-hop reasoning (max 7 steps)
-- [x] RAGAS evaluation metrics
-- [x] Async research mode with checkpointing
-- [x] AgenticPipeline integration
-
-**v4.2 Test Set Evaluation:**
-- [x] Test set evaluation for incomplete/lazy human reference answers
-- [x] Answer type classification (url_only, short, full, empty)
-- [x] Source URL matching with fuzzy path/pageId matching
-- [x] LLM judge for containment-based evaluation
-- [x] Weighted scoring by answer type
-- [x] CLI with parallel evaluation
-- [x] Startup availability checks for Engram API and Judge LLM
-
-**v4.3 Query Understanding & Enrichment:**
-- [x] KB summary generation for domain awareness
-- [x] Query understanding (type, complexity, entity detection)
-- [x] BM25 expansion (synonyms, lemmas, domain terms)
-- [x] Semantic query rewrite (intent clarification)
-- [x] Optional HyDE for complex queries
-- [x] Multi-query retrieval with RRF fusion
-
-**v4.3.1 Enrichment LLM:**
-- [x] Named LLM client registry (main, enrichment)
-- [x] Dedicated fast LLM for query enrichment (Qwen3-4B)
-- [x] Startup health check with automatic fallback
-- [x] Docker deployment support (vLLM)
-- [x] Thinking model support (handles reasoning field when content is empty)
-
-**v4.5 Dual-Content Memory:**
+**Dual-Content Memory:**
 - [x] Separate `search_content` (summary + keywords) from `content` (actual facts)
-- [x] `search_content` used for embedding and BM25 search
+- [x] `search_content` used for BM25 search
 - [x] `content` contains near-verbatim facts sent to LLM
-- [x] 7-part extraction format: search_summary|keywords|actual_content|type|concepts|importance
 - [x] Parser backward-compatible with v3/v2 formats
-- [x] Table/list enrichers set `search_content` with descriptions + queries
 - [x] Neo4j fulltext index includes both fields
 
-**v4.6 Weighted Retrieval:**
+**Weighted Retrieval:**
 - [x] Configurable RRF weights: BM25 (0.45) > Vector (0.35) > Graph (0.20)
 - [x] BM25 searches `content` field (original facts)
 - [x] Vector searches `search_content` embedding (summary + keywords)
 - [x] `weighted_rrf()` function for source-prioritized fusion
-- [x] Works with both single-query and multi-query retrieval
 
-**v4.7 BM25+Graph Mode & Jina Reranker:**
+**BM25+Graph Mode & Jina Reranker:**
 - [x] Configurable `retrieval_mode`: `bm25_graph` (default) or `hybrid`
-- [x] In `bm25_graph` mode: no embedding model needed, faster startup
-- [x] Jina Reranker v3 replaces BGE (better multilingual support)
+- [x] In `bm25_graph` mode: no embedding model needed, faster startup and ingestion
+- [x] Jina Reranker v3 (better multilingual support)
 - [x] Skip vector search and embedding preload in `bm25_graph` mode
 - [x] BM25 concept search fallback when vector search disabled
 - [x] Batch reranking with 64 candidates per pass
-- [x] Setup script: `scripts/create_concept_index.py`
-
-**v4.7.1 Episode Embedding Skip:**
-- [x] Skip episode embedding in `bm25_graph` mode (prevents embedding model load on first query)
-- [x] Episodes still created for feedback tracking (just without embedding for similarity search)
 
 ### Planned
 
