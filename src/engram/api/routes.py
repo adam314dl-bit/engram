@@ -14,9 +14,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from engram.config import settings
 from engram.learning import FeedbackHandler, FeedbackType
-from engram.reasoning.agentic_pipeline import AgenticPipeline
 from engram.reasoning.pipeline import ReasoningPipeline
 from engram.storage.neo4j_client import Neo4jClient
 
@@ -49,12 +47,6 @@ class ChatCompletionRequest(BaseModel):
     # Engram-specific options
     top_k_memories: int = Field(default=200, ge=1, le=500)
     top_k_episodes: int = Field(default=3, ge=0, le=10)
-
-    # v4 Agentic mode
-    agentic: bool = Field(
-        default=False,
-        description="Use v4 agentic pipeline with intent classification, CRAG, Self-RAG, etc."
-    )
 
     # Debug options
     debug: bool = False
@@ -104,64 +96,6 @@ class DebugInfo(BaseModel):
     thresholds: dict = {}
 
 
-class QueryEnrichmentDebugInfo(BaseModel):
-    """Debug information for v4.3 query enrichment."""
-
-    enabled: bool = False
-    query_type: str | None = None  # factual, procedural, person, comparison, etc.
-    complexity: str | None = None  # simple, multi_hop, ambiguous, out_of_scope
-    variants: list[str] = []  # All query variants generated
-    bm25_expanded: str | None = None
-    semantic_rewrite: str | None = None
-    hyde_document: str | None = None
-    enrichment_ms: float | None = None
-
-
-class AgenticDebugInfo(BaseModel):
-    """Debug information for v4 agentic pipeline."""
-
-    # Intent classification
-    intent_decision: str | None = None  # retrieve, no_retrieve, clarify
-    intent_complexity: str | None = None  # simple, moderate, complex
-    intent_confidence: float | None = None
-
-    # v4.3 Query Enrichment
-    query_enrichment: QueryEnrichmentDebugInfo | None = None
-
-    # CRAG
-    crag_quality: str | None = None  # correct, incorrect, ambiguous
-    crag_relevant_ratio: float | None = None
-    query_rewritten: bool = False
-    rewritten_query: str | None = None
-
-    # IRCoT
-    used_ircot: bool = False
-    ircot_steps: int | None = None
-    ircot_paragraphs: int | None = None
-
-    # Self-RAG
-    self_rag_iterations: int | None = None
-    self_rag_support_level: str | None = None  # fully_supported, partially_supported, not_supported
-
-    # NLI
-    nli_faithfulness: float | None = None
-    nli_supported_claims: int | None = None
-    nli_contradicted_claims: int | None = None
-
-    # Confidence
-    confidence_level: str | None = None  # high, medium, low, very_low
-    confidence_action: str | None = None  # respond_normally, respond_with_caveat, abstain
-    confidence_score: float | None = None
-
-    # Citations
-    citations_count: int | None = None
-    citations_verified: int | None = None
-
-    # Metadata
-    abstained: bool = False
-    processing_time_ms: float | None = None
-
-
 class SourceDocument(BaseModel):
     """A source document used in the response."""
     title: str
@@ -191,9 +125,6 @@ class ChatCompletionResponse(BaseModel):
 
     # Debug info (only when debug=true)
     debug_info: DebugInfo | None = None
-
-    # v4 Agentic debug info (only when agentic=true and debug=true)
-    agentic_debug: AgenticDebugInfo | None = None
 
 
 # ============================================================================
@@ -376,11 +307,6 @@ async def chat_completions(
 
     # Run reasoning pipeline
     try:
-        # Use agentic pipeline if requested
-        if body.agentic:
-            return await _handle_agentic_request(db, query, body)
-
-        # Standard v3 pipeline with hybrid search
         pipeline = ReasoningPipeline(db=db)
 
         result = await pipeline.reason(
@@ -493,22 +419,6 @@ async def chat_completions(
             # Build thresholds dict
             thresholds = {"top_k_memories": body.top_k_memories}
 
-            # Add v4.3 info if used
-            if result.used_v43_pipeline:
-                thresholds["v43_pipeline"] = True
-                if result.intent:
-                    thresholds["intent_decision"] = result.intent.decision.value
-                if result.enriched_query:
-                    thresholds["query_type"] = result.enriched_query.query_type.value
-                    thresholds["query_complexity"] = result.enriched_query.complexity.value
-                    thresholds["query_variants"] = len(result.enriched_query.get_all_variants())
-                if result.crag:
-                    thresholds["crag_quality"] = result.crag.quality.value
-                    thresholds["crag_relevant_ratio"] = result.crag.relevant_ratio
-                if result.confidence_result:
-                    thresholds["confidence_level"] = result.confidence_result.level.value
-                    thresholds["confidence_score"] = result.confidence_result.combined_score
-
             debug_info = DebugInfo(
                 retrieved_memories=debug_memories,
                 activated_concepts=debug_concepts,
@@ -545,196 +455,6 @@ async def chat_completions(
             status_code=500,
             detail=f"Reasoning failed: {str(e)}",
         )
-
-
-# ============================================================================
-# Agentic Pipeline Helper
-# ============================================================================
-
-
-async def _handle_agentic_request(
-    db: Neo4jClient,
-    query: str,
-    body: ChatCompletionRequest,
-) -> ChatCompletionResponse:
-    """Handle request using v4 agentic pipeline."""
-    pipeline = AgenticPipeline(db=db)
-    result = await pipeline.reason(
-        query=query,
-        top_k_memories=body.top_k_memories,
-        temperature=body.temperature,
-        force_include_nodes=body.force_include_nodes if body.force_include_nodes else None,
-        force_exclude_nodes=body.force_exclude_nodes if body.force_exclude_nodes else None,
-    )
-
-    # Get memories used for source documents
-    memories_used = []
-    if result.synthesis:
-        memories_used = result.synthesis.memories_used
-    elif result.retrieval:
-        memories_used = [m.memory.id for m in result.retrieval.memories[:10]]
-
-    # Fetch source documents
-    source_documents = await db.get_source_documents_for_memories(memory_ids=memories_used)
-
-    # Build deduplicated sources list
-    sources_used: list[SourceDocument] = []
-    seen_urls: set[str] = set()
-
-    for doc in source_documents:
-        url = doc.source_path
-        dedup_key = url or doc.title
-        if dedup_key in seen_urls:
-            continue
-        seen_urls.add(dedup_key)
-
-        title = doc.title
-        if not title and url:
-            title = url.split("/")[-1].replace("-", " ").replace("+", " ")
-
-        if title:
-            sources_used.append(SourceDocument(title=title, url=url))
-
-    # Build response content
-    content = result.answer
-
-    # Add sources if available - limit to top 5
-    if sources_used:
-        sources_used = sources_used[:5]
-        sources_lines = []
-        for src in sources_used:
-            if src.url:
-                sources_lines.append(f"• [{src.title}]({src.url})")
-            else:
-                sources_lines.append(f"• {src.title}")
-        sources_text = "\n".join(sources_lines)
-
-        # Get confidence info
-        confidence_str = ""
-        if result.confidence:
-            conf_pct = int(result.confidence.combined_score * 100)
-            confidence_str = f"**Confidence: {conf_pct}% ({result.confidence.level.value})**\n\n"
-
-        content += f"\n\n---\n{confidence_str}**Sources:**\n{sources_text}"
-    elif result.confidence:
-        conf_pct = int(result.confidence.combined_score * 100)
-        content += f"\n\n---\n**Confidence: {conf_pct}% ({result.confidence.level.value})**"
-
-    # Build agentic debug info
-    agentic_debug = None
-    if body.debug:
-        agentic_debug = AgenticDebugInfo(
-            processing_time_ms=result.metadata.processing_time_ms,
-            abstained=result.metadata.abstained,
-            used_ircot=result.metadata.used_ircot,
-            query_rewritten=result.metadata.query_rewritten,
-            rewritten_query=result.metadata.rewritten_query,
-        )
-
-        if result.intent:
-            agentic_debug.intent_decision = result.intent.decision.value
-            agentic_debug.intent_complexity = result.intent.complexity.value
-            agentic_debug.intent_confidence = result.intent.confidence
-
-        # v4.3 Query Enrichment
-        if result.metadata.used_query_enrichment:
-            agentic_debug.query_enrichment = QueryEnrichmentDebugInfo(
-                enabled=True,
-                variants=result.metadata.query_variants or [],
-                enrichment_ms=result.metadata.enrichment_ms,
-            )
-            # Try to get more details from retrieval result
-            if result.retrieval and result.retrieval.query_variants:
-                agentic_debug.query_enrichment.bm25_expanded = result.retrieval.query_variants.get("bm25_expanded")
-                agentic_debug.query_enrichment.semantic_rewrite = result.retrieval.query_variants.get("semantic_rewrite")
-                agentic_debug.query_enrichment.hyde_document = result.retrieval.query_variants.get("hyde")
-
-        if result.crag:
-            agentic_debug.crag_quality = result.crag.quality.value
-            agentic_debug.crag_relevant_ratio = result.crag.relevant_ratio
-
-        if result.ircot:
-            agentic_debug.ircot_steps = result.ircot.step_count
-            agentic_debug.ircot_paragraphs = result.ircot.paragraph_count
-
-        if result.self_rag:
-            agentic_debug.self_rag_iterations = result.self_rag.iteration_count
-            agentic_debug.self_rag_support_level = result.self_rag.final_validation.support_level.value
-
-        if result.hallucination:
-            agentic_debug.nli_faithfulness = result.hallucination.faithfulness_score
-            agentic_debug.nli_supported_claims = result.hallucination.supported_count
-            agentic_debug.nli_contradicted_claims = result.hallucination.contradicted_count
-
-        if result.confidence:
-            agentic_debug.confidence_level = result.confidence.level.value
-            agentic_debug.confidence_action = result.confidence.action.value
-            agentic_debug.confidence_score = result.confidence.combined_score
-
-        if result.cited_response:
-            agentic_debug.citations_count = len(result.cited_response.citations)
-            agentic_debug.citations_verified = result.cited_response.verified_count
-
-    # Build standard debug info
-    debug_info = None
-    if body.debug and result.retrieval:
-        debug_memories = []
-        for sm in result.retrieval.memories[:30]:
-            debug_memories.append(DebugMemoryInfo(
-                id=sm.memory.id,
-                content=sm.memory.content[:100] + "..." if len(sm.memory.content) > 100 else sm.memory.content,
-                score=sm.score,
-                sources=sm.sources,
-                included=sm.memory.id in memories_used,
-            ))
-
-        debug_concepts = []
-        for concept_id, activation in list(result.retrieval.activated_concepts.items())[:30]:
-            parts = concept_id.split("_")
-            name = "_".join(parts[1:-1]) if len(parts) > 2 else concept_id
-            concepts_activated = result.synthesis.concepts_activated if result.synthesis else []
-            debug_concepts.append(DebugConceptInfo(
-                id=concept_id,
-                name=name,
-                activation=activation,
-                hop=0,
-                included=concept_id in concepts_activated,
-            ))
-
-        debug_info = DebugInfo(
-            retrieved_memories=debug_memories,
-            activated_concepts=debug_concepts,
-            query_concepts=[c.name for c in result.retrieval.query_concepts],
-            thresholds={"top_k_memories": body.top_k_memories, "agentic": True},
-        )
-
-    # Calculate confidence
-    confidence = None
-    if result.confidence:
-        confidence = result.confidence.combined_score
-    elif result.synthesis:
-        confidence = result.synthesis.confidence
-
-    return ChatCompletionResponse(
-        id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
-        created=int(time.time()),
-        model=body.model,
-        choices=[
-            ChatCompletionChoice(
-                index=0,
-                message=ChatMessage(role="assistant", content=content),
-            )
-        ],
-        usage=ChatCompletionUsage(),
-        episode_id=result.episode_id,
-        confidence=confidence,
-        concepts_activated=result.synthesis.concepts_activated[:50] if result.synthesis else [],
-        memories_used=memories_used[:50],
-        memories_count=len(memories_used),
-        sources_used=sources_used,
-        debug_info=debug_info,
-        agentic_debug=agentic_debug,
-    )
 
 
 # ============================================================================

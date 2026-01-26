@@ -260,66 +260,31 @@ class LLMClient:
         return OutputParser.parse_list(response, separator=separator)
 
 
-# Named client registry
-_llm_clients: dict[str, LLMClient] = {}
+# Global client instance
+_llm_client: LLMClient | None = None
 
 
-def get_llm_client(name: str = "main") -> LLMClient:
-    """Get or create a named LLM client.
-
-    Args:
-        name: Client name. "main" for main LLM, "enrichment" for query enrichment.
+def get_llm_client() -> LLMClient:
+    """Get or create the LLM client.
 
     Returns:
         LLMClient instance
     """
-    if name not in _llm_clients:
-        if name == "main":
-            _llm_clients[name] = LLMClient(
-                base_url=settings.llm_base_url,
-                model=settings.llm_model,
-                api_key=settings.llm_api_key,
-                timeout=settings.llm_timeout,
-                max_concurrent=settings.llm_max_concurrent,
-            )
-        elif name == "enrichment":
-            if not settings.enrichment_llm_enabled:
-                # Fallback to main LLM if enrichment is disabled
-                logger.info("Enrichment LLM disabled, using main LLM")
-                return get_llm_client("main")
-            _llm_clients[name] = LLMClient(
-                base_url=settings.enrichment_llm_base_url,
-                model=settings.enrichment_llm_model,
-                api_key=settings.enrichment_llm_api_key,
-                timeout=settings.enrichment_llm_timeout,
-                max_concurrent=settings.enrichment_llm_max_concurrent,
-            )
-        else:
-            raise ValueError(f"Unknown LLM client name: {name}")
-
-    return _llm_clients[name]
+    global _llm_client
+    if _llm_client is None:
+        _llm_client = LLMClient(
+            base_url=settings.llm_base_url,
+            model=settings.llm_model,
+            api_key=settings.llm_api_key,
+            timeout=settings.llm_timeout,
+            max_concurrent=settings.llm_max_concurrent,
+        )
+    return _llm_client
 
 
-def get_enrichment_llm_client() -> LLMClient:
-    """Get the enrichment LLM client (fast model for query enrichment).
-
-    Falls back to main LLM if enrichment LLM is unavailable.
-    """
-    return get_llm_client("enrichment")
-
-
-async def close_llm_client(name: str | None = None) -> None:
-    """Close LLM client(s).
-
-    Args:
-        name: Client name to close, or None to close all clients.
-    """
-    if name is not None:
-        if name in _llm_clients:
-            await _llm_clients[name].close()
-            del _llm_clients[name]
-    else:
-        # Close all clients
-        for client in _llm_clients.values():
-            await client.close()
-        _llm_clients.clear()
+async def close_llm_client() -> None:
+    """Close the LLM client."""
+    global _llm_client
+    if _llm_client is not None:
+        await _llm_client.close()
+        _llm_client = None

@@ -371,31 +371,35 @@ class IngestionPipeline:
                 )
 
             # --- Phase 3: Generate embeddings (combined batch) ---
-            all_texts: list[str] = []
-            concept_count = len(concepts)
+            # Skip embeddings in bm25_graph mode for faster ingestion
+            if settings.retrieval_mode != "bm25_graph":
+                all_texts: list[str] = []
+                concept_count = len(concepts)
 
-            # Collect texts for concepts
-            for c in concepts:
-                all_texts.append(c.name + (f": {c.description}" if c.description else ""))
+                # Collect texts for concepts
+                for c in concepts:
+                    all_texts.append(c.name + (f": {c.description}" if c.description else ""))
 
-            # Collect texts for memories
-            # v4.5: Use search_content for embedding if available, fallback to content
-            for m in memories:
-                text = m.search_content if m.search_content else m.content
-                all_texts.append(text)
+                # Collect texts for memories
+                # v4.5: Use search_content for embedding if available, fallback to content
+                for m in memories:
+                    text = m.search_content if m.search_content else m.content
+                    all_texts.append(text)
 
-            # Single batch embedding call
-            if all_texts:
-                logger.debug(f"Generating embeddings for {len(all_texts)} items (batch)")
-                all_embeddings = await self.embeddings.embed_batch(all_texts)
+                # Single batch embedding call
+                if all_texts:
+                    logger.debug(f"Generating embeddings for {len(all_texts)} items (batch)")
+                    all_embeddings = await self.embeddings.embed_batch(all_texts)
 
-                # Assign embeddings to concepts
-                for i, concept in enumerate(concepts):
-                    concept.embedding = all_embeddings[i]
+                    # Assign embeddings to concepts
+                    for i, concept in enumerate(concepts):
+                        concept.embedding = all_embeddings[i]
 
-                # Assign embeddings to memories
-                for i, memory in enumerate(memories):
-                    memory.embedding = all_embeddings[concept_count + i]
+                    # Assign embeddings to memories
+                    for i, memory in enumerate(memories):
+                        memory.embedding = all_embeddings[concept_count + i]
+            else:
+                logger.debug("Skipping embeddings (bm25_graph mode)")
 
             # --- Phase 4: Save to Neo4j (batch) ---
             # Save concepts batch

@@ -42,16 +42,6 @@ from engram.retrieval.spreading_activation import (
     spread_activation,
 )
 
-# v4: CRAG
-from engram.retrieval.crag import (
-    CRAGEvaluator,
-    CRAGResult,
-    DocumentGrade,
-    DocumentRelevance,
-    RetrievalQuality,
-    evaluate_retrieval,
-)
-
 __all__ = [
     # Embeddings
     "EmbeddingService",
@@ -88,11 +78,4 @@ __all__ = [
     "RetrievalPipeline",
     "RetrievalResult",
     "retrieve",
-    # v4: CRAG
-    "CRAGEvaluator",
-    "CRAGResult",
-    "DocumentGrade",
-    "DocumentRelevance",
-    "RetrievalQuality",
-    "evaluate_retrieval",
 ]
