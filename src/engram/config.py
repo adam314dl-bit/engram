@@ -96,15 +96,15 @@ class Settings(BaseSettings):
         description="RRF constant k, higher values reduce top rank dominance"
     )
     rrf_bm25_weight: float = Field(
-        default=0.45,
+        default=0.40,
         description="BM25 weight in weighted RRF fusion"
     )
     rrf_vector_weight: float = Field(
-        default=0.35,
-        description="Vector search weight in weighted RRF fusion (only for hybrid mode)"
+        default=0.0,
+        description="Vector search weight (disabled in bm25_graph mode)"
     )
     rrf_graph_weight: float = Field(
-        default=0.20,
+        default=0.40,
         description="Graph traversal weight in weighted RRF fusion"
     )
 
