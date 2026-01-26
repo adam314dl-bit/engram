@@ -269,6 +269,26 @@ class ConceptInfo(BaseModel):
     activation_count: int
 
 
+class ConceptNeighbor(BaseModel):
+    """Neighbor of a concept with relationship info."""
+
+    id: str
+    name: str
+    node_type: str  # concept, semantic, episodic
+    relation_type: str | None = None  # is_a, uses, contains, needs, causes, related_to
+    weight: float | None = None
+    direction: str  # outgoing, incoming
+
+
+class ConceptNeighborhood(BaseModel):
+    """Full neighborhood of a concept."""
+
+    concept_id: str
+    concept_name: str
+    neighbors: list[ConceptNeighbor]
+    total_edges: int
+
+
 class MemoryInfo(BaseModel):
     """Brief memory information."""
 
@@ -896,6 +916,97 @@ async def list_concepts(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to list concepts: {str(e)}",
+        )
+
+
+@router.get(
+    "/admin/neighbors/{concept_name:path}",
+    response_model=ConceptNeighborhood,
+    include_in_schema=False,
+)
+async def get_concept_neighbors(request: Request, concept_name: str) -> ConceptNeighborhood:
+    """Get all neighbors of a concept by name with relationship details.
+
+    Example: /admin/neighbors/Docker
+    """
+    db = get_db(request)
+
+    try:
+        # First find the concept (case-insensitive)
+        concept_result = await db.execute_query(
+            """
+            MATCH (c:Concept)
+            WHERE toLower(c.name) = toLower($name)
+            RETURN c.id as id, c.name as name
+            LIMIT 1
+            """,
+            name=concept_name,
+        )
+
+        if not concept_result:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Concept '{concept_name}' not found",
+            )
+
+        concept = concept_result[0]
+
+        # Get all neighbors with relationship info
+        neighbors_result = await db.execute_query(
+            """
+            MATCH (c:Concept {id: $concept_id})-[r]-(neighbor)
+            RETURN neighbor.id as id,
+                   COALESCE(neighbor.name, neighbor.content, neighbor.query) as name,
+                   CASE
+                       WHEN 'Concept' IN labels(neighbor) THEN 'concept'
+                       WHEN 'SemanticMemory' IN labels(neighbor) THEN 'semantic'
+                       ELSE 'episodic'
+                   END as node_type,
+                   type(r) as rel_type,
+                   r.type as semantic_type,
+                   r.weight as weight,
+                   CASE WHEN startNode(r) = c THEN 'outgoing' ELSE 'incoming' END as direction
+            ORDER BY r.weight DESC NULLS LAST, neighbor.name
+            """,
+            concept_id=concept["id"],
+        )
+
+        neighbors = []
+        for row in neighbors_result:
+            # For RELATED_TO edges, use the semantic type (is_a, uses, etc.)
+            # For other edges (ABOUT, ACTIVATED, USED), use the Neo4j relationship type
+            rel_type = row["rel_type"]
+            if rel_type == "RELATED_TO":
+                relation_type = row["semantic_type"]
+            else:
+                relation_type = rel_type.lower()
+
+            name = row["name"] or ""
+            neighbors.append(
+                ConceptNeighbor(
+                    id=row["id"],
+                    name=name[:100] + "..." if len(name) > 100 else name,
+                    node_type=row["node_type"],
+                    relation_type=relation_type,
+                    weight=row["weight"],
+                    direction=row["direction"],
+                )
+            )
+
+        return ConceptNeighborhood(
+            concept_id=concept["id"],
+            concept_name=concept["name"],
+            neighbors=neighbors,
+            total_edges=len(neighbors),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error getting concept neighbors: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get neighbors: {str(e)}",
         )
 
 
