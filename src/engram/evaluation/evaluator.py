@@ -470,27 +470,34 @@ RESULT|<key_info_match>|<relevance>|<no_contradiction>|<краткое объя�
         if content is None:
             return self._default_scores("LLM returned None content")
 
+        logger.debug(f"Judge LLM raw response:\n{content[:500]}")
+
         for line in content.strip().split("\n"):
             line = line.strip()
-            if line.startswith("RESULT|"):
-                parts = line.split("|")
+            # Handle both "RESULT|" and variations like "RESULT |" or "Result|"
+            if line.upper().startswith("RESULT"):
+                # Remove "RESULT" prefix and clean up
+                rest = line[6:].lstrip(" |:")
+                parts = [""] + rest.split("|")  # Add empty first element to match expected format
                 if len(parts) >= 4:
                     try:
-                        return {
-                            "key_info_match": float(parts[1]),
-                            "relevance": float(parts[2]),
-                            "no_contradiction": float(parts[3]),
-                            "reasoning": parts[4] if len(parts) > 4 else "",
+                        result = {
+                            "key_info_match": float(parts[1].strip()),
+                            "relevance": float(parts[2].strip()),
+                            "no_contradiction": float(parts[3].strip()),
+                            "reasoning": parts[4].strip() if len(parts) > 4 else "",
                         }
+                        logger.debug(f"Parsed scores: {result}")
+                        return result
                     except ValueError:
                         pass
 
         # Fallback: try to extract scores from unstructured text
+        logger.warning(f"Could not find RESULT| line, using fallback parser. Response: {content[:200]}")
         return self._fallback_parse(content)
 
     def _fallback_parse(self, content: str) -> dict[str, float]:
         """Attempt to extract scores from unstructured LLM response."""
-        # Look for patterns like "key_info_match: 0.8" or "relevance = 0.9"
         scores = {
             "key_info_match": 0.5,
             "relevance": 0.5,
@@ -498,10 +505,35 @@ RESULT|<key_info_match>|<relevance>|<no_contradiction>|<краткое объя�
             "reasoning": "Parsed from unstructured response",
         }
 
+        # Try to find three consecutive numbers (0.X format) that look like scores
+        # This handles cases like "0.9|1.0|1.0" or "0.9, 1.0, 1.0"
+        number_pattern = r"(0(?:\.\d+)?|1(?:\.0)?)"
+        numbers = re.findall(number_pattern, content)
+
+        # Filter to likely score values (0.0-1.0)
+        score_numbers = []
+        for n in numbers:
+            try:
+                val = float(n)
+                if 0.0 <= val <= 1.0:
+                    score_numbers.append(val)
+            except ValueError:
+                pass
+
+        # If we found 3+ numbers that look like scores, use them
+        if len(score_numbers) >= 3:
+            scores["key_info_match"] = score_numbers[0]
+            scores["relevance"] = score_numbers[1]
+            scores["no_contradiction"] = score_numbers[2]
+            scores["reasoning"] = "Extracted from numbers in response"
+            logger.debug(f"Fallback extracted scores: {scores}")
+            return scores
+
+        # Try named patterns like "key_info_match: 0.8" or "relevance = 0.9"
         patterns = {
-            "key_info_match": r"key_info_match[:\s=]+([0-9.]+)",
-            "relevance": r"relevance[:\s=]+([0-9.]+)",
-            "no_contradiction": r"no_contradiction[:\s=]+([0-9.]+)",
+            "key_info_match": r"key_info[_\s]?match[:\s=]+([0-9.]+)",
+            "relevance": r"relevan\w*[:\s=]+([0-9.]+)",
+            "no_contradiction": r"no[_\s]?contradiction[:\s=]+([0-9.]+)",
         }
 
         for key, pattern in patterns.items():
@@ -512,6 +544,7 @@ RESULT|<key_info_match>|<relevance>|<no_contradiction>|<краткое объя�
                 except ValueError:
                     pass
 
+        logger.debug(f"Fallback final scores: {scores}")
         return scores
 
     def _default_scores(self, error_msg: str) -> dict[str, float]:
