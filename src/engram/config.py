@@ -223,6 +223,24 @@ class Settings(BaseSettings):
         description="top_k for complex analytical queries"
     )
 
+    # v4.4: Graph Quality Optimization Parameters
+    semantic_edge_boost: float = Field(
+        default=1.5,
+        description="Boost factor for semantic + universal edges in spreading activation"
+    )
+    dedup_auto_merge_threshold: float = Field(
+        default=0.95,
+        description="Similarity threshold for auto-merging duplicate concepts"
+    )
+    dedup_review_threshold: float = Field(
+        default=0.80,
+        description="Similarity threshold for creating POSSIBLE_DUPLICATE edges"
+    )
+    dedup_possible_threshold: float = Field(
+        default=0.60,
+        description="Minimum similarity to track as potential duplicate"
+    )
+
 def get_dev_settings() -> Settings:
     """Get development environment settings."""
     return Settings(

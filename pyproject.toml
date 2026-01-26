@@ -30,6 +30,8 @@ dependencies = [
     "setuptools>=69.0.0",  # Required for pkg_resources (natasha dependency)
     # Two-phase retrieval
     "chonkie[semantic]>=0.4.0",  # Semantic chunking for raw document retrieval
+    # v4.4: Graph quality optimization
+    "jellyfish>=1.0.0",  # Jaro-Winkler string similarity for deduplication
 ]
 
 [project.optional-dependencies]
@@ -76,7 +78,7 @@ disallow_untyped_defs = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["sentence_transformers.*", "neo4j.*", "pymorphy3.*", "FlagEmbedding.*", "natasha.*", "cyrtranslit.*", "chonkie.*", "transformers.*"]
+module = ["sentence_transformers.*", "neo4j.*", "pymorphy3.*", "FlagEmbedding.*", "natasha.*", "cyrtranslit.*", "chonkie.*", "transformers.*", "jellyfish.*"]
 ignore_missing_imports = true
 
 [tool.uv]

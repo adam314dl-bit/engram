@@ -157,6 +157,7 @@ class Neo4jClient:
         """Get neighboring concepts with their relationship info."""
         query = """
         MATCH (c:Concept {id: $id})-[r:RELATED_TO]->(neighbor:Concept)
+        WHERE neighbor.status IS NULL OR neighbor.status = 'active'
         RETURN neighbor, r
         LIMIT $limit
         """
@@ -172,6 +173,11 @@ class Neo4jClient:
                     relation_type=rel_data.get("type", "related_to"),
                     weight=rel_data.get("weight", 0.5),
                     edge_embedding=rel_data.get("edge_embedding"),
+                    # v4.4: Semantic edge properties
+                    is_semantic=rel_data.get("is_semantic", False),
+                    is_universal=rel_data.get("is_universal", False),
+                    source_type=rel_data.get("source_type", "document"),
+                    provenance_doc_id=rel_data.get("provenance_doc_id"),
                 )
                 neighbors.append((concept, relation))
         return neighbors
@@ -222,6 +228,134 @@ class Neo4jClient:
         """
         async with self.session() as session:
             await session.run(query, id=concept_id)
+
+    # ==========================================================================
+    # v4.4: Concept deduplication operations
+    # ==========================================================================
+
+    async def get_concept_by_alias(self, alias: str) -> Concept | None:
+        """Get a concept by alias (case-insensitive).
+
+        Searches in the aliases list field.
+        """
+        query = """
+        MATCH (c:Concept)
+        WHERE any(a IN c.aliases WHERE toLower(a) = toLower($alias))
+          AND (c.status IS NULL OR c.status = 'active')
+        RETURN c
+        """
+        async with self.session() as session:
+            result = await session.run(query, alias=alias)
+            record = await result.single()
+            if record:
+                return Concept.from_dict(dict(record["c"]))
+            return None
+
+    async def merge_concepts(
+        self,
+        canonical_id: str,
+        merge_ids: list[str],
+        aliases: list[str],
+    ) -> dict[str, int]:
+        """Merge duplicate concepts into a canonical concept.
+
+        Redirects all edges and memory links from merge_ids to canonical_id,
+        then marks merge concepts as 'merged'.
+
+        Args:
+            canonical_id: ID of the canonical concept to keep
+            merge_ids: IDs of concepts to merge
+            aliases: Names of merged concepts to add as aliases
+
+        Returns:
+            Dict with counts of redirected edges and memories
+        """
+        # Add aliases to canonical concept
+        alias_query = """
+        MATCH (c:Concept {id: $canonical_id})
+        SET c.aliases = coalesce(c.aliases, []) + $aliases,
+            c.updated_at = datetime()
+        """
+        async with self.session() as session:
+            await session.run(query=alias_query, canonical_id=canonical_id, aliases=aliases)
+
+        # Redirect outgoing edges
+        redirect_out_query = """
+        MATCH (m:Concept)-[r:RELATED_TO]->(target:Concept)
+        WHERE m.id IN $merge_ids
+        WITH m, r, target
+        MATCH (canonical:Concept {id: $canonical_id})
+        MERGE (canonical)-[new:RELATED_TO]->(target)
+        ON CREATE SET new = properties(r)
+        ON MATCH SET new.weight = CASE WHEN new.weight < r.weight THEN r.weight ELSE new.weight END
+        DELETE r
+        RETURN count(r) as count
+        """
+        async with self.session() as session:
+            result = await session.run(
+                redirect_out_query, merge_ids=merge_ids, canonical_id=canonical_id
+            )
+            record = await result.single()
+            edges_out = record["count"] if record else 0
+
+        # Redirect incoming edges
+        redirect_in_query = """
+        MATCH (source:Concept)-[r:RELATED_TO]->(m:Concept)
+        WHERE m.id IN $merge_ids
+        WITH source, r, m
+        MATCH (canonical:Concept {id: $canonical_id})
+        WHERE source.id <> $canonical_id
+        MERGE (source)-[new:RELATED_TO]->(canonical)
+        ON CREATE SET new = properties(r)
+        ON MATCH SET new.weight = CASE WHEN new.weight < r.weight THEN r.weight ELSE new.weight END
+        DELETE r
+        RETURN count(r) as count
+        """
+        async with self.session() as session:
+            result = await session.run(
+                redirect_in_query, merge_ids=merge_ids, canonical_id=canonical_id
+            )
+            record = await result.single()
+            edges_in = record["count"] if record else 0
+
+        # Redirect memory links
+        redirect_memory_query = """
+        MATCH (s:SemanticMemory)-[r:ABOUT]->(m:Concept)
+        WHERE m.id IN $merge_ids
+        WITH s, r, m
+        MATCH (canonical:Concept {id: $canonical_id})
+        MERGE (s)-[:ABOUT]->(canonical)
+        DELETE r
+        RETURN count(r) as count
+        """
+        async with self.session() as session:
+            result = await session.run(
+                redirect_memory_query, merge_ids=merge_ids, canonical_id=canonical_id
+            )
+            record = await result.single()
+            memories = record["count"] if record else 0
+
+        # Mark merged concepts
+        mark_merged_query = """
+        MATCH (c:Concept)
+        WHERE c.id IN $merge_ids
+        SET c.status = 'merged',
+            c.canonical_id = $canonical_id,
+            c.is_canonical = false,
+            c.updated_at = datetime()
+        """
+        async with self.session() as session:
+            await session.run(mark_merged_query, merge_ids=merge_ids, canonical_id=canonical_id)
+
+        logger.info(
+            f"Merged {len(merge_ids)} concepts into {canonical_id}: "
+            f"{edges_out + edges_in} edges, {memories} memories redirected"
+        )
+
+        return {
+            "edges_redirected": edges_out + edges_in,
+            "memories_redirected": memories,
+        }
 
     # ==========================================================================
     # Semantic memory operations

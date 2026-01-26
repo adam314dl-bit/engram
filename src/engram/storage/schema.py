@@ -16,6 +16,9 @@ SCHEMA_QUERIES = [
     "CREATE INDEX episodic_domain IF NOT EXISTS FOR (e:EpisodicMemory) ON (e.domain)",
     "CREATE INDEX doc_status IF NOT EXISTS FOR (d:Document) ON (d.status)",
     "CREATE INDEX chunk_doc_id IF NOT EXISTS FOR (c:Chunk) ON (c.doc_id)",
+    # v4.4: Deduplication and enrichment indexes
+    "CREATE INDEX concept_status IF NOT EXISTS FOR (c:Concept) ON (c.status)",
+    "CREATE INDEX concept_canonical IF NOT EXISTS FOR (c:Concept) ON (c.canonical_id)",
 ]
 
 # Vector index queries (separate due to different syntax)
@@ -69,6 +72,12 @@ CREATE FULLTEXT INDEX concept_content IF NOT EXISTS
 FOR (c:Concept) ON EACH [c.name]
 """
 
+# v4.4: Full-text index for concept aliases
+CONCEPT_ALIAS_FULLTEXT_INDEX_QUERY = """
+CREATE FULLTEXT INDEX concept_aliases IF NOT EXISTS
+FOR (c:Concept) ON EACH [c.aliases]
+"""
+
 # Relationship types used in the graph:
 # (c1:Concept)-[:RELATED_TO {weight: 0.8, type: "uses"}]->(c2:Concept)
 # (c:Concept)-[:IS_A]->(parent:Concept)
@@ -86,6 +95,7 @@ def get_all_schema_queries() -> list[str]:
     queries.append(FULLTEXT_INDEX_QUERY)
     queries.append(CHUNK_FULLTEXT_INDEX_QUERY)
     queries.append(CONCEPT_FULLTEXT_INDEX_QUERY)
+    queries.append(CONCEPT_ALIAS_FULLTEXT_INDEX_QUERY)
     return queries
 
 

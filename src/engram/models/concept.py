@@ -52,6 +52,13 @@ class Concept:
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 
+    # v4.4: Deduplication support
+    aliases: list[str] = field(default_factory=list)  # Alternative names for this concept
+    is_canonical: bool = True  # True if this is the canonical concept (not merged)
+    canonical_id: str | None = None  # ID of canonical concept if this is merged/alias
+    status: str = "active"  # active, merged, alias, pending_review
+    labse_embedding: list[float] | None = None  # Cross-lingual LaBSE embedding
+
     def to_dict(self) -> dict:
         """Convert to dictionary for Neo4j storage."""
         return {
@@ -66,6 +73,12 @@ class Concept:
             "last_activated": self.last_activated.isoformat() if self.last_activated else None,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
+            # v4.4 deduplication fields
+            "aliases": self.aliases,
+            "is_canonical": self.is_canonical,
+            "canonical_id": self.canonical_id,
+            "status": self.status,
+            "labse_embedding": self.labse_embedding,
         }
 
     @classmethod
@@ -83,6 +96,12 @@ class Concept:
             last_activated=parse_datetime(data.get("last_activated")),
             created_at=parse_datetime(data.get("created_at")) or datetime.utcnow(),
             updated_at=parse_datetime(data.get("updated_at")) or datetime.utcnow(),
+            # v4.4 deduplication fields
+            aliases=data.get("aliases") or [],
+            is_canonical=data.get("is_canonical", True),
+            canonical_id=data.get("canonical_id"),
+            status=data.get("status", "active"),
+            labse_embedding=data.get("labse_embedding"),
         )
 
 
@@ -106,6 +125,12 @@ class ConceptRelation:
     co_occurrence_count: int = 1
     last_used: datetime = field(default_factory=datetime.utcnow)
 
+    # v4.4: Semantic edge properties
+    is_semantic: bool = False  # True if represents semantic relationship (is_a, part_of)
+    is_universal: bool = False  # True if universally true (not context-dependent)
+    source_type: str = "document"  # ontology, world_knowledge, inference, document, user
+    provenance_doc_id: str | None = None  # Document ID if source_type is "document"
+
     def to_dict(self) -> dict:
         """Convert to dictionary for Neo4j storage."""
         return {
@@ -116,4 +141,9 @@ class ConceptRelation:
             "edge_embedding": self.edge_embedding,
             "co_occurrence_count": self.co_occurrence_count,
             "last_used": self.last_used.isoformat(),
+            # v4.4 semantic edge properties
+            "is_semantic": self.is_semantic,
+            "is_universal": self.is_universal,
+            "source_type": self.source_type,
+            "provenance_doc_id": self.provenance_doc_id,
         }

@@ -58,6 +58,7 @@ class SpreadingActivation:
         max_hops: int | None = None,
         rescale: float | None = None,
         top_k_per_hop: int | None = None,
+        semantic_edge_boost: float | None = None,
     ) -> None:
         self.db = db
         self.decay = decay or settings.activation_decay
@@ -65,6 +66,8 @@ class SpreadingActivation:
         self.max_hops = max_hops or settings.activation_max_hops
         self.rescale = rescale or settings.activation_rescale
         self.top_k_per_hop = top_k_per_hop or settings.activation_top_k_per_hop
+        # v4.4: Boost for semantic + universal edges
+        self.semantic_edge_boost = semantic_edge_boost or settings.semantic_edge_boost
 
     async def activate(
         self,
@@ -131,6 +134,11 @@ class SpreadingActivation:
                         if edge_relevance < self.threshold:
                             continue
 
+                    # v4.4: Apply semantic edge boost for universal semantic edges
+                    semantic_boost = 1.0
+                    if getattr(relation, 'is_universal', False) and getattr(relation, 'is_semantic', False):
+                        semantic_boost = self.semantic_edge_boost
+
                     # Calculate activation transfer
                     transfer = (
                         current_act
@@ -138,6 +146,7 @@ class SpreadingActivation:
                         * edge_relevance
                         * self.decay
                         * self.rescale
+                        * semantic_boost
                     )
 
                     # Accumulate activation (can receive from multiple sources)

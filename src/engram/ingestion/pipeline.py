@@ -42,6 +42,7 @@ from engram.retrieval.quality_filter import is_quality_chunk
 from engram.storage.neo4j_client import Neo4jClient
 
 if TYPE_CHECKING:
+    from engram.graph.resolver import ConceptResolver
     from engram.preprocessing.list_enricher import ListEnricher
     from engram.preprocessing.table_enricher import TableEnricher
 
@@ -86,6 +87,7 @@ class IngestionPipeline:
         table_enricher: "TableEnricher | None" = None,
         list_enricher: "ListEnricher | None" = None,
         person_extractor: PersonExtractor | None = None,
+        concept_resolver: "ConceptResolver | None" = None,
     ) -> None:
         self.db = neo4j_client
         self.parser = parser or DocumentParser()
@@ -112,6 +114,9 @@ class IngestionPipeline:
         self.person_extractor = person_extractor or PersonExtractor()
         self.context_extractor = ContentContextExtractor()
         self.list_parser = ListParser()
+
+        # v4.4: Optional concept resolver for deduplication
+        self.concept_resolver = concept_resolver
 
     async def ingest_file(self, path: Path | str) -> IngestionResult:
         """Ingest a single file."""
@@ -304,6 +309,26 @@ class IngestionPipeline:
                     all_concepts[c.name] = c
 
             concepts = list(all_concepts.values())
+
+            # --- Phase 2.0.5: Resolve concepts to prevent duplicates (v4.4) ---
+            if self.concept_resolver:
+                resolved_concepts: list[Concept] = []
+                for concept in concepts:
+                    resolved = await self.concept_resolver.resolve_concept(concept.name)
+                    if resolved:
+                        # Use existing canonical concept
+                        logger.debug(f"Resolved '{concept.name}' -> existing '{resolved.concept_id}' ({resolved.matched_by})")
+                        existing = await self.db.get_concept(resolved.concept_id)
+                        if existing:
+                            resolved_concepts.append(existing)
+                    else:
+                        # Keep as new concept
+                        resolved_concepts.append(concept)
+                        # Add to resolver cache for future lookups
+                        self.concept_resolver.add_to_cache(concept.id, concept.name)
+
+                concepts = resolved_concepts
+                logger.debug(f"After resolution: {len(concepts)} concepts (deduplicated)")
 
             # --- Phase 2.1: Merge LLM-extracted persons with regex/Natasha ---
             if memory_result.persons:
