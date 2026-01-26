@@ -451,7 +451,7 @@ RESULT|<key_info_match>|<relevance>|<no_contradiction>|<причина>
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.1,
-            "max_tokens": 1024,  # Enough for thinking + response
+            "max_tokens": 4096,  # Enough for thinking + response
         }
 
         response = self._http.post(url, payload)
