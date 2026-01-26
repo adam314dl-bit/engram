@@ -367,13 +367,17 @@ uv run python scripts/improve_graph_quality.py dedup
 # 3. Run semantic enrichment (adds world knowledge edges)
 uv run python scripts/improve_graph_quality.py enrich
 
-# 4. Run both deduplication and enrichment
+# 4. Enrichment with options
+uv run python scripts/improve_graph_quality.py enrich --limit 100      # Test with 100 concepts
+uv run python scripts/improve_graph_quality.py enrich --min-degree 2   # Only concepts with 2+ edges
+
+# 5. Run both deduplication and enrichment
 uv run python scripts/improve_graph_quality.py all
 
-# 5. Preview changes without applying (dry run)
+# 6. Preview changes without applying (dry run)
 uv run python scripts/improve_graph_quality.py dedup --dry-run
 
-# 6. Interactive review of medium-confidence duplicates
+# 7. Interactive review of medium-confidence duplicates
 uv run python scripts/review_duplicates.py
 ```
 
@@ -415,7 +419,40 @@ SEMANTIC_EDGE_BOOST=1.5           # Boost for semantic edges
 DEDUP_AUTO_MERGE_THRESHOLD=0.95   # Auto-merge threshold
 DEDUP_REVIEW_THRESHOLD=0.80       # Review threshold
 DEDUP_POSSIBLE_THRESHOLD=0.60     # Tracking threshold
+
+# Enrichment LLM (separate fast model for large graphs)
+ENRICHMENT_LLM_ENABLED=true
+ENRICHMENT_LLM_BASE_URL=http://localhost:8889/v1
+ENRICHMENT_LLM_MODEL=Qwen/Qwen3-4B
+ENRICHMENT_LLM_TIMEOUT=30.0
+ENRICHMENT_LLM_MAX_CONCURRENT=128  # Increase with more GPUs
 ```
+
+### vLLM Setup for Enrichment
+
+For fast enrichment of large graphs (10k+ concepts), use a dedicated vLLM server:
+
+```bash
+# Single GPU
+docker run -d --name engram-enrichment --runtime nvidia --gpus '"device=1"' \
+  -v /data/cache/huggingface:/root/.cache/huggingface -p 8889:8000 --ipc=host \
+  --restart unless-stopped vllm/vllm-openai:latest --model Qwen/Qwen3-4B \
+  --gpu-memory-utilization 0.3 --max-model-len 8192 --dtype bfloat16
+
+# Multi-GPU with tensor parallelism (2x throughput)
+docker run -d --name engram-enrichment --runtime nvidia --gpus '"device=0,1"' \
+  -v /data/cache/huggingface:/root/.cache/huggingface -p 8889:8000 --ipc=host \
+  --restart unless-stopped vllm/vllm-openai:latest --model Qwen/Qwen3-4B \
+  --gpu-memory-utilization 0.3 --max-model-len 8192 --dtype bfloat16 \
+  --tensor-parallel-size 2
+```
+
+Recommended concurrency by GPU count:
+| GPUs | `--tensor-parallel-size` | `ENRICHMENT_LLM_MAX_CONCURRENT` |
+|------|--------------------------|--------------------------------|
+| 1    | 1 (default)              | 64                             |
+| 2    | 2                        | 128                            |
+| 4    | 4                        | 256                            |
 
 ## Project Structure
 
