@@ -459,15 +459,17 @@ class DeduplicationSafetyWrapper:
         backup_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         self._backup_id = backup_id
 
-        # Export concepts and relations to a backup label
-        backup_query = """
-        // Backup concepts
+        # Backup concepts
+        concept_backup_query = """
         MATCH (c:Concept)
         WITH c, properties(c) as props
         CREATE (b:ConceptBackup {backup_id: $backup_id})
         SET b += props
+        """
+        await self.db.execute_query(concept_backup_query, backup_id=backup_id)
 
-        // Backup relations
+        # Backup relations
+        relation_backup_query = """
         MATCH (c1:Concept)-[r:RELATED_TO]->(c2:Concept)
         CREATE (rb:RelationBackup {
             backup_id: $backup_id,
@@ -477,7 +479,7 @@ class DeduplicationSafetyWrapper:
             weight: r.weight
         })
         """
-        await self.db.execute_query(backup_query, backup_id=backup_id)
+        await self.db.execute_query(relation_backup_query, backup_id=backup_id)
 
         logger.info(f"Created backup: {backup_id}")
         return backup_id
@@ -502,26 +504,36 @@ class DeduplicationSafetyWrapper:
         Args:
             backup_id: Backup identifier to restore
         """
-        rollback_query = """
-        // Delete current concepts
-        MATCH (c:Concept) DETACH DELETE c
+        # Delete current concepts
+        await self.db.execute_query("MATCH (c:Concept) DETACH DELETE c")
 
-        // Restore from backup
+        # Restore concepts from backup
+        restore_concepts_query = """
         MATCH (b:ConceptBackup {backup_id: $backup_id})
         CREATE (c:Concept)
         SET c = properties(b)
         REMOVE c.backup_id
+        """
+        await self.db.execute_query(restore_concepts_query, backup_id=backup_id)
 
-        // Restore relations
+        # Restore relations
+        restore_relations_query = """
         MATCH (rb:RelationBackup {backup_id: $backup_id})
         MATCH (c1:Concept {id: rb.source_id})
         MATCH (c2:Concept {id: rb.target_id})
         CREATE (c1)-[r:RELATED_TO]->(c2)
         SET r.type = rb.type, r.weight = rb.weight
-
-        // Clean up backup
-        MATCH (b:ConceptBackup {backup_id: $backup_id}) DELETE b
-        MATCH (rb:RelationBackup {backup_id: $backup_id}) DELETE rb
         """
-        await self.db.execute_query(rollback_query, backup_id=backup_id)
+        await self.db.execute_query(restore_relations_query, backup_id=backup_id)
+
+        # Clean up backup
+        await self.db.execute_query(
+            "MATCH (b:ConceptBackup {backup_id: $backup_id}) DELETE b",
+            backup_id=backup_id
+        )
+        await self.db.execute_query(
+            "MATCH (rb:RelationBackup {backup_id: $backup_id}) DELETE rb",
+            backup_id=backup_id
+        )
+
         logger.info(f"Rolled back to backup: {backup_id}")
