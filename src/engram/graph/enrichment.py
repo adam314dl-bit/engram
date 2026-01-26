@@ -112,17 +112,14 @@ class SemanticEnricher:
 
         prompt = f"""Дай краткое определение понятия "{concept.name}" и его связи.
 
-Ответь в JSON формате:
-{{
-    "definition": "краткое определение (1-2 предложения)",
-    "is_a": ["категория1", "категория2"],
-    "contains": ["компонент1", "компонент2"],
-    "uses": ["технология1", "ресурс1"],
-    "needs": ["требование1", "зависимость1"]
-}}
+Формат ответа (разделитель |):
+определение|is_a:категория1,категория2|contains:компонент1,компонент2|uses:технология1|needs:требование1
 
-Если понятие неизвестно или слишком специфично, верни пустые списки.
-Используй только общеизвестные факты, не выдумывай."""
+Пример для "Docker":
+Платформа контейнеризации для упаковки приложений|is_a:контейнеризация,виртуализация|contains:образ,контейнер|uses:Linux|needs:ядро_Linux
+
+Если понятие неизвестно, верни только: неизвестно
+Используй только общеизвестные факты."""
 
         try:
             response = requests.post(
@@ -137,24 +134,38 @@ class SemanticEnricher:
             )
             response.raise_for_status()
 
-            content = response.json()["choices"][0]["message"]["content"]
+            content = response.json()["choices"][0]["message"]["content"].strip()
 
-            # Parse JSON from response (handle markdown code blocks)
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0]
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0]
+            # Parse pipe-delimited format
+            definition_text = ""
+            is_a: list[str] = []
+            contains: list[str] = []
+            uses: list[str] = []
+            needs: list[str] = []
 
-            data = json.loads(content.strip())
+            if content and content != "неизвестно":
+                parts = content.split("|")
+                if parts:
+                    definition_text = parts[0].strip()
+                    for part in parts[1:]:
+                        part = part.strip()
+                        if part.startswith("is_a:"):
+                            is_a = [x.strip() for x in part[5:].split(",") if x.strip()]
+                        elif part.startswith("contains:"):
+                            contains = [x.strip() for x in part[9:].split(",") if x.strip()]
+                        elif part.startswith("uses:"):
+                            uses = [x.strip() for x in part[5:].split(",") if x.strip()]
+                        elif part.startswith("needs:"):
+                            needs = [x.strip() for x in part[6:].split(",") if x.strip()]
 
             definition = ConceptDefinition(
                 concept_id=concept.id,
                 concept_name=concept.name,
-                definition=data.get("definition", ""),
-                is_a=data.get("is_a", []),
-                contains=data.get("contains", []),
-                uses=data.get("uses", []),
-                needs=data.get("needs", []),
+                definition=definition_text,
+                is_a=is_a,
+                contains=contains,
+                uses=uses,
+                needs=needs,
             )
 
             self._definition_cache[concept.id] = definition
@@ -497,20 +508,20 @@ class EdgeClassifier:
                 for r in batch
             )
 
-            prompt = f"""Классифицируй каждую связь как семантическую (универсально истинную) или контекстную (зависящую от документа).
+            prompt = f"""Классифицируй каждую связь как семантическую (S) или контекстную (C).
 
 Связи:
 {edges_text}
 
-Ответь в JSON формате:
-{{
-    "classifications": [
-        {{"source": "...", "target": "...", "is_semantic": true/false, "is_universal": true/false}}
-    ]
-}}
+Формат ответа (одна связь на строку):
+source|target|S или C
 
-Семантические связи - это общеизвестные факты (Docker использует контейнеры).
-Контекстные связи - это специфичные для документа (команда X использует инструмент Y)."""
+Пример:
+docker|контейнер|S
+команда_X|инструмент_Y|C
+
+S = семантическая (общеизвестный факт)
+C = контекстная (специфично для документа)"""
 
             try:
                 response = requests.post(
@@ -525,31 +536,32 @@ class EdgeClassifier:
                 )
                 response.raise_for_status()
 
-                content = response.json()["choices"][0]["message"]["content"]
+                content = response.json()["choices"][0]["message"]["content"].strip()
 
-                # Parse JSON
-                if "```json" in content:
-                    content = content.split("```json")[1].split("```")[0]
-                elif "```" in content:
-                    content = content.split("```")[1].split("```")[0]
+                # Parse pipe-delimited format (one per line)
+                for line in content.split("\n"):
+                    line = line.strip()
+                    if not line or "|" not in line:
+                        continue
+                    parts = line.split("|")
+                    if len(parts) >= 3:
+                        source = parts[0].strip()
+                        target = parts[1].strip()
+                        classification_type = parts[2].strip().upper()
+                        is_semantic = classification_type == "S"
 
-                data = json.loads(content.strip())
-
-                # Update edges
-                for classification in data.get("classifications", []):
-                    update_query = """
-                    MATCH (a:Concept {name: $source})-[r:RELATED_TO]->(b:Concept {name: $target})
-                    SET r.is_semantic = $is_semantic,
-                        r.is_universal = $is_universal
-                    """
-                    await self.db.execute_query(
-                        update_query,
-                        source=classification["source"],
-                        target=classification["target"],
-                        is_semantic=classification.get("is_semantic", False),
-                        is_universal=classification.get("is_universal", False),
-                    )
-                    classified += 1
+                        update_query = """
+                        MATCH (a:Concept {name: $source})-[r:RELATED_TO]->(b:Concept {name: $target})
+                        SET r.is_semantic = $is_semantic,
+                            r.is_universal = $is_semantic
+                        """
+                        await self.db.execute_query(
+                            update_query,
+                            source=source,
+                            target=target,
+                            is_semantic=is_semantic,
+                        )
+                        classified += 1
 
             except Exception as e:
                 logger.warning(f"Failed to classify batch: {e}")
