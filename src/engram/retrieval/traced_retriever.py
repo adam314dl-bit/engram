@@ -280,6 +280,7 @@ class TracedRetriever:
                 step.metadata["skipped"] = "need >= 2 concepts"
 
         # Step 7: BM25 search
+        bm25_results: list[tuple] = []
         with self._trace_step(trace, "bm25_search") as step:
             bm25_results = await self.db.fulltext_search_memories(
                 query_text=query, k=settings.retrieval_bm25_k
@@ -302,6 +303,7 @@ class TracedRetriever:
                     chunk.sources.append("B")
 
         # Step 8: Vector search (if enabled)
+        vector_results: list[tuple] = []
         if use_vector and query_embedding:
             with self._trace_step(trace, "vector_search") as step:
                 vector_results = await self.db.vector_search_memories(
@@ -324,13 +326,13 @@ class TracedRetriever:
                     if "V" not in chunk.sources:
                         chunk.sources.append("V")
 
-        # Step 9: Hybrid search (full pipeline with fusion)
+        # Step 9: Hybrid search (fusion + reranking, using pre-fetched results)
         with self._trace_step(trace, "hybrid_fusion") as step:
             # Count unique chunks before fusion
             all_chunk_ids = set(trace.chunk_traces.keys())
             step.input_count = len(all_chunk_ids)
 
-            # Call hybrid search
+            # Call hybrid search with pre-fetched BM25/vector results to avoid duplicate queries
             scored_memories = await self.pipeline.hybrid.search_memories(
                 query=query,
                 query_embedding=query_embedding if query_embedding else None,
@@ -338,6 +340,8 @@ class TracedRetriever:
                 graph_memory_scores=graph_memory_scores,
                 path_memories=[sm.memory for sm in path_memories],
                 path_memory_scores=path_memory_scores,
+                bm25_results=bm25_results,
+                vector_results=vector_results if vector_results else None,
                 use_dynamic_k=False,
             )
 

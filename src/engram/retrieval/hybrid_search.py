@@ -216,6 +216,8 @@ class HybridSearch:
         path_memories: list[SemanticMemory] | None = None,
         path_memory_scores: dict[str, float] | None = None,
         bm25_query: str | None = None,
+        bm25_results: list[tuple[SemanticMemory, float]] | None = None,
+        vector_results: list[tuple[SemanticMemory, float]] | None = None,
         use_dynamic_k: bool = True,
     ) -> list[ScoredMemory]:
         """
@@ -229,6 +231,8 @@ class HybridSearch:
             path_memories: Memories from path-based retrieval (v4.5)
             path_memory_scores: Scores from path retrieval (v4.5)
             bm25_query: Expanded query for BM25 (with concept variants)
+            bm25_results: Pre-fetched BM25 results (skip BM25 search if provided)
+            vector_results: Pre-fetched vector results (skip vector search if provided)
             use_dynamic_k: Whether to use dynamic top_k based on query complexity
 
         Returns:
@@ -244,23 +248,25 @@ class HybridSearch:
         # Check retrieval mode
         use_vector = settings.retrieval_mode != "bm25_graph" and query_embedding is not None
 
-        # 1. Vector search (skip in bm25_graph mode)
-        vector_results: list[tuple[SemanticMemory, float]] = []
-        if use_vector:
-            vector_results = await self.db.vector_search_memories(
-                embedding=query_embedding, k=self.vector_k
-            )
+        # 1. Vector search (skip in bm25_graph mode, or use pre-fetched results)
+        if vector_results is None:
+            vector_results = []
+            if use_vector:
+                vector_results = await self.db.vector_search_memories(
+                    embedding=query_embedding, k=self.vector_k
+                )
         vector_ranked = [(m.id, score) for m, score in vector_results]
 
-        # 2. BM25 full-text search (always)
-        # Use expanded bm25_query if provided (contains concept variants)
-        bm25_search_query = bm25_query if bm25_query else query
-        bm25_results = await self.db.fulltext_search_memories(
-            query_text=bm25_search_query, k=self.bm25_k
-        )
+        # 2. BM25 full-text search (use pre-fetched results if provided)
+        if bm25_results is None:
+            # Use expanded bm25_query if provided (contains concept variants)
+            bm25_search_query = bm25_query if bm25_query else query
+            bm25_results = await self.db.fulltext_search_memories(
+                query_text=bm25_search_query, k=self.bm25_k
+            )
+            if bm25_query:
+                logger.debug(f"BM25 expanded query: {bm25_query[:100]}...")
         bm25_ranked = [(m.id, score) for m, score in bm25_results]
-        if bm25_query:
-            logger.debug(f"BM25 expanded query: {bm25_query[:100]}...")
 
         # 3. Graph-based results (if provided)
         graph_ranked: list[tuple[str, float]] = []
