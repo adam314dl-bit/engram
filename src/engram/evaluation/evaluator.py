@@ -16,7 +16,11 @@ Metrics:
 Usage:
     uv run python -m engram.evaluation.evaluator test_data.csv
 
-Input CSV format:
+Input CSV format (url column is optional):
+    question,answer
+    "Кто лид фронтенда?","Или"
+
+    # Or with URL for source matching:
     question,answer,url
     "Кто лид фронтенда?","Или","https://confluence.company.com/..."
 """
@@ -292,10 +296,22 @@ class JudgeLLM:
             "relevance": 0.25,
             "no_contradiction": 0.15,
         },
+        "short_no_url": {  # Short answer without URL - no source matching
+            "source_match": 0.00,
+            "key_info_match": 0.50,
+            "relevance": 0.30,
+            "no_contradiction": 0.20,
+        },
         "full": {
             "source_match": 0.10,
             "key_info_match": 0.40,
             "relevance": 0.30,
+            "no_contradiction": 0.20,
+        },
+        "full_no_url": {  # Full answer without URL - no source matching
+            "source_match": 0.00,
+            "key_info_match": 0.45,
+            "relevance": 0.35,
             "no_contradiction": 0.20,
         },
         "empty": {
@@ -597,8 +613,10 @@ def classify_answer(human_answer: str, human_url: str) -> str:
     Returns:
         - empty: no answer and no URL
         - url_only: only URL provided, no text
-        - short: <50 chars or <5 words
-        - full: complete answer
+        - short: <50 chars or <5 words (with URL)
+        - short_no_url: <50 chars or <5 words (without URL)
+        - full: complete answer (with URL)
+        - full_no_url: complete answer (without URL)
     """
     answer = human_answer.strip() if human_answer else ""
     url = human_url.strip() if human_url else ""
@@ -610,10 +628,13 @@ def classify_answer(human_answer: str, human_url: str) -> str:
         return "url_only"
 
     words = answer.split()
-    if len(answer) < 50 or len(words) < 5:
-        return "short"
+    is_short = len(answer) < 50 or len(words) < 5
+    has_url = bool(url)
 
-    return "full"
+    if is_short:
+        return "short" if has_url else "short_no_url"
+
+    return "full" if has_url else "full_no_url"
 
 
 def check_source_match(human_url: str, engram_sources: list[str]) -> float:
@@ -773,6 +794,8 @@ class EngramEvaluator:
 
         Supports:
         - Comma or semicolon delimiters (auto-detected)
+        - Required columns: question, answer
+        - Optional column: url (for source matching)
         - English columns: question, answer, url
         - Russian columns: Вопрос, Правильный ответ, Ссылка на правильный ответ
         - UTF-8 with or without BOM
@@ -1062,7 +1085,7 @@ def main() -> None:
     parser.add_argument(
         "csv_path",
         type=str,
-        help="Path to input CSV (question,answer,url)",
+        help="Path to input CSV (question,answer) or (question,answer,url)",
     )
     parser.add_argument(
         "--engram-url",
