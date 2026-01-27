@@ -87,10 +87,12 @@ class TracedRetriever:
 
             # Get or create chunk trace
             if memory_id not in trace.chunk_traces:
-                content_preview = sm.memory.content[:100] if sm.memory.content else ""
+                full_content = sm.memory.content or ""
+                content_preview = full_content[:100] if full_content else ""
                 trace.chunk_traces[memory_id] = ChunkTrace(
                     memory_id=memory_id,
                     content_preview=content_preview,
+                    full_content=full_content,
                 )
 
             chunk = trace.chunk_traces[memory_id]
@@ -227,9 +229,11 @@ class TracedRetriever:
             # Record graph memories
             for rank, memory in enumerate(graph_memories, 1):
                 if memory.id not in trace.chunk_traces:
+                    full_content = memory.content or ""
                     trace.chunk_traces[memory.id] = ChunkTrace(
                         memory_id=memory.id,
-                        content_preview=memory.content[:100] if memory.content else "",
+                        content_preview=full_content[:100] if full_content else "",
+                        full_content=full_content,
                     )
                 chunk = trace.chunk_traces[memory.id]
                 chunk.stage_scores["graph_retrieval"] = graph_memory_scores.get(memory.id, 0)
@@ -259,9 +263,11 @@ class TracedRetriever:
                 # Record path memories
                 for rank, sm in enumerate(path_memories, 1):
                     if sm.memory.id not in trace.chunk_traces:
+                        full_content = sm.memory.content or ""
                         trace.chunk_traces[sm.memory.id] = ChunkTrace(
                             memory_id=sm.memory.id,
-                            content_preview=sm.memory.content[:100] if sm.memory.content else "",
+                            content_preview=full_content[:100] if full_content else "",
+                            full_content=full_content,
                         )
                     chunk = trace.chunk_traces[sm.memory.id]
                     chunk.stage_scores["path_retrieval"] = sm.score
@@ -281,9 +287,11 @@ class TracedRetriever:
 
             for rank, (memory, score) in enumerate(bm25_results, 1):
                 if memory.id not in trace.chunk_traces:
+                    full_content = memory.content or ""
                     trace.chunk_traces[memory.id] = ChunkTrace(
                         memory_id=memory.id,
-                        content_preview=memory.content[:100] if memory.content else "",
+                        content_preview=full_content[:100] if full_content else "",
+                        full_content=full_content,
                     )
                 chunk = trace.chunk_traces[memory.id]
                 chunk.stage_scores["bm25_search"] = score
@@ -302,9 +310,11 @@ class TracedRetriever:
 
                 for rank, (memory, score) in enumerate(vector_results, 1):
                     if memory.id not in trace.chunk_traces:
+                        full_content = memory.content or ""
                         trace.chunk_traces[memory.id] = ChunkTrace(
                             memory_id=memory.id,
-                            content_preview=memory.content[:100] if memory.content else "",
+                            content_preview=full_content[:100] if full_content else "",
+                            full_content=full_content,
                         )
                     chunk = trace.chunk_traces[memory.id]
                     chunk.stage_scores["vector_search"] = score
@@ -369,5 +379,5 @@ class TracedRetriever:
         search_lower = search_text.lower()
         return [
             chunk for chunk in trace.chunk_traces.values()
-            if search_lower in chunk.content_preview.lower()
+            if search_lower in chunk.full_content.lower()
         ]

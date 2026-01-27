@@ -87,15 +87,18 @@ async def main(args: argparse.Namespace) -> None:
             print(f"  No chunks found containing '{args.search_text}'")
         else:
             print(f"  Found {len(matching_chunks)} matching chunks:\n")
-            for chunk in matching_chunks:
-                print(f"  ID: {chunk.memory_id[:20]}...")
-                print(f"  Preview: {chunk.content_preview[:60]}...")
+            for i, chunk in enumerate(matching_chunks, 1):
+                print(f"  [{i}] ID: {chunk.memory_id}")
                 print(f"  Sources: {', '.join(chunk.sources)}")
                 print(f"  Included: {chunk.included}")
                 if chunk.included:
                     print(f"  Final rank: {chunk.final_rank}")
                 else:
                     print(f"  Dropped at: {chunk.dropped_at()}")
+                print()
+                print(f"  --- Full Content ---")
+                print(f"  {chunk.full_content}")
+                print(f"  --- End Content ---")
                 print()
 
                 # Show journey through pipeline
@@ -110,6 +113,7 @@ async def main(args: argparse.Namespace) -> None:
                         else:
                             print(f"    {marker} {step_info['step']}")
                     print()
+                print("-" * 60)
 
     # Find specific chunk if requested
     if args.find_chunk:

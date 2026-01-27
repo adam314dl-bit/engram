@@ -19,6 +19,7 @@ class ChunkTrace:
 
     memory_id: str
     content_preview: str  # First ~100 chars of content
+    full_content: str = ""  # Full content for detailed inspection
 
     # Scores at each stage: step_name -> score
     stage_scores: dict[str, float] = field(default_factory=dict)
@@ -204,6 +205,7 @@ class RetrievalTrace:
                 mid: {
                     "memory_id": c.memory_id,
                     "content_preview": c.content_preview,
+                    "full_content": c.full_content,
                     "stage_scores": c.stage_scores,
                     "stage_ranks": c.stage_ranks,
                     "sources": c.sources,
