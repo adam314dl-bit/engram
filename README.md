@@ -20,10 +20,12 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 - **BM25+Graph Mode**: Default mode - no embedding model required, uses BM25 + graph traversal
 - **Hybrid Mode**: Optional - adds vector similarity search (set `RETRIEVAL_MODE=hybrid`)
 - **Spreading Activation**: Brain-like associative retrieval through concept networks
-- **Weighted RRF**: Prioritized fusion with BM25 (0.45) > Vector (0.35) > Graph (0.20)
+- **Path-Based Retrieval**: Finds memories bridging multiple query concepts (shared memories, bridge concepts)
+- **Weighted RRF**: Prioritized fusion with BM25 (0.35), Path (0.35), Graph (0.30)
 - **Jina Reranker v3**: Multilingual cross-encoder for improved retrieval precision
 - **MMR Diversity**: Maximal Marginal Relevance prevents redundant results (hybrid mode only)
 - **Dynamic top_k**: Query complexity classification adjusts retrieval depth
+- **Retrieval Debugging**: Trace chunks through pipeline stages with `debug_retrieval.py`
 
 **Dual-Content Memory:**
 - **Separate Search vs Display**: `search_content` for search, `content` for LLM generation
@@ -454,6 +456,107 @@ Recommended concurrency by GPU count:
 | 2    | 2                        | 128                            |
 | 4    | 4                        | 256                            |
 
+## Debug Retrieval CLI (v4.5)
+
+Trace chunks through every pipeline stage to understand where relevant results appear and disappear.
+
+### Basic Usage
+
+```bash
+# Debug a query
+uv run python scripts/debug_retrieval.py "какие типы задач в jira"
+
+# Search for chunks containing specific text
+uv run python scripts/debug_retrieval.py "типы задач в jira" --search-text "Epic"
+
+# Track a specific chunk through the pipeline
+uv run python scripts/debug_retrieval.py "jira" --find-chunk "mem-abc123"
+
+# Verbose output with full context
+uv run python scripts/debug_retrieval.py "jira" -v --show-context
+
+# Save trace to file for later analysis
+uv run python scripts/debug_retrieval.py "jira" --save-trace
+```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--search-text TEXT` | Find chunks containing this text at each stage |
+| `--find-chunk ID` | Track a specific memory ID through the pipeline |
+| `--top-k N` | Number of results to return (default: 20) |
+| `--show-context` | Show full content context for top results |
+| `--save-trace` | Save trace to JSON file |
+| `-v, --verbose` | Verbose output with full journey details |
+
+### Example Output
+
+```
+Query: docker container
+------------------------------------------------------------
+
+Running traced retrieval...
+
+============================================================
+Retrieval Trace: abc123-def456
+Query: docker container
+Timestamp: 2025-01-27T12:00:00
+Total duration: 245.3ms
+Extracted concepts: docker, container
+
+Pipeline Steps:
+  query_embedding: 0 -> 0 (0.0ms)
+  concept_extraction: 0 -> 2 (45.2ms)
+  concept_matching: 2 -> 2 (12.1ms)
+  spreading_activation: 2 -> 15 (28.4ms)
+  graph_retrieval: 15 -> 42 (35.6ms)
+  path_retrieval: 2 -> 8 (22.3ms)
+  bm25_search: 0 -> 50 (18.7ms)
+  hybrid_fusion: 85 -> 20 (82.9ms)
+    dropped: 65
+
+Sources:
+  BM25: 50
+  Graph (spreading): 42
+  Path: 8
+
+Final: 20 chunks included
+============================================================
+```
+
+### Source Codes
+
+| Code | Source |
+|------|--------|
+| `B` | BM25 full-text search |
+| `G` | Graph (spreading activation) |
+| `P` | Path-based retrieval |
+| `V` | Vector search (hybrid mode only) |
+| `BE` | BM25 Expanded |
+| `S` | Semantic rewrite |
+| `H` | HyDE |
+
+### Path Retrieval Details
+
+When using `-v --show-context`, path retrieval details are shown:
+
+```
+--- Path Retrieval Details ---
+  Paths found: 3
+  Bridge concepts: 5
+  Shared memories: 1
+  Path memories: 4
+
+  Paths between concepts:
+    docker... -> container... (len=1)
+    docker... -> kubernetes... (len=2)
+
+  Top bridge concepts:
+    kubernetes (connects 2 query concepts)
+    virtualization (connects 2 query concepts)
+```
+
 ## Project Structure
 
 ```
@@ -474,8 +577,9 @@ engram/
 │   ├── setup_rhel.sh    # Production setup
 │   ├── chat.py          # Interactive CLI
 │   ├── run_ingestion.py
-│   ├── compute_layout.py      # Pre-compute graph layout
-│   └── create_concept_index.py # Concept fulltext index
+│   ├── compute_layout.py       # Pre-compute graph layout
+│   ├── create_concept_index.py # Concept fulltext index
+│   └── debug_retrieval.py      # Debug retrieval pipeline (v4.5)
 └── CLAUDE.md            # AI assistant instructions
 ```
 
@@ -566,7 +670,7 @@ uv run ruff check src/engram
 - [x] Neo4j fulltext index includes both fields
 
 **Weighted Retrieval:**
-- [x] Configurable RRF weights: BM25 (0.45) > Vector (0.35) > Graph (0.20)
+- [x] Configurable RRF weights (updated in v4.5: BM25=0.35, Path=0.35, Graph=0.30)
 - [x] BM25 searches `content` field (original facts)
 - [x] Vector searches `search_content` embedding (summary + keywords)
 - [x] `weighted_rrf()` function for source-prioritized fusion
@@ -590,6 +694,17 @@ uv run ruff check src/engram
 - [x] Semantic edge boost in spreading activation (1.5x)
 - [x] ConceptResolver for duplicate prevention during ingestion
 - [x] Graph quality metrics and reporting
+
+**v4.5 Path-Based Retrieval & Observability:**
+- [x] Path-based retrieval for memories bridging multiple query concepts
+- [x] Shared memories (linked to 2+ query concepts)
+- [x] Bridge concepts (connecting multiple query concepts)
+- [x] Path memories (from intermediate concepts on paths)
+- [x] Updated RRF weights: BM25 (0.35), Graph (0.30), Path (0.35)
+- [x] Retrieval observability with ChunkTrace, StepTrace, RetrievalTrace
+- [x] TracedRetriever wrapper for pipeline tracing
+- [x] Debug CLI (`scripts/debug_retrieval.py`) with chunk journey tracking
+- [x] Trace export to JSON files
 
 ### Planned
 
