@@ -38,6 +38,12 @@ def get_reranker() -> "AutoModel":
     Returns:
         Jina Reranker v3 model instance
     """
+    import os
+
+    # Force offline mode to skip HuggingFace HTTP requests
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
     if not settings.reranker_enabled:
         raise RuntimeError("Reranker is disabled in settings")
 
