@@ -52,12 +52,22 @@ def get_reranker() -> "AutoModel":
         logger.warning("CUDA requested but not available, falling back to CPU")
         device = "cpu"
 
-    # Load Jina Reranker v3
-    model = AutoModel.from_pretrained(
-        settings.reranker_model,
-        torch_dtype="auto",
-        trust_remote_code=True,
-    )
+    # Load Jina Reranker v3 (try local cache first to skip HuggingFace online checks)
+    try:
+        model = AutoModel.from_pretrained(
+            settings.reranker_model,
+            torch_dtype="auto",
+            trust_remote_code=True,
+            local_files_only=True,  # Skip HF network requests for faster loading
+        )
+    except OSError:
+        # Model not cached, download it
+        logger.info("Model not in cache, downloading from HuggingFace...")
+        model = AutoModel.from_pretrained(
+            settings.reranker_model,
+            torch_dtype="auto",
+            trust_remote_code=True,
+        )
 
     # Move to device
     model = model.to(device)
