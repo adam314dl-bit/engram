@@ -83,6 +83,8 @@ def rerank(
     Returns:
         List of RerankedItem sorted by rerank_score descending
     """
+    import time
+
     if not settings.reranker_enabled:
         # Return candidates as-is if reranker disabled
         return [
@@ -105,8 +107,15 @@ def rerank(
     # Extract documents from candidates
     documents = [content for _, content, _ in candidates]
 
+    # Log stats for debugging
+    avg_len = sum(len(d) for d in documents) / len(documents) if documents else 0
+    logger.debug(f"Reranking {len(documents)} docs, avg length: {avg_len:.0f} chars")
+
     # Use Jina's rerank method (returns list of dicts with 'index' and 'relevance_score')
+    start = time.perf_counter()
     results = model.rerank(query, documents, top_n=min(top_k, len(candidates)))
+    elapsed = (time.perf_counter() - start) * 1000
+    logger.debug(f"Reranker inference took {elapsed:.1f}ms")
 
     # Build output mapping results back to original candidates
     reranked_items: list[RerankedItem] = []
