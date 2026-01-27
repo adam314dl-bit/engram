@@ -21,10 +21,7 @@ from engram.ingestion.concept_extractor import ConceptExtractor
 from engram.ingestion.llm_client import get_enrichment_llm_client
 from engram.ingestion.person_extractor import PersonQueryType, classify_person_query
 from engram.models import Concept, EpisodicMemory, SemanticMemory
-from engram.preprocessing.transliteration import (
-    build_expanded_bm25_query,
-    expand_query_transliteration,
-)
+from engram.preprocessing.transliteration import build_expanded_bm25_query
 from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
 from engram.retrieval.hybrid_search import (
     HybridSearch,
@@ -135,7 +132,6 @@ class RetrievalPipeline:
         top_k_memories: int | None = None,
         top_k_episodes: int | None = None,
         include_episodes: bool = True,
-        use_transliteration: bool = True,
     ) -> RetrievalResult:
         """
         Execute the full retrieval pipeline.
@@ -145,7 +141,6 @@ class RetrievalPipeline:
             top_k_memories: Number of memories to return (default from settings)
             top_k_episodes: Number of episodes to return (default 3)
             include_episodes: Whether to include similar episodes
-            use_transliteration: Whether to expand query with transliteration variants
 
         Returns:
             RetrievalResult with all retrieved information
@@ -171,14 +166,7 @@ class RetrievalPipeline:
             f"retrieval_mode={settings.retrieval_mode}"
         )
 
-        # 2. Expand query with transliteration variants
-        transliteration_variants: list[str] = []
-        if use_transliteration:
-            transliteration_variants = expand_query_transliteration(query)
-            if len(transliteration_variants) > 1:
-                logger.debug(f"Transliteration variants: {transliteration_variants}")
-
-        # 3. Embed query (only in hybrid mode)
+        # 2. Embed query (only in hybrid mode)
         query_embedding: list[float] = []
         if use_vector:
             logger.debug(f"Embedding query: {query[:50]}...")
@@ -369,7 +357,7 @@ class RetrievalPipeline:
             retrieval_sources=retrieval_sources,
             query_complexity=query_complexity,
             person_query_type=person_query_type,
-            transliteration_variants=transliteration_variants,
+            transliteration_variants=[],  # No longer used, concept aliases used instead
             raw_tables=raw_tables,
             path_result=path_result,
         )

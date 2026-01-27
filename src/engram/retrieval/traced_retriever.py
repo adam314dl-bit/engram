@@ -245,6 +245,7 @@ class TracedRetriever:
         # Step 6: Path-based retrieval
         path_memories: list[ScoredMemory] = []
         path_memory_scores: dict[str, float] = {}
+        path_result = None
         with self._trace_step(trace, "path_retrieval") as step:
             step.input_count = len(seed_concept_ids)
             if len(seed_concept_ids) >= 2:
@@ -351,13 +352,23 @@ class TracedRetriever:
             filepath = trace.save()
             logger.debug(f"Saved trace to {filepath}")
 
-        # Now get the full result using the standard pipeline
-        # (we've already computed everything, but this gives us the full RetrievalResult)
-        result = await self.pipeline.retrieve(
+        # Build RetrievalResult from traced data (avoid calling pipeline.retrieve() again)
+        # Count sources
+        retrieval_sources: dict[str, int] = {}
+        for sm in scored_memories:
+            for source in sm.sources:
+                retrieval_sources[source] = retrieval_sources.get(source, 0) + 1
+
+        result = RetrievalResult(
             query=query,
-            top_k_memories=top_k_memories,
-            top_k_episodes=top_k_episodes,
-            include_episodes=include_episodes,
+            query_embedding=query_embedding if query_embedding else None,
+            query_concepts=[],  # Not needed for debug output
+            activated_concepts=activated_concepts,
+            activation_result=None,
+            memories=scored_memories[:top_k_memories],
+            episodes=[],  # Skip episode search in traced mode
+            retrieval_sources=retrieval_sources,
+            path_result=path_result,
         )
 
         return result, trace
