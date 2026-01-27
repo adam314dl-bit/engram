@@ -188,7 +188,8 @@ def expand_query_transliteration(query: str) -> list[str]:
     Expand query with transliteration variants.
 
     Returns original query plus transliterated variants for
-    both Cyrillic and Latin forms.
+    both Cyrillic and Latin forms. Also handles lemmatized forms
+    to match "роутинге" → "routing" (via "роутинг").
 
     Args:
         query: Original query
@@ -203,10 +204,17 @@ def expand_query_transliteration(query: str) -> list[str]:
     if cyrillic_variant != query:
         variants.append(cyrillic_variant)
 
-    # Add Latin variant
+    # Add Latin variant (direct transliteration)
     latin_variant = to_latin(query)
     if latin_variant != query and latin_variant not in variants:
         variants.append(latin_variant)
+
+    # Add lemmatized + transliterated variant (v4.5.1)
+    # This handles "роутинге" → lemmatize → "роутинг" → transliterate → "routing"
+    if has_cyrillic(query):
+        lemma_translit = _lemmatize_and_transliterate(query)
+        if lemma_translit and lemma_translit not in variants:
+            variants.append(lemma_translit)
 
     # If query has mixed script, also try fixing lookalikes
     if is_mixed_script(query):
@@ -215,6 +223,38 @@ def expand_query_transliteration(query: str) -> list[str]:
             variants.append(fixed)
 
     return variants
+
+
+def _lemmatize_and_transliterate(query: str) -> str:
+    """
+    Lemmatize Russian words then transliterate to Latin.
+
+    Handles cases like "роутинге" → "роутинг" → "routing".
+
+    Args:
+        query: Query with Russian words
+
+    Returns:
+        Query with lemmatized Russian words transliterated to Latin
+    """
+    try:
+        from engram.preprocessing.russian import lemmatize_word, tokenize
+    except ImportError:
+        return ""
+
+    words = tokenize(query)
+    result_words = []
+
+    for word in words:
+        if has_cyrillic(word):
+            # Lemmatize Russian word, then transliterate
+            lemma = lemmatize_word(word)
+            translit = to_latin(lemma)
+            result_words.append(translit)
+        else:
+            result_words.append(word)
+
+    return " ".join(result_words)
 
 
 def fix_lookalike_typos(text: str) -> str:

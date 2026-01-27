@@ -215,6 +215,7 @@ class HybridSearch:
         graph_memory_scores: dict[str, float] | None = None,
         path_memories: list[SemanticMemory] | None = None,
         path_memory_scores: dict[str, float] | None = None,
+        transliteration_variants: list[str] | None = None,
         use_dynamic_k: bool = True,
     ) -> list[ScoredMemory]:
         """
@@ -227,6 +228,7 @@ class HybridSearch:
             graph_memory_scores: Scores from graph traversal (optional)
             path_memories: Memories from path-based retrieval (v4.5)
             path_memory_scores: Scores from path retrieval (v4.5)
+            transliteration_variants: Query variants (e.g., ["роутинг", "routing"])
             use_dynamic_k: Whether to use dynamic top_k based on query complexity
 
         Returns:
@@ -251,9 +253,28 @@ class HybridSearch:
         vector_ranked = [(m.id, score) for m, score in vector_results]
 
         # 2. BM25 full-text search (always)
-        bm25_results = await self.db.fulltext_search_memories(
-            query_text=query, k=self.bm25_k
-        )
+        # Use transliteration variants if provided (v4.5.1)
+        bm25_queries = transliteration_variants if transliteration_variants else [query]
+        bm25_results: list[tuple[SemanticMemory, float]] = []
+        bm25_seen_ids: set[str] = set()
+
+        for bm25_query in bm25_queries:
+            variant_results = await self.db.fulltext_search_memories(
+                query_text=bm25_query, k=self.bm25_k
+            )
+            for m, score in variant_results:
+                if m.id not in bm25_seen_ids:
+                    bm25_results.append((m, score))
+                    bm25_seen_ids.add(m.id)
+                else:
+                    # Update score if this variant found it with higher score
+                    for i, (existing_m, existing_score) in enumerate(bm25_results):
+                        if existing_m.id == m.id and score > existing_score:
+                            bm25_results[i] = (m, score)
+                            break
+
+        # Sort by score after merging
+        bm25_results.sort(key=lambda x: x[1], reverse=True)
         bm25_ranked = [(m.id, score) for m, score in bm25_results]
 
         # 3. Graph-based results (if provided)
@@ -605,6 +626,7 @@ class HybridSearch:
         graph_memory_scores: dict[str, float] | None = None,
         path_memories: list[SemanticMemory] | None = None,
         path_memory_scores: dict[str, float] | None = None,
+        transliteration_variants: list[str] | None = None,
     ) -> list[ScoredMemory]:
         """
         Search using multiple query variants with RRF fusion.
@@ -634,6 +656,7 @@ class HybridSearch:
             graph_memory_scores: Scores from graph traversal
             path_memories: Memories from path-based retrieval (v4.5)
             path_memory_scores: Scores from path retrieval (v4.5)
+            transliteration_variants: Query variants (e.g., ["роутинг", "routing"])
 
         Returns:
             List of ScoredMemory fused and reranked
@@ -659,10 +682,28 @@ class HybridSearch:
                 all_memories[m.id] = m
                 memory_sources.setdefault(m.id, []).append("V")  # Vector
 
-        # BM25 always runs
-        orig_bm25_results = await self.db.fulltext_search_memories(
-            query_text=original_query, k=self.bm25_k
-        )
+        # BM25 always runs - use transliteration variants if provided (v4.5.1)
+        bm25_queries = transliteration_variants if transliteration_variants else [original_query]
+        orig_bm25_results: list[tuple[SemanticMemory, float]] = []
+        bm25_seen_ids: set[str] = set()
+
+        for bm25_query in bm25_queries:
+            variant_results = await self.db.fulltext_search_memories(
+                query_text=bm25_query, k=self.bm25_k
+            )
+            for m, score in variant_results:
+                if m.id not in bm25_seen_ids:
+                    orig_bm25_results.append((m, score))
+                    bm25_seen_ids.add(m.id)
+                else:
+                    # Update score if this variant found it with higher score
+                    for i, (existing_m, existing_score) in enumerate(orig_bm25_results):
+                        if existing_m.id == m.id and score > existing_score:
+                            orig_bm25_results[i] = (m, score)
+                            break
+
+        # Sort by score after merging
+        orig_bm25_results.sort(key=lambda x: x[1], reverse=True)
         orig_bm25_ranked = [(m.id, score) for m, score in orig_bm25_results]
         all_ranked_lists.append(orig_bm25_ranked)
         all_weights.append(settings.rrf_bm25_weight)

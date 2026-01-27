@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from typing import Generator
 
 from engram.config import settings
+from engram.preprocessing.transliteration import expand_query_transliteration
 from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
 from engram.retrieval.hybrid_search import ScoredMemory
 from engram.retrieval.observability import (
@@ -152,6 +153,11 @@ class TracedRetriever:
             else:
                 step.metadata["skipped"] = "bm25_graph mode"
 
+        # Step 1.5: Generate transliteration variants (v4.5.1)
+        transliteration_variants = expand_query_transliteration(query)
+        if len(transliteration_variants) > 1:
+            logger.debug(f"Transliteration variants: {transliteration_variants}")
+
         # Step 2: Extract concepts
         with self._trace_step(trace, "concept_extraction") as step:
             concept_result = await self.pipeline.concept_extractor.extract(query)
@@ -278,12 +284,31 @@ class TracedRetriever:
             else:
                 step.metadata["skipped"] = "need >= 2 concepts"
 
-        # Step 7: BM25 search
+        # Step 7: BM25 search (with transliteration variants)
         with self._trace_step(trace, "bm25_search") as step:
-            bm25_results = await self.db.fulltext_search_memories(
-                query_text=query, k=settings.retrieval_bm25_k
-            )
+            # Search using all transliteration variants (v4.5.1)
+            bm25_results: list[tuple] = []
+            bm25_seen_ids: set[str] = set()
+
+            for bm25_query in transliteration_variants:
+                variant_results = await self.db.fulltext_search_memories(
+                    query_text=bm25_query, k=settings.retrieval_bm25_k
+                )
+                for memory, score in variant_results:
+                    if memory.id not in bm25_seen_ids:
+                        bm25_results.append((memory, score))
+                        bm25_seen_ids.add(memory.id)
+                    else:
+                        # Update score if this variant found higher score
+                        for i, (existing_m, existing_score) in enumerate(bm25_results):
+                            if existing_m.id == memory.id and score > existing_score:
+                                bm25_results[i] = (memory, score)
+                                break
+
+            # Sort by score
+            bm25_results.sort(key=lambda x: x[1], reverse=True)
             step.output_count = len(bm25_results)
+            step.metadata["variants"] = transliteration_variants
 
             for rank, (memory, score) in enumerate(bm25_results, 1):
                 if memory.id not in trace.chunk_traces:
@@ -329,7 +354,7 @@ class TracedRetriever:
             all_chunk_ids = set(trace.chunk_traces.keys())
             step.input_count = len(all_chunk_ids)
 
-            # Call hybrid search
+            # Call hybrid search with transliteration variants (v4.5.1)
             scored_memories = await self.pipeline.hybrid.search_memories(
                 query=query,
                 query_embedding=query_embedding if query_embedding else None,
@@ -337,6 +362,7 @@ class TracedRetriever:
                 graph_memory_scores=graph_memory_scores,
                 path_memories=[sm.memory for sm in path_memories],
                 path_memory_scores=path_memory_scores,
+                transliteration_variants=transliteration_variants,
                 use_dynamic_k=False,
             )
 
