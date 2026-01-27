@@ -119,14 +119,10 @@ async def main(args: argparse.Namespace) -> None:
         synth_start = time.perf_counter()
         synthesizer = ResponseSynthesizer(llm_client=get_llm_client())
 
-        # Prepare memories for synthesis
-        memories = [sm.memory for sm in result.memories]
-
         answer_start = time.perf_counter()
         answer = await synthesizer.synthesize(
             query=args.query,
-            memories=memories,
-            activated_concepts=result.activated_concepts,
+            retrieval=result,
         )
         timings["answer_generation"] = (time.perf_counter() - answer_start) * 1000
         timings["synthesizer_init"] = (synth_start - retrieval_start) * 1000  # Minimal
