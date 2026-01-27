@@ -22,11 +22,22 @@ from engram.retrieval.hybrid_search import (
     ScoredMemory,
     hybrid_search,
 )
+from engram.retrieval.observability import (
+    ChunkTrace,
+    RetrievalTrace,
+    StepTrace,
+    create_trace,
+)
+from engram.retrieval.path_retrieval import (
+    PathBasedRetriever,
+    PathRetrievalResult,
+)
 from engram.retrieval.pipeline import (
     RetrievalPipeline,
     RetrievalResult,
     retrieve,
 )
+from engram.retrieval.traced_retriever import TracedRetriever
 from engram.retrieval.reranker import (
     RerankedItem,
     clear_reranker_cache,
@@ -74,6 +85,15 @@ __all__ = [
     "ScoredMemory",
     "ScoredEpisode",
     "hybrid_search",
+    # Path-based retrieval (v4.5)
+    "PathBasedRetriever",
+    "PathRetrievalResult",
+    # Observability (v4.5)
+    "ChunkTrace",
+    "StepTrace",
+    "RetrievalTrace",
+    "create_trace",
+    "TracedRetriever",
     # Pipeline
     "RetrievalPipeline",
     "RetrievalResult",

@@ -358,6 +358,190 @@ class Neo4jClient:
         }
 
     # ==========================================================================
+    # v4.5: Path-based retrieval operations
+    # ==========================================================================
+
+    async def find_shortest_paths(
+        self,
+        concept_ids: list[str],
+        max_length: int = 3,
+    ) -> list[dict]:
+        """Find shortest paths between all pairs of query concepts.
+
+        Args:
+            concept_ids: List of concept IDs to find paths between
+            max_length: Maximum path length (number of hops)
+
+        Returns:
+            List of dicts with keys: src_id, tgt_id, path_ids, length
+        """
+        if len(concept_ids) < 2:
+            return []
+
+        # Note: Cypher shortestPath requires literal path length, so we use APOC
+        # or iterate with BFS. Using variable-length pattern with limit.
+        query = """
+        UNWIND $concept_ids AS src_id
+        UNWIND $concept_ids AS tgt_id
+        WITH src_id, tgt_id WHERE src_id < tgt_id
+        MATCH (s:Concept {id: src_id}), (t:Concept {id: tgt_id})
+        MATCH path = shortestPath((s)-[:RELATED_TO*1..3]-(t))
+        WHERE length(path) <= $max_length
+        RETURN src_id, tgt_id,
+               [n IN nodes(path) | n.id] AS path_ids,
+               length(path) AS len
+        ORDER BY len ASC
+        """
+        results: list[dict] = []
+        async with self.session() as session:
+            result = await session.run(
+                query,
+                concept_ids=concept_ids,
+                max_length=max_length,
+            )
+            async for record in result:
+                results.append({
+                    "src_id": record["src_id"],
+                    "tgt_id": record["tgt_id"],
+                    "path_ids": list(record["path_ids"]),
+                    "length": record["len"],
+                })
+        return results
+
+    async def find_bridge_concepts(
+        self,
+        concept_ids: list[str],
+        max_hops: int = 2,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Find concepts connected to 2+ query concepts (bridge nodes).
+
+        Args:
+            concept_ids: List of query concept IDs
+            max_hops: Maximum hops from query concepts
+            limit: Maximum number of bridge concepts to return
+
+        Returns:
+            List of dicts with keys: id, name, connected, count
+        """
+        if len(concept_ids) < 2:
+            return []
+
+        query = """
+        UNWIND $concept_ids AS qid
+        MATCH (q:Concept {id: qid})-[:RELATED_TO*1..2]-(bridge:Concept)
+        WHERE NOT bridge.id IN $concept_ids
+          AND (bridge.status IS NULL OR bridge.status = 'active')
+        WITH bridge, collect(DISTINCT qid) AS connected
+        WHERE size(connected) >= 2
+        RETURN bridge.id AS id, bridge.name AS name,
+               connected, size(connected) AS count
+        ORDER BY count DESC
+        LIMIT $limit
+        """
+        results: list[dict] = []
+        async with self.session() as session:
+            result = await session.run(
+                query,
+                concept_ids=concept_ids,
+                limit=limit,
+            )
+            async for record in result:
+                results.append({
+                    "id": record["id"],
+                    "name": record["name"],
+                    "connected": list(record["connected"]),
+                    "count": record["count"],
+                })
+        return results
+
+    async def find_shared_memories(
+        self,
+        concept_ids: list[str],
+        min_links: int = 2,
+        limit: int = 50,
+    ) -> list[tuple[SemanticMemory, list[str], int]]:
+        """Find memories linked to multiple query concepts.
+
+        Args:
+            concept_ids: List of query concept IDs
+            min_links: Minimum number of concept links required
+            limit: Maximum number of memories to return
+
+        Returns:
+            List of tuples: (memory, linked_concept_ids, link_count)
+        """
+        if len(concept_ids) < 2:
+            return []
+
+        query = """
+        MATCH (m:SemanticMemory)-[:ABOUT]->(c:Concept)
+        WHERE c.id IN $concept_ids
+          AND m.status IN ['active', 'deprioritized']
+        WITH m, collect(DISTINCT c.id) AS linked
+        WHERE size(linked) >= $min_links
+        RETURN m, linked, size(linked) AS link_count
+        ORDER BY link_count DESC, m.importance DESC
+        LIMIT $limit
+        """
+        results: list[tuple[SemanticMemory, list[str], int]] = []
+        async with self.session() as session:
+            result = await session.run(
+                query,
+                concept_ids=concept_ids,
+                min_links=min_links,
+                limit=limit,
+            )
+            async for record in result:
+                memory = SemanticMemory.from_dict(dict(record["m"]))
+                linked = list(record["linked"])
+                link_count = record["link_count"]
+                results.append((memory, linked, link_count))
+        return results
+
+    async def get_memories_for_path_concepts(
+        self,
+        path_concept_ids: list[str],
+        exclude_ids: list[str] | None = None,
+        limit: int = 50,
+    ) -> list[SemanticMemory]:
+        """Get memories from intermediate path concepts.
+
+        Args:
+            path_concept_ids: Concept IDs from paths (intermediate nodes)
+            exclude_ids: Memory IDs to exclude
+            limit: Maximum number of memories to return
+
+        Returns:
+            List of SemanticMemory objects
+        """
+        if not path_concept_ids:
+            return []
+
+        exclude_ids = exclude_ids or []
+
+        query = """
+        MATCH (m:SemanticMemory)-[:ABOUT]->(c:Concept)
+        WHERE c.id IN $path_ids
+          AND NOT m.id IN $exclude_ids
+          AND m.status IN ['active', 'deprioritized']
+        RETURN DISTINCT m
+        ORDER BY m.importance DESC
+        LIMIT $limit
+        """
+        memories: list[SemanticMemory] = []
+        async with self.session() as session:
+            result = await session.run(
+                query,
+                path_ids=path_concept_ids,
+                exclude_ids=exclude_ids,
+                limit=limit,
+            )
+            async for record in result:
+                memories.append(SemanticMemory.from_dict(dict(record["m"])))
+        return memories
+
+    # ==========================================================================
     # Semantic memory operations
     # ==========================================================================
 

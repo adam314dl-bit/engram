@@ -96,7 +96,7 @@ class Settings(BaseSettings):
         description="RRF constant k, higher values reduce top rank dominance"
     )
     rrf_bm25_weight: float = Field(
-        default=0.45,
+        default=0.35,
         description="BM25 weight in weighted RRF fusion"
     )
     rrf_vector_weight: float = Field(
@@ -104,8 +104,12 @@ class Settings(BaseSettings):
         description="Vector search weight (disabled in bm25_graph mode)"
     )
     rrf_graph_weight: float = Field(
+        default=0.30,
+        description="Graph traversal (spreading activation) weight in weighted RRF fusion"
+    )
+    rrf_path_weight: float = Field(
         default=0.35,
-        description="Graph traversal weight in weighted RRF fusion"
+        description="Path-based retrieval weight in weighted RRF fusion"
     )
 
     # Reranker Parameters
@@ -265,6 +269,38 @@ class Settings(BaseSettings):
     enrichment_llm_max_concurrent: int = Field(
         default=24,
         description="Max concurrent requests to enrichment LLM"
+    )
+
+    # v4.5: Path-based retrieval
+    path_max_length: int = Field(
+        default=3,
+        description="Max path length between concepts"
+    )
+    path_bridge_max_hops: int = Field(
+        default=2,
+        description="Max hops for bridge concept detection"
+    )
+    path_shared_min_links: int = Field(
+        default=2,
+        description="Min concept links for shared memories"
+    )
+    path_memory_limit: int = Field(
+        default=50,
+        description="Max memories from path-based retrieval"
+    )
+
+    # v4.5: Observability
+    observability_enabled: bool = Field(
+        default=False,
+        description="Enable retrieval tracing"
+    )
+    observability_save_traces: bool = Field(
+        default=False,
+        description="Save traces to disk"
+    )
+    observability_trace_dir: str = Field(
+        default="./traces",
+        description="Directory for trace files"
     )
 
 def get_dev_settings() -> Settings:

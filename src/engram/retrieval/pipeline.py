@@ -28,6 +28,7 @@ from engram.retrieval.hybrid_search import (
     ScoredMemory,
     classify_query_complexity,
 )
+from engram.retrieval.path_retrieval import PathBasedRetriever, PathRetrievalResult
 from engram.retrieval.quality_filter import apply_source_weight
 from engram.retrieval.spreading_activation import (
     ActivationResult,
@@ -72,6 +73,9 @@ class RetrievalResult:
     query_variants: dict[str, str] = field(default_factory=dict)  # label -> variant
     used_enrichment: bool = False
 
+    # v4.5 additions (path-based retrieval)
+    path_result: PathRetrievalResult | None = None
+
     @property
     def top_memories(self) -> list[SemanticMemory]:
         """Get just the memory objects from scored results."""
@@ -110,12 +114,14 @@ class RetrievalPipeline:
         concept_extractor: ConceptExtractor | None = None,
         spreading_activation: SpreadingActivation | None = None,
         hybrid_search: HybridSearch | None = None,
+        path_retriever: PathBasedRetriever | None = None,
     ) -> None:
         self.db = db
         self.embeddings = embedding_service or get_embedding_service()
         self.concept_extractor = concept_extractor or ConceptExtractor()
         self.spreading = spreading_activation or SpreadingActivation(db=db)
         self.hybrid = hybrid_search or HybridSearch(db=db)
+        self.path_retriever = path_retriever or PathBasedRetriever(db=db)
 
     async def retrieve(
         self,
@@ -250,6 +256,25 @@ class RetrievalPipeline:
                     )
                     graph_memory_scores[memory.id] = score
 
+        # 7.5. Path-based retrieval (v4.5)
+        path_result: PathRetrievalResult | None = None
+        path_memories: list[ScoredMemory] = []
+        path_memory_scores: dict[str, float] = {}
+
+        if len(seed_concept_ids) >= 2:
+            path_result = await self.path_retriever.retrieve(seed_concept_ids)
+            path_memories = path_result.all_memories
+
+            # Build scores dict for RRF fusion
+            for sm in path_memories:
+                path_memory_scores[sm.memory.id] = sm.score
+
+            logger.debug(
+                f"Path retrieval found {len(path_memories)} memories "
+                f"({len(path_result.shared_memories)} shared, "
+                f"{len(path_result.path_memories)} path)"
+            )
+
         # 8. Hybrid search (combining all signals)
         # Note: MMR and reranker are applied inside search_memories
         logger.debug("Performing hybrid search")
@@ -258,6 +283,8 @@ class RetrievalPipeline:
             query_embedding=query_embedding if query_embedding else None,
             graph_memories=graph_memories,
             graph_memory_scores=graph_memory_scores,
+            path_memories=[sm.memory for sm in path_memories],
+            path_memory_scores=path_memory_scores,
             use_dynamic_k=False,  # Already applied dynamic k above
         )
 
@@ -326,6 +353,7 @@ class RetrievalPipeline:
             person_query_type=person_query_type,
             transliteration_variants=transliteration_variants,
             raw_tables=raw_tables,
+            path_result=path_result,
         )
 
     async def retrieve_multi_query(
@@ -461,6 +489,24 @@ class RetrievalPipeline:
                     )
                     graph_memory_scores[memory.id] = score
 
+        # 6.5. Path-based retrieval (v4.5)
+        path_result: PathRetrievalResult | None = None
+        path_memories: list[ScoredMemory] = []
+        path_memory_scores: dict[str, float] = {}
+
+        if len(seed_concept_ids) >= 2:
+            path_result = await self.path_retriever.retrieve(seed_concept_ids)
+            path_memories = path_result.all_memories
+
+            for sm in path_memories:
+                path_memory_scores[sm.memory.id] = sm.score
+
+            logger.debug(
+                f"Path retrieval found {len(path_memories)} memories "
+                f"({len(path_result.shared_memories)} shared, "
+                f"{len(path_result.path_memories)} path)"
+            )
+
         # 7. Multi-query hybrid search
         logger.debug("Performing multi-query hybrid search")
         scored_memories = await self.hybrid.search_memories_multi_query(
@@ -473,6 +519,8 @@ class RetrievalPipeline:
             hyde_embedding=hyde_embedding,
             graph_memories=graph_memories,
             graph_memory_scores=graph_memory_scores,
+            path_memories=[sm.memory for sm in path_memories],
+            path_memory_scores=path_memory_scores,
         )
 
         # 8. Apply source weights
@@ -545,6 +593,7 @@ class RetrievalPipeline:
             raw_tables=raw_tables,
             query_variants=query_variants,
             used_enrichment=True,
+            path_result=path_result,
         )
 
     async def retrieve_for_concepts(

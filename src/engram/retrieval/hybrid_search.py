@@ -213,6 +213,8 @@ class HybridSearch:
         query_embedding: list[float] | None = None,
         graph_memories: list[SemanticMemory] | None = None,
         graph_memory_scores: dict[str, float] | None = None,
+        path_memories: list[SemanticMemory] | None = None,
+        path_memory_scores: dict[str, float] | None = None,
         use_dynamic_k: bool = True,
     ) -> list[ScoredMemory]:
         """
@@ -223,6 +225,8 @@ class HybridSearch:
             query_embedding: Query embedding vector (optional in bm25_graph mode)
             graph_memories: Memories from spreading activation (optional)
             graph_memory_scores: Scores from graph traversal (optional)
+            path_memories: Memories from path-based retrieval (v4.5)
+            path_memory_scores: Scores from path retrieval (v4.5)
             use_dynamic_k: Whether to use dynamic top_k based on query complexity
 
         Returns:
@@ -261,8 +265,17 @@ class HybridSearch:
             ]
             graph_ranked.sort(key=lambda x: x[1], reverse=True)
 
+        # 4. Path-based results (v4.5)
+        path_ranked: list[tuple[str, float]] = []
+        if path_memories and path_memory_scores:
+            path_ranked = [
+                (m.id, path_memory_scores.get(m.id, 0))
+                for m in path_memories
+            ]
+            path_ranked.sort(key=lambda x: x[1], reverse=True)
+
         # Combine using weighted RRF (v4.6)
-        # Order: vector, bm25, graph (weights applied in same order)
+        # Order: vector, bm25, graph (spreading), path (weights applied in same order)
         ranked_lists: list[list[tuple[str, float]]] = []
         weights: list[float] = []
 
@@ -275,6 +288,9 @@ class HybridSearch:
         if graph_ranked:
             ranked_lists.append(graph_ranked)
             weights.append(settings.rrf_graph_weight)
+        if path_ranked:
+            ranked_lists.append(path_ranked)
+            weights.append(settings.rrf_path_weight)
 
         fused_scores = weighted_rrf(ranked_lists, weights, k=settings.rrf_k)
 
@@ -294,6 +310,11 @@ class HybridSearch:
             for m in graph_memories:
                 all_memories[m.id] = m
                 memory_sources.setdefault(m.id, []).append("G")  # Graph
+
+        if path_memories:
+            for m in path_memories:
+                all_memories[m.id] = m
+                memory_sources.setdefault(m.id, []).append("P")  # Path
 
         # Rerank with recency + importance + relevance
         scored_memories = self._rerank_memories(
@@ -582,18 +603,20 @@ class HybridSearch:
         hyde_embedding: list[float] | None = None,
         graph_memories: list[SemanticMemory] | None = None,
         graph_memory_scores: dict[str, float] | None = None,
+        path_memories: list[SemanticMemory] | None = None,
+        path_memory_scores: dict[str, float] | None = None,
     ) -> list[ScoredMemory]:
         """
         Search using multiple query variants with RRF fusion.
 
         Retrieval strategy (in hybrid mode):
-        - Original query → Full hybrid (BM25 + vector + graph)
+        - Original query → Full hybrid (BM25 + vector + graph + path)
         - BM25 expanded → BM25 only
         - Semantic rewrite → Vector only
         - HyDE document → Vector only (if present)
 
         In bm25_graph mode:
-        - Original query → BM25 + graph only
+        - Original query → BM25 + graph + path only
         - BM25 expanded → BM25 only
         - Semantic rewrite and HyDE → Skipped
 
@@ -609,6 +632,8 @@ class HybridSearch:
             hyde_embedding: Embedding of HyDE document
             graph_memories: Memories from spreading activation
             graph_memory_scores: Scores from graph traversal
+            path_memories: Memories from path-based retrieval (v4.5)
+            path_memory_scores: Scores from path retrieval (v4.5)
 
         Returns:
             List of ScoredMemory fused and reranked
@@ -657,6 +682,19 @@ class HybridSearch:
             for m in graph_memories:
                 all_memories[m.id] = m
                 memory_sources.setdefault(m.id, []).append("G")  # Graph
+
+        # Path ranked list (v4.5)
+        if path_memories and path_memory_scores:
+            path_ranked = [
+                (m.id, path_memory_scores.get(m.id, 0))
+                for m in path_memories
+            ]
+            path_ranked.sort(key=lambda x: x[1], reverse=True)
+            all_ranked_lists.append(path_ranked)
+            all_weights.append(settings.rrf_path_weight)
+            for m in path_memories:
+                all_memories[m.id] = m
+                memory_sources.setdefault(m.id, []).append("P")  # Path
 
         # 2. BM25 expanded → BM25 only (uses BM25 weight)
         if bm25_expanded and bm25_expanded != original_query:

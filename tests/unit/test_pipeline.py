@@ -74,8 +74,14 @@ class TestRetrievalPipeline:
         db = MagicMock()
         db.get_concept_by_name = AsyncMock(return_value=None)
         db.vector_search_concepts = AsyncMock(return_value=[])
+        db.fulltext_search_concepts = AsyncMock(return_value=[])  # BM25 fallback
         db.get_memories_for_concepts = AsyncMock(return_value=[])
         db.update_memory_access = AsyncMock()
+        # v4.5: Path retrieval methods
+        db.find_shortest_paths = AsyncMock(return_value=[])
+        db.find_bridge_concepts = AsyncMock(return_value=[])
+        db.find_shared_memories = AsyncMock(return_value=[])
+        db.get_memories_for_path_concepts = AsyncMock(return_value=[])
         return db
 
     @pytest.fixture
@@ -111,7 +117,7 @@ class TestRetrievalPipeline:
         mock_spreading,
         mock_hybrid,
     ) -> None:
-        """Test basic retrieval pipeline execution."""
+        """Test basic retrieval pipeline execution in bm25_graph mode."""
         from engram.ingestion.concept_extractor import ConceptExtractor
 
         # Create mock concept extractor
@@ -140,15 +146,18 @@ class TestRetrievalPipeline:
 
         # Verify result structure
         assert result.query == "How do I use Docker containers?"
-        assert len(result.query_embedding) == 384  # Mock embedding dimension
+        # In bm25_graph mode (default), query_embedding is empty
+        assert result.query_embedding == []
         assert len(result.memories) == 1
-        assert len(result.episodes) == 1
+        # Episodes require embeddings, so empty in bm25_graph mode
+        assert len(result.episodes) == 0
 
-        # Verify methods were called
-        mock_embedding_service.embed.assert_called_once()
+        # In bm25_graph mode, embed is not called
+        mock_embedding_service.embed.assert_not_called()
         mock_extractor.extract.assert_called_once()
         mock_hybrid.search_memories.assert_called_once()
-        mock_hybrid.search_similar_episodes.assert_called_once()
+        # Episode search requires embeddings, so not called in bm25_graph mode
+        mock_hybrid.search_similar_episodes.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_pipeline_with_matched_concepts(
@@ -287,7 +296,7 @@ class TestRetrievalPipeline:
         assert result.retrieval_sources["bm25"] == 1
 
     @pytest.mark.asyncio
-    async def test_pipeline_vector_fallback(
+    async def test_pipeline_bm25_fallback(
         self,
         mock_db,
         mock_embedding_service,
@@ -295,12 +304,12 @@ class TestRetrievalPipeline:
         mock_hybrid,
         sample_concept,
     ) -> None:
-        """Test vector search fallback when no concepts match."""
+        """Test BM25 concept search fallback when no concepts match (bm25_graph mode)."""
         from engram.ingestion.concept_extractor import ConceptExtractor
 
-        # No name match, but vector search finds similar concept
+        # No name match, but BM25 search finds similar concept
         mock_db.get_concept_by_name = AsyncMock(return_value=None)
-        mock_db.vector_search_concepts = AsyncMock(return_value=[
+        mock_db.fulltext_search_concepts = AsyncMock(return_value=[
             (sample_concept, 0.75),  # Above 0.5 threshold
         ])
 
@@ -322,8 +331,8 @@ class TestRetrievalPipeline:
 
         result = await pipeline.retrieve(query="containr help")
 
-        # Should fallback to vector search
-        mock_db.vector_search_concepts.assert_called_once()
+        # In bm25_graph mode (default), should fallback to BM25 concept search
+        mock_db.fulltext_search_concepts.assert_called_once()
         # Should find the similar concept
         assert len(result.query_concepts) == 1
         assert result.query_concepts[0].id == sample_concept.id
@@ -337,6 +346,11 @@ class TestRetrieveForConcepts:
         """Create mock DB with memories."""
         db = MagicMock()
         db.get_memories_for_concepts = AsyncMock(return_value=[sample_semantic_memory])
+        # v4.5: Path retrieval methods
+        db.find_shortest_paths = AsyncMock(return_value=[])
+        db.find_bridge_concepts = AsyncMock(return_value=[])
+        db.find_shared_memories = AsyncMock(return_value=[])
+        db.get_memories_for_path_concepts = AsyncMock(return_value=[])
         return db
 
     @pytest.mark.asyncio
