@@ -20,7 +20,10 @@ from engram.config import settings
 from engram.ingestion.concept_extractor import ConceptExtractor
 from engram.ingestion.person_extractor import PersonQueryType, classify_person_query
 from engram.models import Concept, EpisodicMemory, SemanticMemory
-from engram.preprocessing.transliteration import expand_query_transliteration
+from engram.preprocessing.transliteration import (
+    build_expanded_bm25_query,
+    expand_query_transliteration,
+)
 from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
 from engram.retrieval.hybrid_search import (
     HybridSearch,
@@ -219,6 +222,17 @@ class RetrievalPipeline:
                         seed_concept_ids.append(concept.id)
                         matched_concepts.append(concept)
 
+        # 5.5. Build expanded BM25 query with concept variants (v4.5.2)
+        concept_names = [c.name for c in matched_concepts]
+        concept_aliases = {c.name: c.aliases for c in matched_concepts if c.aliases}
+        expanded_bm25_query = build_expanded_bm25_query(
+            original_query=query,
+            concept_names=concept_names,
+            concept_aliases=concept_aliases,
+        )
+        if expanded_bm25_query != query:
+            logger.debug(f"Expanded BM25 query: {expanded_bm25_query[:100]}...")
+
         # 6. Spread activation through concept network
         logger.debug(f"Spreading activation from {len(seed_concept_ids)} seed concepts")
         activation_result: ActivationResult | None = None
@@ -285,6 +299,7 @@ class RetrievalPipeline:
             graph_memory_scores=graph_memory_scores,
             path_memories=[sm.memory for sm in path_memories],
             path_memory_scores=path_memory_scores,
+            bm25_query=expanded_bm25_query if expanded_bm25_query != query else None,
             use_dynamic_k=False,  # Already applied dynamic k above
         )
 

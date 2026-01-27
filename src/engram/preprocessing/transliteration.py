@@ -316,3 +316,78 @@ def normalize_mixed_terms(text: str) -> str:
         result = pattern.sub(normalized, result)
 
     return result
+
+
+def expand_concept_for_bm25(name: str, aliases: list[str] | None = None) -> list[str]:
+    """
+    Expand a concept name to search variants for BM25.
+
+    Generates variants in:
+    - Original form
+    - Transliterated (Cyrillic ↔ Latin)
+    - All aliases
+
+    Args:
+        name: Concept name
+        aliases: List of known aliases from graph
+
+    Returns:
+        List of unique search terms
+    """
+    variants: set[str] = {name.lower()}
+
+    # Add transliteration variants
+    if has_cyrillic(name):
+        variants.add(to_latin(name).lower())
+    if has_latin(name):
+        variants.add(to_cyrillic(name).lower())
+
+    # Add aliases
+    if aliases:
+        for alias in aliases:
+            variants.add(alias.lower())
+            # Also transliterate aliases
+            if has_cyrillic(alias):
+                variants.add(to_latin(alias).lower())
+            if has_latin(alias):
+                variants.add(to_cyrillic(alias).lower())
+
+    return list(variants)
+
+
+def build_expanded_bm25_query(
+    original_query: str,
+    concept_names: list[str],
+    concept_aliases: dict[str, list[str]] | None = None,
+) -> str:
+    """
+    Build expanded BM25 query with concept variants.
+
+    Combines original query with expanded concept terms.
+
+    Args:
+        original_query: Original user query
+        concept_names: Extracted concept names
+        concept_aliases: Map of concept name -> aliases from graph
+
+    Returns:
+        Expanded query string with OR clauses for concept variants
+    """
+    concept_aliases = concept_aliases or {}
+
+    # Collect all expanded terms
+    expanded_terms: set[str] = set()
+
+    for name in concept_names:
+        aliases = concept_aliases.get(name, [])
+        variants = expand_concept_for_bm25(name, aliases)
+        expanded_terms.update(variants)
+
+    # If no expansion happened, return original
+    if not expanded_terms:
+        return original_query
+
+    # Build query: original query + expanded concept terms
+    # Neo4j fulltext uses Lucene syntax, OR is default between terms
+    all_terms = list(expanded_terms)
+    return " ".join(all_terms)
