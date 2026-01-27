@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 
 from engram.config import settings
 from engram.ingestion.concept_extractor import ConceptExtractor
+from engram.ingestion.llm_client import get_enrichment_llm_client
 from engram.ingestion.person_extractor import PersonQueryType, classify_person_query
 from engram.models import Concept, EpisodicMemory, SemanticMemory
 from engram.preprocessing.transliteration import (
@@ -121,7 +122,9 @@ class RetrievalPipeline:
     ) -> None:
         self.db = db
         self.embeddings = embedding_service or get_embedding_service()
-        self.concept_extractor = concept_extractor or ConceptExtractor()
+        self.concept_extractor = concept_extractor or ConceptExtractor(
+            llm_client=get_enrichment_llm_client()
+        )
         self.spreading = spreading_activation or SpreadingActivation(db=db)
         self.hybrid = hybrid_search or HybridSearch(db=db)
         self.path_retriever = path_retriever or PathBasedRetriever(db=db)

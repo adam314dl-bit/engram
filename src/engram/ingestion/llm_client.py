@@ -282,6 +282,33 @@ def get_llm_client() -> LLMClient:
     return _llm_client
 
 
+_enrichment_llm_client: LLMClient | None = None
+
+
+def get_enrichment_llm_client() -> LLMClient:
+    """Get or create the enrichment LLM client.
+
+    Uses ENRICHMENT_LLM_* settings if enabled, otherwise falls back to main LLM.
+
+    Returns:
+        LLMClient instance for enrichment/extraction tasks
+    """
+    global _enrichment_llm_client
+    if _enrichment_llm_client is None:
+        if settings.enrichment_llm_enabled:
+            _enrichment_llm_client = LLMClient(
+                base_url=settings.enrichment_llm_base_url,
+                model=settings.enrichment_llm_model,
+                api_key=settings.enrichment_llm_api_key,
+                timeout=settings.enrichment_llm_timeout,
+                max_concurrent=settings.enrichment_llm_max_concurrent,
+            )
+        else:
+            # Fall back to main LLM
+            _enrichment_llm_client = get_llm_client()
+    return _enrichment_llm_client
+
+
 async def close_llm_client() -> None:
     """Close the LLM client."""
     global _llm_client
