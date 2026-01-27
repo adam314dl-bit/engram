@@ -716,7 +716,7 @@ class EngramEvaluator:
         csv_path: str | Path,
         output_path: str | Path | None = None,
         limit: int | None = None,
-    ) -> EvaluationSummary:
+    ) -> tuple[EvaluationSummary, list[EvaluationResult]]:
         """
         Evaluate all questions from CSV file.
 
@@ -726,7 +726,7 @@ class EngramEvaluator:
             limit: Max number of questions to evaluate (for testing)
 
         Returns:
-            EvaluationSummary with aggregate statistics
+            Tuple of (EvaluationSummary, list of EvaluationResult)
         """
         csv_path = Path(csv_path)
 
@@ -764,7 +764,7 @@ class EngramEvaluator:
         self._save_results(results, output_path)
         self._save_summary(summary, output_path.with_suffix(".summary.json"))
 
-        return summary
+        return summary, results
 
     def _load_csv(
         self, csv_path: Path
@@ -1116,6 +1116,13 @@ def main() -> None:
         default=None,
         help="Limit number of questions to evaluate (for testing)",
     )
+    parser.add_argument(
+        "--show-below",
+        type=float,
+        default=None,
+        metavar="THRESHOLD",
+        help="Show questions with overall score below threshold (e.g., 0.5)",
+    )
 
     args = parser.parse_args()
 
@@ -1171,7 +1178,7 @@ def main() -> None:
     print()
 
     # Run evaluation
-    summary = evaluator.evaluate_csv(args.csv_path, args.output, args.limit)
+    summary, results = evaluator.evaluate_csv(args.csv_path, args.output, args.limit)
 
     # Print summary
     print("\n" + "=" * 60)
@@ -1196,6 +1203,33 @@ def main() -> None:
         for answer_type, stats in summary.by_type.items():
             print(f"  {answer_type}: {stats['count']} items, "
                   f"overall={stats['avg_overall']:.3f}")
+
+    # Show questions below threshold
+    if args.show_below is not None:
+        below_threshold = [
+            r for r in results
+            if r.overall < args.show_below and not r.error
+        ]
+        if below_threshold:
+            print()
+            print("=" * 60)
+            print(f"QUESTIONS BELOW {args.show_below} ({len(below_threshold)} items)")
+            print("=" * 60)
+            # Sort by overall score ascending (worst first)
+            below_threshold.sort(key=lambda r: r.overall)
+            for i, r in enumerate(below_threshold, 1):
+                print(f"\n[{i}] Overall: {r.overall:.3f} | Type: {r.answer_type}")
+                print(f"    Source: {r.source_match:.2f} | Key: {r.key_info_match:.2f} | "
+                      f"Rel: {r.relevance:.2f} | NoCont: {r.no_contradiction:.2f}")
+                print(f"    Q: {r.question[:100]}{'...' if len(r.question) > 100 else ''}")
+                if r.human_answer:
+                    print(f"    Human: {r.human_answer[:80]}{'...' if len(r.human_answer) > 80 else ''}")
+                if r.human_url:
+                    print(f"    URL: {r.human_url}")
+                if r.reasoning:
+                    print(f"    Reason: {r.reasoning[:100]}{'...' if len(r.reasoning) > 100 else ''}")
+        else:
+            print(f"\nNo questions below {args.show_below}")
 
 
 if __name__ == "__main__":
