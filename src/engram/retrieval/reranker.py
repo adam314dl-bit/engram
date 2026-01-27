@@ -4,6 +4,14 @@ Uses jinaai/jina-reranker-v3 model which supports Russian
 and provides strong cross-lingual reranking capabilities.
 """
 
+# IMPORTANT: Set offline mode BEFORE any HuggingFace imports
+# This prevents HTTP requests during model.rerank() calls
+import os
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_DATASETS_OFFLINE"] = "1"
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+
 import logging
 from dataclasses import dataclass
 from functools import lru_cache
@@ -38,12 +46,6 @@ def get_reranker() -> "AutoModel":
     Returns:
         Jina Reranker v3 model instance
     """
-    import os
-
-    # Force offline mode to skip HuggingFace HTTP requests
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
-
     if not settings.reranker_enabled:
         raise RuntimeError("Reranker is disabled in settings")
 
@@ -67,13 +69,20 @@ def get_reranker() -> "AutoModel":
             local_files_only=True,  # Skip HF network requests for faster loading
         )
     except OSError:
-        # Model not cached, download it
+        # Model not cached - temporarily allow network access to download
         logger.info("Model not in cache, downloading from HuggingFace...")
-        model = AutoModel.from_pretrained(
-            settings.reranker_model,
-            torch_dtype="auto",
-            trust_remote_code=True,
-        )
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        os.environ.pop("TRANSFORMERS_OFFLINE", None)
+        try:
+            model = AutoModel.from_pretrained(
+                settings.reranker_model,
+                torch_dtype="auto",
+                trust_remote_code=True,
+            )
+        finally:
+            # Re-enable offline mode after download
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
     # Move to device
     model = model.to(device)

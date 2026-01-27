@@ -4,6 +4,14 @@ Provides OpenAI-compatible endpoints for chat completions,
 plus feedback and admin endpoints for learning.
 """
 
+# IMPORTANT: Set HuggingFace offline mode BEFORE any imports
+# This prevents HTTP requests during Jina reranker calls
+import os
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_DATASETS_OFFLINE"] = "1"
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
