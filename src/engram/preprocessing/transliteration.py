@@ -322,10 +322,9 @@ def expand_concept_for_bm25(name: str, aliases: list[str] | None = None) -> list
     """
     Expand a concept name to search variants for BM25.
 
-    Generates variants in:
+    Generates variants from:
     - Original form
-    - Transliterated (Cyrillic ↔ Latin)
-    - All aliases
+    - All aliases (from graph deduplication)
 
     Args:
         name: Concept name
@@ -336,21 +335,10 @@ def expand_concept_for_bm25(name: str, aliases: list[str] | None = None) -> list
     """
     variants: set[str] = {name.lower()}
 
-    # Add transliteration variants
-    if has_cyrillic(name):
-        variants.add(to_latin(name).lower())
-    if has_latin(name):
-        variants.add(to_cyrillic(name).lower())
-
     # Add aliases
     if aliases:
         for alias in aliases:
             variants.add(alias.lower())
-            # Also transliterate aliases
-            if has_cyrillic(alias):
-                variants.add(to_latin(alias).lower())
-            if has_latin(alias):
-                variants.add(to_cyrillic(alias).lower())
 
     return list(variants)
 
