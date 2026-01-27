@@ -215,7 +215,7 @@ class TracedRetriever:
                 if active_ids:
                     graph_memories = await self.db.get_memories_for_concepts(
                         concept_ids=active_ids,
-                        limit=top_k_memories * 2,
+                        limit=settings.retrieval_graph_k,
                     )
                     for memory in graph_memories:
                         score = sum(

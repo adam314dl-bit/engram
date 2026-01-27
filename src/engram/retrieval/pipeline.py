@@ -250,7 +250,7 @@ class RetrievalPipeline:
             if active_concept_ids:
                 graph_memories = await self.db.get_memories_for_concepts(
                     concept_ids=active_concept_ids,
-                    limit=top_k_memories * 2,
+                    limit=settings.retrieval_graph_k,
                 )
 
                 # Score memories by sum of activations of their concepts
@@ -486,7 +486,7 @@ class RetrievalPipeline:
             if active_concept_ids:
                 graph_memories = await self.db.get_memories_for_concepts(
                     concept_ids=active_concept_ids,
-                    limit=top_k_memories * 2,
+                    limit=settings.retrieval_graph_k,
                 )
                 for memory in graph_memories:
                     score = sum(

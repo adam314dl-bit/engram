@@ -83,6 +83,7 @@ class Settings(BaseSettings):
     retrieval_top_k: int = 200
     retrieval_bm25_k: int = 200
     retrieval_vector_k: int = 200
+    retrieval_graph_k: int = 200  # Candidates from graph spreading before fusion
 
     # Retrieval Mode
     retrieval_mode: str = Field(
