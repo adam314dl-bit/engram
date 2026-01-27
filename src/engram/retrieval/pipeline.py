@@ -285,7 +285,6 @@ class RetrievalPipeline:
             graph_memory_scores=graph_memory_scores,
             path_memories=[sm.memory for sm in path_memories],
             path_memory_scores=path_memory_scores,
-            transliteration_variants=transliteration_variants if transliteration_variants else None,
             use_dynamic_k=False,  # Already applied dynamic k above
         )
 
@@ -403,11 +402,6 @@ class RetrievalPipeline:
         # Use dynamic top_k if enabled
         if settings.dynamic_topk_enabled and top_k_memories == settings.retrieval_top_k:
             top_k_memories = recommended_k
-
-        # 1.5. Generate transliteration variants (v4.5.1)
-        transliteration_variants = expand_query_transliteration(query)
-        if len(transliteration_variants) > 1:
-            logger.debug(f"Transliteration variants: {transliteration_variants}")
 
         # 2. Embed variants (only in hybrid mode)
         query_embedding: list[float] = []
@@ -527,7 +521,6 @@ class RetrievalPipeline:
             graph_memory_scores=graph_memory_scores,
             path_memories=[sm.memory for sm in path_memories],
             path_memory_scores=path_memory_scores,
-            transliteration_variants=transliteration_variants if transliteration_variants else None,
         )
 
         # 8. Apply source weights
