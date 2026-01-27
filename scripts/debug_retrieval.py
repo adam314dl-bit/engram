@@ -182,16 +182,11 @@ async def main(args: argparse.Namespace) -> None:
         print(f"\n{'='*60}")
         print("  ANSWER")
         print(f"{'='*60}")
-        print(f"\n{answer.response}\n")
+        print(f"\n{answer.answer}\n")
 
-        if answer.sources:
-            print("  Sources:")
-            for src in answer.sources[:5]:
-                title = src.get("title", "Unknown")
-                url = src.get("url", "")
-                print(f"    - {title}")
-                if url:
-                    print(f"      {url}")
+        if answer.memories_used:
+            print(f"  Memories used: {len(answer.memories_used)}")
+        print(f"  Confidence: {answer.confidence:.2f}")
 
     # Search for specific text if requested
     if args.search_text:
