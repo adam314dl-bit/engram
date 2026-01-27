@@ -378,16 +378,16 @@ class Neo4jClient:
         if len(concept_ids) < 2:
             return []
 
-        # Note: Cypher shortestPath requires literal path length, so we use APOC
-        # or iterate with BFS. Using variable-length pattern with limit.
+        # Collect concepts first, then generate pairs using range indexes
+        # to avoid cartesian product warning. Path length is limited in pattern.
         query = """
-        UNWIND $concept_ids AS src_id
-        UNWIND $concept_ids AS tgt_id
-        WITH src_id, tgt_id WHERE src_id < tgt_id
-        MATCH (s:Concept {id: src_id}), (t:Concept {id: tgt_id})
+        MATCH (c:Concept) WHERE c.id IN $concept_ids
+        WITH collect(c) AS concepts
+        UNWIND range(0, size(concepts)-2) AS i
+        UNWIND range(i+1, size(concepts)-1) AS j
+        WITH concepts[i] AS s, concepts[j] AS t
         MATCH path = shortestPath((s)-[:RELATED_TO*1..3]-(t))
-        WHERE length(path) <= $max_length
-        RETURN src_id, tgt_id,
+        RETURN s.id AS src_id, t.id AS tgt_id,
                [n IN nodes(path) | n.id] AS path_ids,
                length(path) AS len
         ORDER BY len ASC
