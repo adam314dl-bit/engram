@@ -348,6 +348,7 @@ RERANKER_USE_FP16=true    # Use FP16 for faster inference
 BGE_MODEL_NAME=BAAI/bge-m3
 BGE_USE_FP16=true
 BGE_BATCH_SIZE=32
+BGE_DEVICE=cuda:0                 # Single GPU (prevents multi-GPU pooling)
 
 # v5 Vector Index (FAISS)
 VECTOR_INDEX_PATH=./data/vector_index
@@ -944,6 +945,8 @@ uv run ruff check src/engram
 - [x] Migration script (`scripts/migrate_to_v5.py`)
 - [x] Retrieval evaluation metrics (Recall@K, MRR, NDCG)
 - [x] EvaluationRunner for golden query testing
+- [x] Single-GPU mode for BGE-M3 and reranker (prevents multi-GPU pooling)
+- [x] VectorRetriever pipeline properly wired through all layers
 
 ### Planned
 
