@@ -307,7 +307,9 @@ async def chat_completions(
 
     # Run reasoning pipeline
     try:
-        pipeline = ReasoningPipeline(db=db)
+        # Get vector retriever from app state (v5: FAISS-based)
+        vector_retriever = getattr(request.app.state, "vector_retriever", None)
+        pipeline = ReasoningPipeline(db=db, vector_retriever=vector_retriever)
 
         result = await pipeline.reason(
             query=query,

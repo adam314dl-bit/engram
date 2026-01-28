@@ -29,6 +29,7 @@ from engram.storage.neo4j_client import Neo4jClient
 # v5: BGE-M3 and FAISS imports
 from engram.embeddings.bge_service import preload_bge_model
 from engram.embeddings.vector_index import load_or_create_index
+from engram.retrieval.vector_retriever import VectorRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -68,15 +69,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         preload_bge_model()
         logger.info("BGE-M3 model ready")
 
-        # v5: Load FAISS vector index
+        # v5: Load FAISS vector index and create VectorRetriever
         logger.info("Loading FAISS vector index...")
         index = load_or_create_index()
         if index.count > 0:
             logger.info(f"FAISS index loaded with {index.count} vectors")
+            # Create VectorRetriever with the loaded index
+            app.state.vector_retriever = VectorRetriever(
+                db=db,
+                vector_index=index,
+            )
+            logger.info("VectorRetriever initialized")
         else:
             logger.info("FAISS index empty (run migration to populate)")
+            app.state.vector_retriever = None
     else:
         logger.info("BM25+Graph mode: skipping embedding model preload")
+        app.state.vector_retriever = None
 
     # Preload reranker model (if enabled) to avoid delay on first query
     preload_reranker()

@@ -11,6 +11,7 @@ Flow:
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from engram.ingestion.llm_client import LLMClient, get_llm_client
 from engram.models import EpisodicMemory
@@ -20,6 +21,9 @@ from engram.reasoning.synthesizer import ResponseSynthesizer, SynthesisResult
 from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
 from engram.retrieval.pipeline import RetrievalPipeline, RetrievalResult
 from engram.storage.neo4j_client import Neo4jClient
+
+if TYPE_CHECKING:
+    from engram.retrieval.vector_retriever import VectorRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +73,7 @@ class ReasoningPipeline:
         db: Neo4jClient,
         llm_client: LLMClient | None = None,
         embedding_service: EmbeddingService | None = None,
+        vector_retriever: "VectorRetriever | None" = None,
     ) -> None:
         self.db = db
         self.llm = llm_client or get_llm_client()
@@ -78,6 +83,7 @@ class ReasoningPipeline:
         self.retrieval = RetrievalPipeline(
             db=db,
             embedding_service=self.embeddings,
+            vector_retriever=vector_retriever,
         )
         self.synthesizer = ResponseSynthesizer(llm_client=self.llm)
         self.episode_manager = EpisodeManager(

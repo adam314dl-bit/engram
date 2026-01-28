@@ -15,8 +15,12 @@ Orchestrates:
 
 import logging
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from engram.config import settings
+
+if TYPE_CHECKING:
+    from engram.retrieval.vector_retriever import VectorRetriever
 from engram.ingestion.concept_extractor import ConceptExtractor
 from engram.ingestion.llm_client import get_enrichment_llm_client
 from engram.ingestion.person_extractor import PersonQueryType, classify_person_query
@@ -116,6 +120,7 @@ class RetrievalPipeline:
         spreading_activation: SpreadingActivation | None = None,
         hybrid_search: HybridSearch | None = None,
         path_retriever: PathBasedRetriever | None = None,
+        vector_retriever: "VectorRetriever | None" = None,
     ) -> None:
         self.db = db
         self.embeddings = embedding_service or get_embedding_service()
@@ -123,7 +128,7 @@ class RetrievalPipeline:
             llm_client=get_enrichment_llm_client()
         )
         self.spreading = spreading_activation or SpreadingActivation(db=db)
-        self.hybrid = hybrid_search or HybridSearch(db=db)
+        self.hybrid = hybrid_search or HybridSearch(db=db, vector_retriever=vector_retriever)
         self.path_retriever = path_retriever or PathBasedRetriever(db=db)
 
     async def retrieve(
