@@ -69,11 +69,11 @@ def get_bge_reranker() -> "FlagReranker":
         logger.warning("CUDA requested but not available, falling back to CPU")
         device = "cpu"
 
-    # Load BGE reranker
+    # Load BGE reranker (use devices=[device] to prevent multi-GPU pooling)
     model = FlagReranker(
         settings.reranker_model,
         use_fp16=settings.reranker_use_fp16 and device != "cpu",
-        device=device,
+        devices=[device],  # Single device list prevents multi-process pool
     )
 
     logger.info(f"BGE reranker loaded successfully on {device}")
