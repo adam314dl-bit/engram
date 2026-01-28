@@ -18,14 +18,16 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 
 **Core Retrieval:**
 - **BM25+Graph Mode**: Default mode - no embedding model required, uses BM25 + graph traversal
-- **Hybrid Mode**: Optional - adds vector similarity search (set `RETRIEVAL_MODE=hybrid`)
+- **Hybrid Mode**: Optional - adds BGE-M3 vector similarity search (set `RETRIEVAL_MODE=hybrid`)
 - **Spreading Activation**: Brain-like associative retrieval through concept networks
 - **Path-Based Retrieval**: Finds memories bridging multiple query concepts (shared memories, bridge concepts)
-- **Weighted RRF**: Prioritized fusion with BM25 (0.35), Path (0.35), Graph (0.30)
-- **Jina Reranker v3**: Multilingual cross-encoder for improved retrieval precision
+- **4-Way RRF Fusion**: Weighted fusion with Vector (0.25), BM25 (0.25), Path (0.30), Graph (0.20)
+- **BGE-reranker-v2-m3**: Multilingual cross-encoder for improved retrieval precision (replaces Jina)
+- **FAISS Vector Index**: Fast similarity search with flat (exact) or IVF (approximate) indexes
 - **MMR Diversity**: Maximal Marginal Relevance prevents redundant results (hybrid mode only)
 - **Dynamic top_k**: Query complexity classification adjusts retrieval depth
 - **Retrieval Debugging**: Trace chunks through pipeline stages with `debug_retrieval.py`
+- **Evaluation Framework**: Recall@K, MRR, NDCG metrics with golden query testing
 
 **Dual-Content Memory:**
 - **Separate Search vs Display**: `search_content` for search, `content` for LLM generation
@@ -63,8 +65,9 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 | Package Manager | uv |
 | Graph DB | Neo4j 5 (Docker) |
 | API | FastAPI |
-| Embeddings | sentence-transformers (optional in bm25_graph mode) |
-| Reranker | Jina Reranker v3 (multilingual cross-encoder) |
+| Embeddings | BGE-M3 via FlagEmbedding (1024-dim, multilingual) |
+| Vector Index | FAISS (flat or IVF) |
+| Reranker | BGE-reranker-v2-m3 (default) or Jina Reranker v3 |
 | Russian NLP | PyMorphy3, Natasha NER |
 | Transliteration | cyrtranslit |
 | LLM | OpenAI-compatible endpoint (remote) |
@@ -146,11 +149,22 @@ RETRIEVAL_MODE=bm25_graph # Default: BM25 + Graph only (no embeddings)
 RETRIEVAL_TOP_K=100       # Final memories sent to LLM
 RETRIEVAL_BM25_K=200      # BM25 candidates before fusion
 RETRIEVAL_VECTOR_K=200    # Vector candidates (only in hybrid mode)
+RETRIEVAL_GRAPH_K=200     # Graph spreading candidates before fusion
 
-# Reranker
-RERANKER_ENABLED=true     # Enable Jina cross-encoder
-RERANKER_MODEL=jinaai/jina-reranker-v3
+# Reranker (v5: BGE default)
+RERANKER_ENABLED=true     # Enable cross-encoder
+RERANKER_MODEL=BAAI/bge-reranker-v2-m3  # Default: BGE (or jinaai/jina-reranker-v3)
 RERANKER_CANDIDATES=64    # Candidates per batch
+RERANKER_USE_FP16=true    # Use FP16 for faster inference
+
+# v5 BGE-M3 Embeddings
+BGE_MODEL_NAME=BAAI/bge-m3
+BGE_USE_FP16=true
+BGE_BATCH_SIZE=32
+
+# v5 Vector Index (FAISS)
+VECTOR_INDEX_PATH=./data/vector_index
+VECTOR_INDEX_TYPE=flat    # "flat" (exact) or "ivf" (approximate)
 ```
 
 ## Running the Server
@@ -422,7 +436,7 @@ DEDUP_AUTO_MERGE_THRESHOLD=0.95   # Auto-merge threshold
 DEDUP_REVIEW_THRESHOLD=0.80       # Review threshold
 DEDUP_POSSIBLE_THRESHOLD=0.60     # Tracking threshold
 
-# Enrichment LLM (separate fast model for large graphs)
+# Enrichment LLM (separate fast model for graph enrichment + retrieval concept extraction)
 ENRICHMENT_LLM_ENABLED=true
 ENRICHMENT_LLM_BASE_URL=http://localhost:8889/v1
 ENRICHMENT_LLM_MODEL=Qwen/Qwen3-4B
@@ -456,6 +470,54 @@ Recommended concurrency by GPU count:
 | 2    | 2                        | 128                            |
 | 4    | 4                        | 256                            |
 
+## v5 Migration
+
+To upgrade from v4.x to v5 with BGE-M3 vector retrieval:
+
+```bash
+# 1. Install new dependencies
+uv sync
+
+# 2. Run migration (re-embeds all memories with BGE-M3, builds FAISS index)
+uv run python scripts/migrate_to_v5.py
+
+# 3. Optional: Set hybrid mode in .env
+# RETRIEVAL_MODE=hybrid
+
+# 4. Start API server
+uv run python -m engram.api.main
+```
+
+**Migration options:**
+```bash
+# Custom batch size (for memory-constrained systems)
+uv run python scripts/migrate_to_v5.py --batch-size 50
+
+# Custom index path
+uv run python scripts/migrate_to_v5.py --index-path ./data/my_index
+
+# Skip if index already exists
+uv run python scripts/migrate_to_v5.py --skip-existing
+```
+
+**Standalone index builder:**
+```bash
+# Build index without full migration
+uv run python scripts/build_vector_index.py
+
+# With options
+uv run python scripts/build_vector_index.py --output ./data/index --force
+```
+
+**Retrieval evaluation:**
+```bash
+# Run evaluation against golden queries
+uv run python -m engram.evaluation.runner tests/golden_queries.json
+
+# With options
+uv run python -m engram.evaluation.runner tests/golden_queries.json -n 10 -v -o results.json
+```
+
 ## Debug Retrieval CLI (v4.5)
 
 Trace chunks through every pipeline stage to understand where relevant results appear and disappear.
@@ -463,8 +525,11 @@ Trace chunks through every pipeline stage to understand where relevant results a
 ### Basic Usage
 
 ```bash
-# Debug a query
+# Debug a query (includes answer generation)
 uv run python scripts/debug_retrieval.py "какие типы задач в jira"
+
+# Skip answer generation (faster, retrieval only)
+uv run python scripts/debug_retrieval.py "какие типы задач в jira" --no-answer
 
 # Search for chunks containing specific text
 uv run python scripts/debug_retrieval.py "типы задач в jira" --search-text "Epic"
@@ -486,6 +551,7 @@ uv run python scripts/debug_retrieval.py "jira" --save-trace
 | `--search-text TEXT` | Find chunks containing this text at each stage |
 | `--find-chunk ID` | Track a specific memory ID through the pipeline |
 | `--top-k N` | Number of results to return (default: 20) |
+| `--no-answer` | Skip answer generation (retrieval only) |
 | `--show-context` | Show full content context for top results |
 | `--save-trace` | Save trace to JSON file |
 | `-v, --verbose` | Verbose output with full journey details |
@@ -579,7 +645,9 @@ engram/
 │   ├── run_ingestion.py
 │   ├── compute_layout.py       # Pre-compute graph layout
 │   ├── create_concept_index.py # Concept fulltext index
-│   └── debug_retrieval.py      # Debug retrieval pipeline (v4.5)
+│   ├── debug_retrieval.py      # Debug retrieval pipeline (v4.5)
+│   ├── migrate_to_v5.py        # v5 migration (re-embed + build FAISS)
+│   └── build_vector_index.py   # Standalone FAISS index builder
 └── CLAUDE.md            # AI assistant instructions
 ```
 
@@ -705,6 +773,18 @@ uv run ruff check src/engram
 - [x] TracedRetriever wrapper for pipeline tracing
 - [x] Debug CLI (`scripts/debug_retrieval.py`) with chunk journey tracking
 - [x] Trace export to JSON files
+
+**v5 Vector Retrieval & BGE Integration:**
+- [x] BGE-M3 embedding service (1024-dim, multilingual)
+- [x] FAISS vector index (flat and IVF index types)
+- [x] VectorRetriever for FAISS-based search
+- [x] BGE-reranker-v2-m3 (replaces Jina as default)
+- [x] 4-way RRF fusion: Vector (0.25), BM25 (0.25), Path (0.30), Graph (0.20)
+- [x] Semantic chunker with BGE tokenizer (512-1024 tokens)
+- [x] VectorStepMetrics for observability
+- [x] Migration script (`scripts/migrate_to_v5.py`)
+- [x] Retrieval evaluation metrics (Recall@K, MRR, NDCG)
+- [x] EvaluationRunner for golden query testing
 
 ### Planned
 
