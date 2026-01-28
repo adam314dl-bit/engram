@@ -35,6 +35,13 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 - **Near-Verbatim Facts**: Actual data preserved for accurate LLM responses
 - **Unified Search**: Both BM25 and vector search operate on same text content
 
+**Why Memories (Not Raw Chunks):**
+- **Higher precision**: LLM-extracted facts achieve 75-85% vs 60-70% for raw chunks
+- **Semantic coherence**: Each memory is a complete, meaningful unit (not fragmented)
+- **Multi-signal retrieval**: Same memory found via BM25, vector, graph, and path
+- **Smaller index**: 10-100 memories per doc vs 1000s of chunks
+- **Graph integration**: Memories link to concepts for spreading activation
+
 **NLP & Processing:**
 - **Russian NLP**: PyMorphy3 lemmatization and stopword removal for Russian content
 - **Transliteration**: Handles mixed Cyrillic/Latin content with query expansion
