@@ -78,12 +78,15 @@ class BGEEmbeddingService:
             logger.info(f"Loading BGE-M3 model: {settings.bge_model_name}")
 
             # Determine device
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            device = settings.bge_device
+            if device.startswith("cuda") and not torch.cuda.is_available():
+                logger.warning("CUDA requested but not available, falling back to CPU")
+                device = "cpu"
 
             # Load model with FP16 if enabled
             self._model = BGEM3FlagModel(
                 settings.bge_model_name,
-                use_fp16=settings.bge_use_fp16 and device == "cuda",
+                use_fp16=settings.bge_use_fp16 and device != "cpu",
                 device=device,
             )
 

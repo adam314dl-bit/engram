@@ -325,6 +325,10 @@ class Settings(BaseSettings):
         default=32,
         description="Batch size for BGE-M3 embedding"
     )
+    bge_device: str = Field(
+        default="cuda:0",
+        description="Device for BGE-M3 model (cuda:0, cuda:1, cpu, etc.)"
+    )
 
     # v5: Vector Index
     vector_index_path: str = Field(
