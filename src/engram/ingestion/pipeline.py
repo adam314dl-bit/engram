@@ -37,7 +37,6 @@ from engram.preprocessing.content_context import (
 )
 from engram.preprocessing.list_parser import ListParser, extract_lists
 from engram.preprocessing.table_parser import extract_tables, remove_tables_from_text
-from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
 from engram.retrieval.quality_filter import is_quality_chunk
 from engram.storage.neo4j_client import Neo4jClient
 
@@ -72,8 +71,7 @@ class IngestionPipeline:
     5. Extract concepts (1 LLM call)
     6. Extract memories (1 LLM call)
     7. Apply quality filtering
-    8. Generate embeddings (batch)
-    9. Store in Neo4j (batch)
+    8. Store in Neo4j (batch)
     """
 
     def __init__(
@@ -83,7 +81,6 @@ class IngestionPipeline:
         concept_extractor: ConceptExtractor | None = None,
         memory_extractor: MemoryExtractor | None = None,
         relationship_extractor: RelationshipExtractor | None = None,
-        embedding_service: EmbeddingService | None = None,
         table_enricher: "TableEnricher | None" = None,
         list_enricher: "ListEnricher | None" = None,
         person_extractor: PersonExtractor | None = None,
@@ -95,10 +92,7 @@ class IngestionPipeline:
         self.memory_extractor = memory_extractor or MemoryExtractor(
             concept_extractor=self.concept_extractor
         )
-        self.embeddings = embedding_service or get_embedding_service()
-        self.relationship_extractor = relationship_extractor or RelationshipExtractor(
-            embedding_service=self.embeddings
-        )
+        self.relationship_extractor = relationship_extractor or RelationshipExtractor()
 
         # Lazy import to avoid circular dependency
         if table_enricher is None:
@@ -395,38 +389,7 @@ class IngestionPipeline:
                     concept_result.relations, concepts
                 )
 
-            # --- Phase 3: Generate embeddings (combined batch) ---
-            # Skip embeddings in bm25_graph mode for faster ingestion
-            if settings.retrieval_mode != "bm25_graph":
-                all_texts: list[str] = []
-                concept_count = len(concepts)
-
-                # Collect texts for concepts
-                for c in concepts:
-                    all_texts.append(c.name + (f": {c.description}" if c.description else ""))
-
-                # Collect texts for memories
-                # v4.5: Use search_content for embedding if available, fallback to content
-                for m in memories:
-                    text = m.search_content if m.search_content else m.content
-                    all_texts.append(text)
-
-                # Single batch embedding call
-                if all_texts:
-                    logger.debug(f"Generating embeddings for {len(all_texts)} items (batch)")
-                    all_embeddings = await self.embeddings.embed_batch(all_texts)
-
-                    # Assign embeddings to concepts
-                    for i, concept in enumerate(concepts):
-                        concept.embedding = all_embeddings[i]
-
-                    # Assign embeddings to memories
-                    for i, memory in enumerate(memories):
-                        memory.embedding = all_embeddings[concept_count + i]
-            else:
-                logger.debug("Skipping embeddings (bm25_graph mode)")
-
-            # --- Phase 4: Save to Neo4j (batch) ---
+            # --- Phase 3: Save to Neo4j (batch) ---
             # Save concepts batch
             if concepts:
                 await self.db.save_concepts_batch(concepts)
