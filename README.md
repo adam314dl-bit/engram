@@ -509,6 +509,30 @@ uv run python scripts/build_vector_index.py
 uv run python scripts/build_vector_index.py --output ./data/index --force
 ```
 
+**Full reingest workflow (fresh start):**
+```bash
+# 1. Install dependencies
+uv sync
+
+# 2. Reingest all documents (clears existing data)
+uv run python scripts/run_ingestion.py --clear /path/to/docs
+
+# 3. Run graph quality optimization (dedup + enrich)
+uv run python scripts/improve_graph_quality.py all
+
+# 4. Build FAISS vector index
+uv run python scripts/build_vector_index.py
+
+# 5. Compute graph layout for visualization
+uv run python scripts/compute_layout.py
+
+# 6. Enable hybrid mode in .env
+# Uncomment: RETRIEVAL_MODE=hybrid
+
+# 7. Start API server
+uv run python -m engram.api.main
+```
+
 **Retrieval evaluation:**
 ```bash
 # Run evaluation against golden queries
