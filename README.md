@@ -26,14 +26,14 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 - **FAISS Vector Index**: Fast similarity search with flat (exact) or IVF (approximate) indexes
 - **MMR Diversity**: Maximal Marginal Relevance prevents redundant results (hybrid mode only)
 - **Dynamic top_k**: Query complexity classification adjusts retrieval depth
-- **Retrieval Debugging**: Trace chunks through pipeline stages with `debug_retrieval.py`
+- **Retrieval Debugging**: Trace memories through pipeline stages with `debug_retrieval.py`
 - **Evaluation Framework**: Recall@K, MRR, NDCG metrics with golden query testing
 
 **Dual-Content Memory:**
-- **Separate Search vs Display**: `search_content` for search, `content` for LLM generation
-- **Search-Optimized**: Summary + keywords for BM25 search
+- **Separate Search vs Display**: `search_content` for vector/BM25 search, `content` for LLM generation
+- **Search-Optimized**: Summary + keywords optimized for retrieval
 - **Near-Verbatim Facts**: Actual data preserved for accurate LLM responses
-- **Backward Compatible**: Works with existing memories (falls back to content)
+- **Memory Embeddings**: BGE-M3 embeds memories (not raw chunks) for semantic search
 
 **NLP & Processing:**
 - **Russian NLP**: PyMorphy3 lemmatization and stopword removal for Russian content
@@ -932,7 +932,7 @@ uv run ruff check src/engram
 - [x] VectorRetriever for FAISS-based search
 - [x] BGE-reranker-v2-m3 (replaces Jina as default)
 - [x] 4-way RRF fusion: Vector (0.25), BM25 (0.25), Path (0.30), Graph (0.20)
-- [x] Semantic chunker with BGE tokenizer (512-1024 tokens)
+- [x] Memory embeddings with BGE-M3 (`search_content` field)
 - [x] VectorStepMetrics for observability
 - [x] Migration script (`scripts/migrate_to_v5.py`)
 - [x] Retrieval evaluation metrics (Recall@K, MRR, NDCG)
