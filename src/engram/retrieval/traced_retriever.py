@@ -314,18 +314,18 @@ class TracedRetriever:
 
         # Step 8: Vector search (if enabled)
         vector_results: list[tuple] = []
-        if use_vector and query_embedding:
+        if use_vector:
             with self._trace_step(trace, "vector_search") as step:
                 search_start = time.perf_counter()
 
-                # v5: Use FAISS-based retriever if available
+                # v5: Use FAISS-based retriever if available (use query text for BGE-M3)
                 if self.vector_retriever is not None:
-                    vector_results = await self.vector_retriever.retrieve_memories_with_embedding(
-                        query_embedding=query_embedding, top_k=settings.retrieval_vector_k
+                    vector_results = await self.vector_retriever.retrieve_memories(
+                        query=query, top_k=settings.retrieval_vector_k
                     )
                     step.metadata["index_type"] = "faiss"
                     step.metadata["index_count"] = self.vector_retriever.index_count
-                else:
+                elif query_embedding:
                     vector_results = await self.db.vector_search_memories(
                         embedding=query_embedding, k=settings.retrieval_vector_k
                     )

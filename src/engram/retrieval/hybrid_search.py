@@ -262,8 +262,9 @@ class HybridSearch:
             if use_vector:
                 # v5: Use FAISS-based retriever if available, otherwise Neo4j
                 if self.vector_retriever is not None:
-                    vector_results = await self.vector_retriever.retrieve_memories_with_embedding(
-                        query_embedding=query_embedding, top_k=self.vector_k
+                    # Use query text so VectorRetriever embeds with BGE-M3
+                    vector_results = await self.vector_retriever.retrieve_memories(
+                        query=query, top_k=self.vector_k
                     )
                 else:
                     vector_results = await self.db.vector_search_memories(
@@ -676,8 +677,9 @@ class HybridSearch:
         if use_vector:
             # v5: Use FAISS-based retriever if available, otherwise Neo4j
             if self.vector_retriever is not None:
-                orig_vector_results = await self.vector_retriever.retrieve_memories_with_embedding(
-                    query_embedding=original_embedding, top_k=self.vector_k
+                # Use query text so VectorRetriever embeds with BGE-M3
+                orig_vector_results = await self.vector_retriever.retrieve_memories(
+                    query=original_query, top_k=self.vector_k
                 )
             else:
                 orig_vector_results = await self.db.vector_search_memories(
@@ -739,8 +741,10 @@ class HybridSearch:
                 memory_sources.setdefault(m.id, []).append("BE")  # BM25 Expanded
 
         # 3. Semantic rewrite → Vector only (skip in bm25_graph mode)
-        if use_vector and semantic_rewrite_embedding:
-            sem_results = await self._retrieve_vector_only(semantic_rewrite_embedding)
+        if use_vector and semantic_rewrite:
+            sem_results = await self._retrieve_vector_only(
+                query=semantic_rewrite, embedding=semantic_rewrite_embedding
+            )
             sem_ranked = [(m.id, score) for m, score in sem_results]
             all_ranked_lists.append(sem_ranked)
             all_weights.append(settings.rrf_vector_weight)
@@ -749,8 +753,10 @@ class HybridSearch:
                 memory_sources.setdefault(m.id, []).append("S")  # Semantic
 
         # 4. HyDE → Vector only (skip in bm25_graph mode)
-        if use_vector and hyde_embedding:
-            hyde_results = await self._retrieve_vector_only(hyde_embedding)
+        if use_vector and hyde_document:
+            hyde_results = await self._retrieve_vector_only(
+                query=hyde_document, embedding=hyde_embedding
+            )
             hyde_ranked = [(m.id, score) for m, score in hyde_results]
             all_ranked_lists.append(hyde_ranked)
             all_weights.append(settings.rrf_vector_weight)
@@ -798,17 +804,21 @@ class HybridSearch:
 
     async def _retrieve_vector_only(
         self,
-        embedding: list[float],
+        query: str | None = None,
+        embedding: list[float] | None = None,
         k: int | None = None,
     ) -> list[tuple[SemanticMemory, float]]:
         """Vector-only retrieval for semantic queries."""
         k = k or self.vector_k
-        # v5: Use FAISS-based retriever if available
-        if self.vector_retriever is not None:
-            return await self.vector_retriever.retrieve_memories_with_embedding(
-                query_embedding=embedding, top_k=k
+        # v5: Use FAISS-based retriever if available (prefers query text for BGE-M3)
+        if self.vector_retriever is not None and query:
+            return await self.vector_retriever.retrieve_memories(
+                query=query, top_k=k
             )
-        return await self.db.vector_search_memories(embedding=embedding, k=k)
+        # Fallback to Neo4j vector search with pre-computed embedding
+        if embedding:
+            return await self.db.vector_search_memories(embedding=embedding, k=k)
+        return []
 
 
 async def hybrid_search(
