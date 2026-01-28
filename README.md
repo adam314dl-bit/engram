@@ -49,7 +49,7 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 - **Learning from Feedback**: Positive feedback strengthens memories, negative triggers re-reasoning
 - **Memory Consolidation**: Successful episodes crystallize into semantic memories
 - **Table Enrichment**: LLM-based table enrichment with multi-vector retrieval
-- **Fast Ingestion**: Batch Neo4j writes and batch embeddings
+- **Fast Ingestion**: Batch Neo4j writes, embeddings generated separately via `build_vector_index.py`
 
 **Integration:**
 - **Source Attribution**: Shows document sources (title + URL) in responses
@@ -749,10 +749,9 @@ uv run ruff check src/engram
 
 **v3.5 Ingestion Improvements:**
 - [x] Batch Neo4j writes (UNWIND queries instead of individual MERGEs)
-- [x] Combined embedding calls (single batch for concepts + memories)
 - [x] High concurrency config (32 docs parallel)
 - [x] Separate extractors with table enrichment (2 + N LLM calls per doc)
-- [x] Skip embeddings in `bm25_graph` mode for faster ingestion
+- [x] Embeddings removed from ingestion (v5 uses separate `build_vector_index.py`)
 
 **Dual-Content Memory:**
 - [x] Separate `search_content` (summary + keywords) from `content` (actual facts)
