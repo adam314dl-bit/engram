@@ -72,35 +72,215 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 | Transliteration | cyrtranslit |
 | LLM | OpenAI-compatible endpoint (remote) |
 
-## Quick Start
+## Getting Started
+
+Complete step-by-step guide to get Engram running with your own documents.
 
 ### Prerequisites
 
-- Docker
-- uv (Python package manager)
+| Requirement | Purpose | Install |
+|-------------|---------|---------|
+| Docker | Run Neo4j database | [docker.com](https://docker.com) |
+| Python 3.11+ | Runtime | `brew install python@3.11` or system package |
+| uv | Package manager | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+| Ollama (optional) | Local LLM for extraction | [ollama.com](https://ollama.com) |
 
-### Local Development
+### Step 1: Clone and Install
 
 ```bash
 # Clone repository
 git clone <repo-url>
 cd engram
 
-# Start Neo4j
-docker run -d --name neo4j -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/engram_password neo4j:5
-
-# Install dependencies
+# Install Python dependencies
 uv sync
 
-# Copy and configure environment
+# Copy environment template
 cp .env.example .env
-# Edit .env with your LLM endpoint
+```
 
-# Run tests
-uv run pytest
+### Step 2: Configure Environment
 
-# Start API
+Edit `.env` with your settings:
+
+```bash
+# Required: LLM endpoint for extraction and synthesis
+LLM_BASE_URL=http://localhost:11434/v1   # Ollama local
+LLM_MODEL=qwen3:8b                        # Recommended model
+
+# Neo4j (defaults work with Docker setup below)
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=engram_password
+
+# Retrieval mode (start with bm25_graph, no GPU needed)
+RETRIEVAL_MODE=bm25_graph
+```
+
+### Step 3: Start Neo4j Database
+
+```bash
+# Start Neo4j with persistent storage
+docker run -d --name engram-neo4j \
+  -p 7474:7474 -p 7687:7687 \
+  -v ~/engram-data/neo4j/data:/data \
+  -v ~/engram-data/neo4j/logs:/logs \
+  -e NEO4J_AUTH=neo4j/engram_password \
+  -e NEO4J_PLUGINS='["apoc"]' \
+  --restart unless-stopped \
+  neo4j:5.15-community
+
+# Wait for Neo4j to start (~30 seconds)
+sleep 30
+
+# Verify Neo4j is running
+curl -s http://localhost:7474 | head -1
+# Should show: {"bolt":...}
+```
+
+### Step 4: Start LLM (Ollama)
+
+```bash
+# Start Ollama server
+ollama serve &
+
+# Pull recommended model (one-time)
+ollama pull qwen3:8b
+
+# Verify Ollama is running
+curl -s http://localhost:11434/api/tags | head -1
+```
+
+### Step 5: Ingest Your Documents
+
+Put your `.md` or `.txt` files in a directory, then run ingestion:
+
+```bash
+# Ingest documents (replace with your path)
+uv run python scripts/run_ingestion.py /path/to/your/docs
+
+# Or use --clear to reset and re-ingest
+uv run python scripts/run_ingestion.py --clear /path/to/your/docs
+```
+
+**What happens during ingestion:**
+- Documents are parsed and normalized
+- LLM extracts concepts (entities, tools, actions)
+- LLM extracts memories (facts, procedures)
+- Tables are enriched with summaries
+- Everything is stored in Neo4j graph
+
+### Step 6: Optimize Graph Quality (Recommended)
+
+After ingestion, improve the knowledge graph:
+
+```bash
+# Run deduplication + enrichment
+uv run python scripts/improve_graph_quality.py all
+
+# Check graph statistics
+uv run python scripts/improve_graph_quality.py stats
+```
+
+**What this does:**
+- Merges duplicate concepts (e.g., "Docker" and "докер")
+- Adds world knowledge (definitions, relationships)
+- Improves retrieval accuracy
+
+### Step 7: Build Vector Index (Optional, for Hybrid Mode)
+
+If you want vector search (better semantic matching):
+
+```bash
+# Build FAISS index with BGE-M3 embeddings
+uv run python scripts/build_vector_index.py
+
+# Enable hybrid mode in .env
+# RETRIEVAL_MODE=hybrid
+```
+
+### Step 8: Compute Graph Layout (For Visualization)
+
+Required if you want to use the `/constellation` graph visualization:
+
+```bash
+uv run python scripts/compute_layout.py
+```
+
+### Step 9: Start the Server
+
+```bash
+uv run python -m engram.api.main
+```
+
+Server starts at `http://localhost:8000`.
+
+### Step 10: Test Your Setup
+
+**Option A: Quick test with curl**
+
+```bash
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "What can you tell me about Docker?"}]}'
+```
+
+**Option B: Interactive chat CLI**
+
+```bash
+uv run python scripts/chat.py
+```
+
+Commands:
+- Type your question and press Enter
+- `/stats` - Show system statistics
+- `/concepts` - List extracted concepts
+- `/memories` - List stored memories
+- `/quit` - Exit
+
+**Option C: Web visualization**
+
+Open `http://localhost:8000/constellation` in your browser to see the knowledge graph and chat with activation visualization.
+
+**Option D: Open WebUI**
+
+See [Open WebUI Integration](#open-webui-integration) section below.
+
+### Quick Reference: Full Setup Commands
+
+Copy-paste this entire block to set up from scratch:
+
+```bash
+# 1. Install dependencies
+uv sync
+
+# 2. Start Neo4j
+docker run -d --name engram-neo4j \
+  -p 7474:7474 -p 7687:7687 \
+  -v ~/engram-data/neo4j/data:/data \
+  -e NEO4J_AUTH=neo4j/engram_password \
+  -e NEO4J_PLUGINS='["apoc"]' \
+  --restart unless-stopped \
+  neo4j:5.15-community
+sleep 30
+
+# 3. Start Ollama
+ollama serve &
+ollama pull qwen3:8b
+
+# 4. Ingest your documents
+uv run python scripts/run_ingestion.py /path/to/your/docs
+
+# 5. Optimize graph quality
+uv run python scripts/improve_graph_quality.py all
+
+# 6. (Optional) Build vector index for hybrid mode
+uv run python scripts/build_vector_index.py
+
+# 7. Compute layout for visualization
+uv run python scripts/compute_layout.py
+
+# 8. Start server
 uv run python -m engram.api.main
 ```
 
@@ -344,22 +524,19 @@ Commands:
 
 ## Document Ingestion
 
+See [Step 5 in Getting Started](#step-5-ingest-your-documents) for basic ingestion.
+
+**Additional commands:**
+
 ```bash
 # Generate mock documents (for testing)
 uv run python scripts/generate_mock_docs.py
 
-# Ingest documents
-uv run python scripts/run_ingestion.py
-
-# Ingest from custom directory
-uv run python scripts/run_ingestion.py /path/to/docs
-
-# Reset database and re-ingest (clears all data first)
-uv run python scripts/run_ingestion.py --clear /path/to/docs
-
-# Create concept index (required for BM25+Graph mode)
+# Create concept index (if not auto-created)
 uv run python scripts/create_concept_index.py
 ```
+
+**Supported formats:** `.md`, `.txt`, `.markdown`
 
 **Confluence Export Support:**
 - Extracts title from `Заголовок страницы:` field
@@ -395,22 +572,6 @@ uv run python scripts/improve_graph_quality.py dedup --dry-run
 
 # 7. Interactive review of medium-confidence duplicates
 uv run python scripts/review_duplicates.py
-```
-
-### Recommended Workflow
-
-After ingestion, run graph quality optimization:
-
-```bash
-# Full workflow after fresh ingest
-uv run python scripts/run_ingestion.py --clear /path/to/docs
-uv run python scripts/improve_graph_quality.py all    # Dedup + enrich
-uv run python scripts/compute_layout.py               # Recompute layout
-
-# Quality check on existing graph
-uv run python scripts/improve_graph_quality.py stats  # View metrics
-uv run python scripts/improve_graph_quality.py dedup  # Merge duplicates
-uv run python scripts/improve_graph_quality.py enrich # Add world knowledge
 ```
 
 ### Features
@@ -470,9 +631,11 @@ Recommended concurrency by GPU count:
 | 2    | 2                        | 128                            |
 | 4    | 4                        | 256                            |
 
-## v5 Migration
+## v5 Migration (Upgrading from v4.x)
 
-To upgrade from v4.x to v5 with BGE-M3 vector retrieval:
+> **New users:** Skip this section. Follow [Getting Started](#getting-started) instead.
+
+To upgrade an existing v4.x installation to v5 with BGE-M3 vector retrieval:
 
 ```bash
 # 1. Install new dependencies
@@ -498,39 +661,6 @@ uv run python scripts/migrate_to_v5.py --index-path ./data/my_index
 
 # Skip if index already exists
 uv run python scripts/migrate_to_v5.py --skip-existing
-```
-
-**Standalone index builder:**
-```bash
-# Build index without full migration
-uv run python scripts/build_vector_index.py
-
-# With options
-uv run python scripts/build_vector_index.py --output ./data/index --force
-```
-
-**Full reingest workflow (fresh start):**
-```bash
-# 1. Install dependencies
-uv sync
-
-# 2. Reingest all documents (clears existing data)
-uv run python scripts/run_ingestion.py --clear /path/to/docs
-
-# 3. Run graph quality optimization (dedup + enrich)
-uv run python scripts/improve_graph_quality.py all
-
-# 4. Build FAISS vector index
-uv run python scripts/build_vector_index.py
-
-# 5. Compute graph layout for visualization
-uv run python scripts/compute_layout.py
-
-# 6. Enable hybrid mode in .env
-# Uncomment: RETRIEVAL_MODE=hybrid
-
-# 7. Start API server
-uv run python -m engram.api.main
 ```
 
 **Retrieval evaluation:**
