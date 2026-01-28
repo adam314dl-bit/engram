@@ -2,12 +2,16 @@
 
 v4.5: Wraps RetrievalPipeline to add detailed tracing of chunks
 through every pipeline stage.
+
+v5: Added support for FAISS-based vector retrieval with VectorStepMetrics.
 """
 
 import logging
 import time
 from contextlib import contextmanager
-from typing import Generator
+from typing import TYPE_CHECKING, Generator
+
+import numpy as np
 
 from engram.config import settings
 from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
@@ -16,10 +20,14 @@ from engram.retrieval.observability import (
     ChunkTrace,
     RetrievalTrace,
     StepTrace,
+    VectorStepMetrics,
     create_trace,
 )
 from engram.retrieval.pipeline import RetrievalPipeline, RetrievalResult
 from engram.storage.neo4j_client import Neo4jClient
+
+if TYPE_CHECKING:
+    from engram.retrieval.vector_retriever import VectorRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +52,11 @@ class TracedRetriever:
         self,
         db: Neo4jClient,
         embedding_service: EmbeddingService | None = None,
+        vector_retriever: "VectorRetriever | None" = None,
     ) -> None:
         self.db = db
         self.embeddings = embedding_service or get_embedding_service()
+        self.vector_retriever = vector_retriever  # v5: FAISS-based retriever
         self.pipeline = RetrievalPipeline(
             db=db,
             embedding_service=self.embeddings,
@@ -306,10 +316,35 @@ class TracedRetriever:
         vector_results: list[tuple] = []
         if use_vector and query_embedding:
             with self._trace_step(trace, "vector_search") as step:
-                vector_results = await self.db.vector_search_memories(
-                    embedding=query_embedding, k=settings.retrieval_vector_k
-                )
+                search_start = time.perf_counter()
+
+                # v5: Use FAISS-based retriever if available
+                if self.vector_retriever is not None:
+                    vector_results = await self.vector_retriever.retrieve_memories_with_embedding(
+                        query_embedding=query_embedding, top_k=settings.retrieval_vector_k
+                    )
+                    step.metadata["index_type"] = "faiss"
+                    step.metadata["index_count"] = self.vector_retriever.index_count
+                else:
+                    vector_results = await self.db.vector_search_memories(
+                        embedding=query_embedding, k=settings.retrieval_vector_k
+                    )
+                    step.metadata["index_type"] = "neo4j"
+
+                search_time = (time.perf_counter() - search_start) * 1000
                 step.output_count = len(vector_results)
+
+                # Calculate vector metrics
+                scores = [score for _, score in vector_results]
+                if scores:
+                    step.vector_metrics = VectorStepMetrics(
+                        query_embedding_time_ms=0,  # Already done earlier
+                        index_search_time_ms=search_time,
+                        total_vectors_searched=self.vector_retriever.index_count if self.vector_retriever else 0,
+                        similarity_min=float(min(scores)),
+                        similarity_max=float(max(scores)),
+                        similarity_mean=float(np.mean(scores)),
+                    )
 
                 for rank, (memory, score) in enumerate(vector_results, 1):
                     if memory.id not in trace.chunk_traces:
@@ -322,6 +357,7 @@ class TracedRetriever:
                     chunk = trace.chunk_traces[memory.id]
                     chunk.stage_scores["vector_search"] = score
                     chunk.stage_ranks["vector_search"] = rank
+                    chunk.vector_score = score  # v5: Also set dedicated vector_score
                     step.chunk_scores[memory.id] = score
                     if "V" not in chunk.sources:
                         chunk.sources.append("V")

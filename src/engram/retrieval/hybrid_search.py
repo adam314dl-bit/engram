@@ -2,12 +2,15 @@
 
 Uses Reciprocal Rank Fusion (RRF) to combine results from multiple sources.
 Includes MMR (Maximal Marginal Relevance) for diversity and dynamic top_k.
+
+v5: Supports FAISS-based vector retrieval via VectorRetriever.
 """
 
 import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -16,6 +19,9 @@ from engram.models import EpisodicMemory, SemanticMemory
 from engram.retrieval.embeddings import cosine_similarity
 from engram.retrieval.fusion import rrf_scores_only, weighted_rrf
 from engram.storage.neo4j_client import Neo4jClient
+
+if TYPE_CHECKING:
+    from engram.retrieval.vector_retriever import VectorRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +193,7 @@ class HybridSearch:
 
     Combines:
     1. Graph-based retrieval (from spreading activation)
-    2. Vector similarity search
+    2. Vector similarity search (v5: FAISS-based or Neo4j)
     3. BM25 full-text search
 
     Then reranks using: recency + importance + relevance
@@ -196,12 +202,14 @@ class HybridSearch:
     def __init__(
         self,
         db: Neo4jClient,
+        vector_retriever: "VectorRetriever | None" = None,
         vector_k: int | None = None,
         bm25_k: int | None = None,
         final_k: int | None = None,
         recency_decay: float = 0.995,
     ) -> None:
         self.db = db
+        self.vector_retriever = vector_retriever  # v5: FAISS-based retriever
         self.vector_k = vector_k or settings.retrieval_vector_k
         self.bm25_k = bm25_k or settings.retrieval_bm25_k
         self.final_k = final_k or settings.retrieval_top_k
@@ -252,9 +260,15 @@ class HybridSearch:
         if vector_results is None:
             vector_results = []
             if use_vector:
-                vector_results = await self.db.vector_search_memories(
-                    embedding=query_embedding, k=self.vector_k
-                )
+                # v5: Use FAISS-based retriever if available, otherwise Neo4j
+                if self.vector_retriever is not None:
+                    vector_results = await self.vector_retriever.retrieve_memories_with_embedding(
+                        query_embedding=query_embedding, top_k=self.vector_k
+                    )
+                else:
+                    vector_results = await self.db.vector_search_memories(
+                        embedding=query_embedding, k=self.vector_k
+                    )
         vector_ranked = [(m.id, score) for m, score in vector_results]
 
         # 2. BM25 full-text search (use pre-fetched results if provided)
@@ -660,9 +674,15 @@ class HybridSearch:
 
         # 1. Original query → Hybrid search (vector only in hybrid mode)
         if use_vector:
-            orig_vector_results = await self.db.vector_search_memories(
-                embedding=original_embedding, k=self.vector_k
-            )
+            # v5: Use FAISS-based retriever if available, otherwise Neo4j
+            if self.vector_retriever is not None:
+                orig_vector_results = await self.vector_retriever.retrieve_memories_with_embedding(
+                    query_embedding=original_embedding, top_k=self.vector_k
+                )
+            else:
+                orig_vector_results = await self.db.vector_search_memories(
+                    embedding=original_embedding, k=self.vector_k
+                )
             # Vector ranked list
             orig_vector_ranked = [(m.id, score) for m, score in orig_vector_results]
             all_ranked_lists.append(orig_vector_ranked)
@@ -783,6 +803,11 @@ class HybridSearch:
     ) -> list[tuple[SemanticMemory, float]]:
         """Vector-only retrieval for semantic queries."""
         k = k or self.vector_k
+        # v5: Use FAISS-based retriever if available
+        if self.vector_retriever is not None:
+            return await self.vector_retriever.retrieve_memories_with_embedding(
+                query_embedding=embedding, top_k=k
+            )
         return await self.db.vector_search_memories(embedding=embedding, k=k)
 
 

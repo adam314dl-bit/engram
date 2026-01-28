@@ -97,30 +97,30 @@ class Settings(BaseSettings):
         description="RRF constant k, higher values reduce top rank dominance"
     )
     rrf_bm25_weight: float = Field(
-        default=0.35,
+        default=0.25,
         description="BM25 weight in weighted RRF fusion"
     )
     rrf_vector_weight: float = Field(
-        default=0.0,
-        description="Vector search weight (disabled in bm25_graph mode)"
+        default=0.25,
+        description="Vector search weight (v5: BGE-M3 FAISS, disabled in bm25_graph mode)"
     )
     rrf_graph_weight: float = Field(
-        default=0.30,
+        default=0.20,
         description="Graph traversal (spreading activation) weight in weighted RRF fusion"
     )
     rrf_path_weight: float = Field(
-        default=0.35,
+        default=0.30,
         description="Path-based retrieval weight in weighted RRF fusion"
     )
 
     # Reranker Parameters
     reranker_enabled: bool = Field(
         default=True,
-        description="Enable Jina cross-encoder reranking"
+        description="Enable cross-encoder reranking"
     )
     reranker_model: str = Field(
-        default="jinaai/jina-reranker-v3",
-        description="Cross-encoder model for reranking (Jina v3 replaces BGE)"
+        default="BAAI/bge-reranker-v2-m3",
+        description="Cross-encoder model for reranking (v5: BGE default, supports Jina)"
     )
     reranker_candidates: int = Field(
         default=64,
@@ -129,6 +129,10 @@ class Settings(BaseSettings):
     reranker_device: str = Field(
         default="cuda:0",
         description="Device for reranker model (cuda:0, cpu, etc.)"
+    )
+    reranker_use_fp16: bool = Field(
+        default=True,
+        description="Use FP16 for reranker inference (faster on GPU)"
     )
 
     # BM25 Parameters
@@ -302,6 +306,48 @@ class Settings(BaseSettings):
     observability_trace_dir: str = Field(
         default="./traces",
         description="Directory for trace files"
+    )
+
+    # v5: BGE-M3 Embeddings
+    bge_model_name: str = Field(
+        default="BAAI/bge-m3",
+        description="BGE-M3 model for dense embeddings (1024-dim, multilingual)"
+    )
+    bge_use_fp16: bool = Field(
+        default=True,
+        description="Use FP16 for BGE-M3 inference"
+    )
+    bge_max_length: int = Field(
+        default=8192,
+        description="Maximum sequence length for BGE-M3"
+    )
+    bge_batch_size: int = Field(
+        default=32,
+        description="Batch size for BGE-M3 embedding"
+    )
+
+    # v5: Vector Index
+    vector_index_path: str = Field(
+        default="./data/vector_index",
+        description="Path to FAISS vector index"
+    )
+    vector_index_type: str = Field(
+        default="flat",
+        description="FAISS index type: 'flat' (exact) or 'ivf' (approximate)"
+    )
+
+    # v5: Semantic Chunking
+    chunk_min_tokens: int = Field(
+        default=512,
+        description="Minimum tokens per semantic chunk"
+    )
+    chunk_max_tokens: int = Field(
+        default=1024,
+        description="Maximum tokens per semantic chunk"
+    )
+    chunk_similarity_threshold: float = Field(
+        default=0.5,
+        description="Similarity threshold for semantic break detection"
     )
 
 def get_dev_settings() -> Settings:

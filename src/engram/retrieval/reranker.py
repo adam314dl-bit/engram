@@ -1,7 +1,7 @@
-"""Jina Reranker v3 for improved retrieval precision.
+"""Reranker module supporting BGE and Jina cross-encoder models.
 
-Uses jinaai/jina-reranker-v3 model which supports Russian
-and provides strong cross-lingual reranking capabilities.
+v5: Default is BGE-reranker-v2-m3 (better Russian performance).
+Supports fallback to Jina Reranker v3 for compatibility.
 """
 
 # IMPORTANT: Set offline mode BEFORE any HuggingFace imports
@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 from engram.config import settings
 
 if TYPE_CHECKING:
+    from FlagEmbedding import FlagReranker
     from transformers import AutoModel
 
 logger = logging.getLogger(__name__)
@@ -36,12 +37,53 @@ class RerankedItem:
     original_rank: int
 
 
+def _is_bge_model(model_name: str) -> bool:
+    """Check if model is a BGE reranker."""
+    return "bge-reranker" in model_name.lower() or "baai" in model_name.lower()
+
+
+def _is_jina_model(model_name: str) -> bool:
+    """Check if model is a Jina reranker."""
+    return "jina" in model_name.lower()
+
+
 @lru_cache(maxsize=1)
-def get_reranker() -> "AutoModel":
+def get_bge_reranker() -> "FlagReranker":
+    """
+    Get or create cached BGE reranker (singleton with lazy loading).
+
+    Returns:
+        FlagReranker instance
+    """
+    if not settings.reranker_enabled:
+        raise RuntimeError("Reranker is disabled in settings")
+
+    logger.info(f"Loading BGE reranker model: {settings.reranker_model}")
+
+    import torch
+    from FlagEmbedding import FlagReranker
+
+    # Determine device
+    device = settings.reranker_device
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        logger.warning("CUDA requested but not available, falling back to CPU")
+        device = "cpu"
+
+    # Load BGE reranker
+    model = FlagReranker(
+        settings.reranker_model,
+        use_fp16=settings.reranker_use_fp16 and device != "cpu",
+        device=device,
+    )
+
+    logger.info(f"BGE reranker loaded successfully on {device}")
+    return model
+
+
+@lru_cache(maxsize=1)
+def get_jina_reranker() -> "AutoModel":
     """
     Get or create cached Jina reranker (singleton with lazy loading).
-
-    The model is loaded on first call and cached for subsequent calls.
 
     Returns:
         Jina Reranker v3 model instance
@@ -49,7 +91,7 @@ def get_reranker() -> "AutoModel":
     if not settings.reranker_enabled:
         raise RuntimeError("Reranker is disabled in settings")
 
-    logger.info(f"Loading reranker model: {settings.reranker_model}")
+    logger.info(f"Loading Jina reranker model: {settings.reranker_model}")
 
     import torch
     from transformers import AutoModel
@@ -60,13 +102,13 @@ def get_reranker() -> "AutoModel":
         logger.warning("CUDA requested but not available, falling back to CPU")
         device = "cpu"
 
-    # Load Jina Reranker v3 (try local cache first to skip HuggingFace online checks)
+    # Load Jina Reranker v3 (try local cache first)
     try:
         model = AutoModel.from_pretrained(
             settings.reranker_model,
             torch_dtype="auto",
             trust_remote_code=True,
-            local_files_only=True,  # Skip HF network requests for faster loading
+            local_files_only=True,
         )
     except OSError:
         # Model not cached - temporarily allow network access to download
@@ -88,8 +130,105 @@ def get_reranker() -> "AutoModel":
     model = model.to(device)
     model.eval()
 
-    logger.info(f"Reranker model loaded successfully on {device}")
+    logger.info(f"Jina reranker loaded successfully on {device}")
     return model
+
+
+def _rerank_bge(
+    query: str,
+    candidates: list[tuple[str, str, float]],
+    top_k: int,
+) -> list[RerankedItem]:
+    """Rerank using BGE reranker."""
+    import time
+
+    model = get_bge_reranker()
+
+    # Build query-document pairs
+    pairs = [[query, content] for _, content, _ in candidates]
+
+    # Log stats
+    avg_len = sum(len(p[1]) for p in pairs) / len(pairs) if pairs else 0
+    logger.debug(f"BGE reranking {len(pairs)} docs, avg length: {avg_len:.0f} chars")
+
+    # Compute scores
+    start = time.perf_counter()
+    scores = model.compute_score(pairs, normalize=True)
+    elapsed = (time.perf_counter() - start) * 1000
+    logger.debug(f"BGE reranker inference took {elapsed:.1f}ms")
+
+    # Handle single result case
+    if not isinstance(scores, list):
+        scores = [scores]
+
+    # Build results with scores
+    scored_items = []
+    for i, (id_, content, original_score) in enumerate(candidates):
+        scored_items.append((
+            id_,
+            content,
+            float(scores[i]),
+            original_score,
+            i,  # original rank
+        ))
+
+    # Sort by rerank score descending
+    scored_items.sort(key=lambda x: x[2], reverse=True)
+
+    # Return top_k
+    return [
+        RerankedItem(
+            id=item[0],
+            content=item[1],
+            rerank_score=item[2],
+            original_score=item[3],
+            original_rank=item[4],
+        )
+        for item in scored_items[:top_k]
+    ]
+
+
+def _rerank_jina(
+    query: str,
+    candidates: list[tuple[str, str, float]],
+    top_k: int,
+) -> list[RerankedItem]:
+    """Rerank using Jina reranker."""
+    import time
+
+    model = get_jina_reranker()
+
+    # Extract documents
+    documents = [content for _, content, _ in candidates]
+
+    # Log stats
+    avg_len = sum(len(d) for d in documents) / len(documents) if documents else 0
+    logger.debug(f"Jina reranking {len(documents)} docs, avg length: {avg_len:.0f} chars")
+
+    # Use Jina's rerank method
+    start = time.perf_counter()
+    results = model.rerank(query, documents, top_n=min(top_k, len(candidates)))
+    elapsed = (time.perf_counter() - start) * 1000
+    logger.debug(f"Jina reranker inference took {elapsed:.1f}ms")
+
+    # Build output
+    reranked_items = []
+    for result in results:
+        idx = result["index"]
+        score = result["relevance_score"]
+        id_, content, original_score = candidates[idx]
+
+        reranked_items.append(
+            RerankedItem(
+                id=id_,
+                content=content,
+                rerank_score=float(score),
+                original_score=original_score,
+                original_rank=idx,
+            )
+        )
+
+    return reranked_items
 
 
 def rerank(
@@ -98,7 +237,9 @@ def rerank(
     top_k: int | None = None,
 ) -> list[RerankedItem]:
     """
-    Rerank candidates using Jina cross-encoder.
+    Rerank candidates using cross-encoder.
+
+    Automatically selects BGE or Jina based on model name in settings.
 
     Args:
         query: Query text
@@ -108,8 +249,6 @@ def rerank(
     Returns:
         List of RerankedItem sorted by rerank_score descending
     """
-    import time
-
     if not settings.reranker_enabled:
         # Return candidates as-is if reranker disabled
         return [
@@ -127,39 +266,16 @@ def rerank(
         return []
 
     top_k = top_k if top_k is not None else settings.retrieval_top_k
-    model = get_reranker()
 
-    # Extract documents from candidates
-    documents = [content for _, content, _ in candidates]
-
-    # Log stats for debugging
-    avg_len = sum(len(d) for d in documents) / len(documents) if documents else 0
-    logger.debug(f"Reranking {len(documents)} docs, avg length: {avg_len:.0f} chars")
-
-    # Use Jina's rerank method (returns list of dicts with 'index' and 'relevance_score')
-    start = time.perf_counter()
-    results = model.rerank(query, documents, top_n=min(top_k, len(candidates)))
-    elapsed = (time.perf_counter() - start) * 1000
-    logger.debug(f"Reranker inference took {elapsed:.1f}ms")
-
-    # Build output mapping results back to original candidates
-    reranked_items: list[RerankedItem] = []
-    for result in results:
-        idx = result["index"]
-        score = result["relevance_score"]
-        id_, content, original_score = candidates[idx]
-
-        reranked_items.append(
-            RerankedItem(
-                id=id_,
-                content=content,
-                rerank_score=float(score),
-                original_score=original_score,
-                original_rank=idx,
-            )
-        )
-
-    return reranked_items
+    # Select reranker based on model name
+    if _is_bge_model(settings.reranker_model):
+        return _rerank_bge(query, candidates, top_k)
+    elif _is_jina_model(settings.reranker_model):
+        return _rerank_jina(query, candidates, top_k)
+    else:
+        # Default to BGE for unknown models
+        logger.warning(f"Unknown reranker model type: {settings.reranker_model}, trying BGE")
+        return _rerank_bge(query, candidates, top_k)
 
 
 def rerank_with_fallback(
@@ -206,7 +322,10 @@ def is_reranker_available() -> bool:
         return False
 
     try:
-        get_reranker()
+        if _is_bge_model(settings.reranker_model):
+            get_bge_reranker()
+        else:
+            get_jina_reranker()
         return True
     except Exception as e:
         logger.warning(f"Reranker not available: {e}")
@@ -214,8 +333,9 @@ def is_reranker_available() -> bool:
 
 
 def clear_reranker_cache() -> None:
-    """Clear the cached reranker model (useful for testing)."""
-    get_reranker.cache_clear()
+    """Clear the cached reranker models (useful for testing)."""
+    get_bge_reranker.cache_clear()
+    get_jina_reranker.cache_clear()
 
 
 def preload_reranker() -> None:
@@ -231,7 +351,25 @@ def preload_reranker() -> None:
 
     try:
         logger.info("Preloading reranker model...")
-        get_reranker()
+        if _is_bge_model(settings.reranker_model):
+            get_bge_reranker()
+        else:
+            get_jina_reranker()
         logger.info("Reranker model ready")
     except Exception as e:
         logger.warning(f"Failed to preload reranker: {e}")
+
+
+def get_reranker():
+    """
+    Get the appropriate reranker based on settings.
+
+    Backwards-compatible function that returns BGE or Jina reranker.
+
+    Returns:
+        Reranker model instance
+    """
+    if _is_bge_model(settings.reranker_model):
+        return get_bge_reranker()
+    else:
+        return get_jina_reranker()

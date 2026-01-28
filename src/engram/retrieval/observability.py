@@ -2,6 +2,8 @@
 
 v4.5: Provides detailed tracing of where chunks appear and disappear
 at each stage of the retrieval pipeline.
+
+v5: Added VectorStepMetrics for vector retrieval observability.
 """
 
 import json
@@ -11,6 +13,18 @@ from datetime import datetime
 from pathlib import Path
 
 from engram.config import settings
+
+
+@dataclass
+class VectorStepMetrics:
+    """Metrics specific to vector retrieval step (v5)."""
+
+    query_embedding_time_ms: float = 0.0
+    index_search_time_ms: float = 0.0
+    total_vectors_searched: int = 0
+    similarity_min: float = 0.0
+    similarity_max: float = 0.0
+    similarity_mean: float = 0.0
 
 
 @dataclass
@@ -35,6 +49,9 @@ class ChunkTrace:
 
     # Final rank if included (1-indexed)
     final_rank: int | None = None
+
+    # v5: Vector-specific score (separate from stage_scores for clarity)
+    vector_score: float | None = None
 
     def appeared_in(self, step: str) -> bool:
         """Check if chunk appeared in a specific step."""
@@ -74,6 +91,9 @@ class StepTrace:
 
     # Additional metadata (e.g., extracted concepts, thresholds used)
     metadata: dict = field(default_factory=dict)
+
+    # v5: Vector-specific metrics
+    vector_metrics: VectorStepMetrics | None = None
 
     @property
     def dropped_count(self) -> int:
@@ -166,7 +186,7 @@ class RetrievalTrace:
         lines.append("Sources:")
         for source, count in sorted(source_counts.items()):
             source_name = {
-                "V": "Vector",
+                "V": "Vector (BGE-M3)",
                 "B": "BM25",
                 "G": "Graph (spreading)",
                 "P": "Path",

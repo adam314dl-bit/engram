@@ -23,7 +23,7 @@ dependencies = [
     "igraph>=0.11.0",
     "python-dotenv>=1.0.0",
     "pymorphy3>=2.0.0",
-    "transformers>=4.40.0",  # For Jina Reranker v3
+    "transformers>=4.40.0",  # For reranker models
     # v3.3 additions
     "cyrtranslit>=1.0.0",  # Russian/Latin transliteration
     "natasha>=1.6.0",  # Russian NER for person extraction
@@ -32,6 +32,9 @@ dependencies = [
     "chonkie[semantic]>=0.4.0",  # Semantic chunking for raw document retrieval
     # v4.4: Graph quality optimization
     "jellyfish>=1.0.0",  # Jaro-Winkler string similarity for deduplication
+    # v5: BGE-M3 vector retrieval
+    "FlagEmbedding>=1.2.11",  # BGE-M3 embeddings + BGE Reranker v2
+    "faiss-cpu>=1.7.4",  # FAISS vector index (CPU-only, sufficient for <100k vectors)
 ]
 
 [project.optional-dependencies]
@@ -46,9 +49,8 @@ dev = [
 gpu = [
     "cugraph-cu12>=24.0.0",
     "cudf-cu12>=24.0.0",
-]
-bge = [
-    "FlagEmbedding>=1.2.0",  # Alternative BGE reranker (set RERANKER_MODEL=BAAI/bge-reranker-v2-m3)
+    # Note: faiss-gpu is not available on all platforms (e.g., aarch64)
+    # Install manually if needed: pip install faiss-gpu
 ]
 
 [build-system]
@@ -78,7 +80,7 @@ disallow_untyped_defs = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["sentence_transformers.*", "neo4j.*", "pymorphy3.*", "FlagEmbedding.*", "natasha.*", "cyrtranslit.*", "chonkie.*", "transformers.*", "jellyfish.*"]
+module = ["sentence_transformers.*", "neo4j.*", "pymorphy3.*", "FlagEmbedding.*", "natasha.*", "cyrtranslit.*", "chonkie.*", "transformers.*", "jellyfish.*", "faiss.*"]
 ignore_missing_imports = true
 
 [tool.uv]

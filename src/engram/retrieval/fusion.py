@@ -2,9 +2,11 @@
 
 RRF is a simple but effective method to combine ranked lists from different
 retrieval methods (vector search, BM25, graph traversal, etc.).
+
+v5: Supports 4-way fusion (vector, BM25, graph, path) with source tracking.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TypeVar
 
 from engram.config import settings
@@ -27,8 +29,40 @@ class FusedResult:
 
     id: str
     fused_score: float
-    sources: list[str]  # Which rankers contributed to this result
-    original_scores: dict[str, float]  # Original scores by source
+    sources: list[str] = field(default_factory=list)  # Which rankers contributed
+    original_scores: dict[str, float] = field(default_factory=dict)  # Scores by source
+    original_ranks: dict[str, int] = field(default_factory=dict)  # Ranks by source (v5)
+
+    # v5: Convenience properties for individual source scores
+    @property
+    def vector_score(self) -> float | None:
+        """Get vector search score if present."""
+        return self.original_scores.get("vector")
+
+    @property
+    def bm25_score(self) -> float | None:
+        """Get BM25 score if present."""
+        return self.original_scores.get("bm25")
+
+    @property
+    def graph_score(self) -> float | None:
+        """Get graph (spreading) score if present."""
+        return self.original_scores.get("graph")
+
+    @property
+    def path_score(self) -> float | None:
+        """Get path retrieval score if present."""
+        return self.original_scores.get("path")
+
+    @property
+    def vector_rank(self) -> int | None:
+        """Get vector search rank if present."""
+        return self.original_ranks.get("vector")
+
+    @property
+    def bm25_rank(self) -> int | None:
+        """Get BM25 rank if present."""
+        return self.original_ranks.get("bm25")
 
 
 def reciprocal_rank_fusion(
@@ -58,10 +92,11 @@ def reciprocal_rank_fusion(
     if source_names is None:
         source_names = [f"source_{i}" for i in range(len(ranked_lists))]
 
-    # Track scores and sources for each item
+    # Track scores, ranks, and sources for each item
     fused_scores: dict[str, float] = {}
     item_sources: dict[str, list[str]] = {}
     original_scores: dict[str, dict[str, float]] = {}
+    original_ranks: dict[str, dict[str, int]] = {}
 
     for source_name, ranked_list in zip(source_names, ranked_lists, strict=True):
         for rank, (item_id, score) in enumerate(ranked_list):
@@ -79,6 +114,11 @@ def reciprocal_rank_fusion(
                 original_scores[item_id] = {}
             original_scores[item_id][source_name] = score
 
+            # Track original ranks (1-indexed for human readability)
+            if item_id not in original_ranks:
+                original_ranks[item_id] = {}
+            original_ranks[item_id][source_name] = rank + 1
+
     # Build results
     results = [
         FusedResult(
@@ -86,6 +126,7 @@ def reciprocal_rank_fusion(
             fused_score=score,
             sources=item_sources[item_id],
             original_scores=original_scores[item_id],
+            original_ranks=original_ranks[item_id],
         )
         for item_id, score in fused_scores.items()
     ]

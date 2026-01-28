@@ -1,0 +1,20 @@
+[
+    {
+        "query": "какие типы задач в jira",
+        "relevant_chunk_ids": [],
+        "notes": "Should return all 6 task types: Epic, Story, Task, Sub-task, Bug, Spike",
+        "tags": ["jira", "task-types"]
+    },
+    {
+        "query": "как создать pull request",
+        "relevant_chunk_ids": [],
+        "notes": "Should explain PR creation process",
+        "tags": ["git", "process"]
+    },
+    {
+        "query": "что такое sprint planning",
+        "relevant_chunk_ids": [],
+        "notes": "Should define sprint planning ceremony",
+        "tags": ["agile", "ceremonies"]
+    }
+]
