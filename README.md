@@ -891,7 +891,7 @@ uv run ruff check src/engram
 - [x] Neo4j fulltext index includes both fields
 
 **Weighted Retrieval:**
-- [x] Configurable RRF weights (updated in v4.5: BM25=0.35, Path=0.35, Graph=0.30)
+- [x] Configurable RRF weights (v5: BM25=0.25, Vector=0.25, Graph=0.20, Path=0.30)
 - [x] BM25 searches `content` field (original facts)
 - [x] Vector searches `search_content` embedding (summary + keywords)
 - [x] `weighted_rrf()` function for source-prioritized fusion
@@ -921,7 +921,6 @@ uv run ruff check src/engram
 - [x] Shared memories (linked to 2+ query concepts)
 - [x] Bridge concepts (connecting multiple query concepts)
 - [x] Path memories (from intermediate concepts on paths)
-- [x] Updated RRF weights: BM25 (0.35), Graph (0.30), Path (0.35)
 - [x] Retrieval observability with ChunkTrace, StepTrace, RetrievalTrace
 - [x] TracedRetriever wrapper for pipeline tracing
 - [x] Debug CLI (`scripts/debug_retrieval.py`) with chunk journey tracking
