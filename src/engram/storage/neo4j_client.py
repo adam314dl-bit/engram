@@ -683,6 +683,25 @@ class Neo4jClient:
                 memories.append(SemanticMemory.from_dict(dict(record["s"])))
         return memories
 
+    async def get_memories_by_ids(
+        self,
+        memory_ids: list[str],
+    ) -> list[SemanticMemory]:
+        """Get memories by their IDs."""
+        if not memory_ids:
+            return []
+        query = """
+        MATCH (s:SemanticMemory)
+        WHERE s.id IN $ids
+        RETURN s
+        """
+        memories: list[SemanticMemory] = []
+        async with self.session() as session:
+            result = await session.run(query, ids=memory_ids)
+            async for record in result:
+                memories.append(SemanticMemory.from_dict(dict(record["s"])))
+        return memories
+
     async def update_memory_access(self, memory_id: str) -> None:
         """Update access count and timestamp for a memory."""
         query = """

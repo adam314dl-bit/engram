@@ -83,11 +83,11 @@ class BGEEmbeddingService:
                 logger.warning("CUDA requested but not available, falling back to CPU")
                 device = "cpu"
 
-            # Load model with FP16 if enabled
+            # Load model with FP16 if enabled (use devices=[device] to prevent multi-GPU pooling)
             self._model = BGEM3FlagModel(
                 settings.bge_model_name,
                 use_fp16=settings.bge_use_fp16 and device != "cpu",
-                device=device,
+                devices=[device],  # Single device list prevents multi-process pool
             )
 
             logger.info(f"BGE-M3 model loaded on {device} (fp16={settings.bge_use_fp16})")
