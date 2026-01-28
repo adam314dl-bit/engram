@@ -33,7 +33,7 @@ Unlike traditional RAG that retrieves document chunks, Engram uses a brain-inspi
 - **Separate Search vs Display**: `search_content` for vector/BM25 search, `content` for LLM generation
 - **Search-Optimized**: Summary + keywords optimized for retrieval
 - **Near-Verbatim Facts**: Actual data preserved for accurate LLM responses
-- **Memory Embeddings**: BGE-M3 embeds memories (not raw chunks) for semantic search
+- **Unified Search**: Both BM25 and vector search operate on same text content
 
 **NLP & Processing:**
 - **Russian NLP**: PyMorphy3 lemmatization and stopword removal for Russian content
@@ -932,7 +932,7 @@ uv run ruff check src/engram
 - [x] VectorRetriever for FAISS-based search
 - [x] BGE-reranker-v2-m3 (replaces Jina as default)
 - [x] 4-way RRF fusion: Vector (0.25), BM25 (0.25), Path (0.30), Graph (0.20)
-- [x] Memory embeddings with BGE-M3 (`search_content` field)
+- [x] BGE-M3 embeds same content as BM25 (`search_content` field)
 - [x] VectorStepMetrics for observability
 - [x] Migration script (`scripts/migrate_to_v5.py`)
 - [x] Retrieval evaluation metrics (Recall@K, MRR, NDCG)
