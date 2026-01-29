@@ -13,6 +13,12 @@ Usage:
 
     # Recreate Neo4j vector indexes (after changing embedding dimensions)
     uv run python scripts/build_vector_index.py --recreate-neo4j-indexes --force
+
+    # Re-embed edges with BGE-M3 (fixes dimension mismatch)
+    uv run python scripts/build_vector_index.py --reembed-edges
+
+    # Full migration: recreate indexes + reembed edges + rebuild FAISS
+    uv run python scripts/build_vector_index.py --recreate-neo4j-indexes --reembed-edges --force
 """
 
 import argparse
@@ -97,6 +103,74 @@ async def recreate_neo4j_vector_indexes(db: Neo4jClient, dimensions: int = 1024)
     logger.info("Neo4j vector indexes recreated successfully")
 
 
+async def reembed_edge_embeddings(db: Neo4jClient, batch_size: int = 100) -> None:
+    """
+    Re-embed all edge embeddings with BGE-M3.
+
+    Args:
+        db: Neo4j client
+        batch_size: Batch size for embedding
+    """
+    logger.info("Fetching edges with concept names...")
+
+    # Fetch all edges with source/target concept names
+    query = """
+    MATCH (source:Concept)-[r:RELATED_TO]->(target:Concept)
+    RETURN source.id AS source_id, source.name AS source_name,
+           target.id AS target_id, target.name AS target_name,
+           r.type AS relation_type
+    """
+    results = await db.execute_query(query)
+    edges = [dict(r) for r in results]
+
+    if not edges:
+        logger.info("No edges to re-embed")
+        return
+
+    logger.info(f"Found {len(edges)} edges to re-embed")
+
+    # Load BGE-M3
+    from engram.embeddings.bge_service import get_bge_embedding_service
+    bge = get_bge_embedding_service()
+    bge.load_model()
+
+    # Process in batches
+    total = 0
+    for i in range(0, len(edges), batch_size):
+        batch = edges[i:i + batch_size]
+
+        # Create edge descriptions
+        descriptions = []
+        for edge in batch:
+            desc = f"{edge['source_name']} {edge['relation_type']} {edge['target_name']}"
+            descriptions.append(desc)
+
+        # Embed
+        embeddings = bge.embed_batch_sync(descriptions)
+
+        # Update in Neo4j
+        update_query = """
+        UNWIND $items AS item
+        MATCH (source:Concept {id: item.source_id})-[r:RELATED_TO]->(target:Concept {id: item.target_id})
+        SET r.edge_embedding = item.embedding
+        """
+        items = [
+            {
+                "source_id": edge["source_id"],
+                "target_id": edge["target_id"],
+                "embedding": emb,
+            }
+            for edge, emb in zip(batch, embeddings, strict=True)
+        ]
+        await db.execute_query(update_query, items=items)
+
+        total += len(batch)
+        progress = total / len(edges) * 100
+        logger.info(f"Re-embedded edges: {progress:.1f}% ({total}/{len(edges)})")
+
+    logger.info(f"Done! Re-embedded {total} edges with BGE-M3")
+
+
 async def fetch_memories(
     db: Neo4jClient,
     status_filter: str | None = None,
@@ -135,6 +209,7 @@ async def build_index(
     index_type: str = "flat",
     force: bool = False,
     recreate_neo4j_indexes: bool = False,
+    reembed_edges: bool = False,
 ) -> None:
     """
     Build FAISS vector index from Neo4j memories.
@@ -145,6 +220,7 @@ async def build_index(
         index_type: FAISS index type (flat or ivf)
         force: Overwrite existing index
         recreate_neo4j_indexes: Drop and recreate Neo4j vector indexes with 1024 dims
+        reembed_edges: Re-embed all edge embeddings with BGE-M3
     """
     output_path = output_path or settings.vector_index_path
 
@@ -161,6 +237,10 @@ async def build_index(
     # Recreate Neo4j vector indexes if requested
     if recreate_neo4j_indexes:
         await recreate_neo4j_vector_indexes(db, dimensions=1024)
+
+    # Re-embed edges if requested
+    if reembed_edges:
+        await reembed_edge_embeddings(db, batch_size=batch_size)
 
     try:
         # Fetch memories
@@ -250,6 +330,11 @@ def main():
         action="store_true",
         help="Drop and recreate Neo4j vector indexes with 1024 dimensions (BGE-M3)",
     )
+    parser.add_argument(
+        "--reembed-edges",
+        action="store_true",
+        help="Re-embed all edge embeddings with BGE-M3 (1024 dims)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -263,6 +348,7 @@ def main():
         index_type=args.index_type,
         force=args.force,
         recreate_neo4j_indexes=args.recreate_neo4j_indexes,
+        reembed_edges=args.reembed_edges,
     ))
 
 
