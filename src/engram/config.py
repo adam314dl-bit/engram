@@ -44,11 +44,11 @@ class Settings(BaseSettings):
     neo4j_password: str = "engram_password"
     neo4j_database: str = "neo4j"
 
-    # Embeddings Configuration (local HuggingFace model)
-    # Dev: all-MiniLM-L6-v2 (384 dims)
-    # Prod: ai-sage/Giga-Embeddings-instruct (2048 dims)
-    embedding_model: str = "all-MiniLM-L6-v2"
-    embedding_dimensions: int = 384
+    # Embeddings Configuration
+    # v5: BGE-M3 (1024 dims) is the primary embedding model
+    # Legacy settings kept for backwards compatibility
+    embedding_model: str = "BAAI/bge-m3"
+    embedding_dimensions: int = 1024
     embedding_query_prefix: str = Field(
         default="",
         description="Query prefix for asymmetric embedding models (e.g., 'Instruct: ' for GigaEmbeddings)"

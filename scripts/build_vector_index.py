@@ -10,6 +10,9 @@ Usage:
 
     # With options
     uv run python scripts/build_vector_index.py --batch-size 200 --output ./data/my_index
+
+    # Recreate Neo4j vector indexes (after changing embedding dimensions)
+    uv run python scripts/build_vector_index.py --recreate-neo4j-indexes --force
 """
 
 import argparse
@@ -28,6 +31,70 @@ from engram.embeddings.vector_index import VectorIndex
 from engram.storage.neo4j_client import Neo4jClient
 
 logger = logging.getLogger(__name__)
+
+
+async def recreate_neo4j_vector_indexes(db: Neo4jClient, dimensions: int = 1024) -> None:
+    """
+    Drop and recreate Neo4j vector indexes with specified dimensions.
+
+    Args:
+        db: Neo4j client
+        dimensions: Vector dimensions (default 1024 for BGE-M3)
+    """
+    logger.info(f"Recreating Neo4j vector indexes with {dimensions} dimensions...")
+
+    # Drop existing indexes
+    drop_queries = [
+        "DROP INDEX concept_embeddings IF EXISTS",
+        "DROP INDEX semantic_embeddings IF EXISTS",
+        "DROP INDEX episodic_embeddings IF EXISTS",
+    ]
+
+    for query in drop_queries:
+        try:
+            await db.execute_query(query)
+            logger.info(f"Dropped: {query.split()[2]}")
+        except Exception as e:
+            logger.warning(f"Drop warning (may not exist): {e}")
+
+    # Recreate with new dimensions
+    create_queries = [
+        f"""
+        CREATE VECTOR INDEX concept_embeddings IF NOT EXISTS
+        FOR (c:Concept) ON (c.embedding)
+        OPTIONS {{indexConfig: {{
+            `vector.dimensions`: {dimensions},
+            `vector.similarity_function`: 'cosine'
+        }}}}
+        """,
+        f"""
+        CREATE VECTOR INDEX semantic_embeddings IF NOT EXISTS
+        FOR (s:SemanticMemory) ON (s.embedding)
+        OPTIONS {{indexConfig: {{
+            `vector.dimensions`: {dimensions},
+            `vector.similarity_function`: 'cosine'
+        }}}}
+        """,
+        f"""
+        CREATE VECTOR INDEX episodic_embeddings IF NOT EXISTS
+        FOR (e:EpisodicMemory) ON (e.embedding)
+        OPTIONS {{indexConfig: {{
+            `vector.dimensions`: {dimensions},
+            `vector.similarity_function`: 'cosine'
+        }}}}
+        """,
+    ]
+
+    for query in create_queries:
+        try:
+            await db.execute_query(query)
+            index_name = query.split("INDEX")[1].split("IF")[0].strip()
+            logger.info(f"Created: {index_name} ({dimensions} dims)")
+        except Exception as e:
+            logger.error(f"Failed to create index: {e}")
+            raise
+
+    logger.info("Neo4j vector indexes recreated successfully")
 
 
 async def fetch_memories(
@@ -67,6 +134,7 @@ async def build_index(
     batch_size: int = 100,
     index_type: str = "flat",
     force: bool = False,
+    recreate_neo4j_indexes: bool = False,
 ) -> None:
     """
     Build FAISS vector index from Neo4j memories.
@@ -76,6 +144,7 @@ async def build_index(
         batch_size: Embedding batch size
         index_type: FAISS index type (flat or ivf)
         force: Overwrite existing index
+        recreate_neo4j_indexes: Drop and recreate Neo4j vector indexes with 1024 dims
     """
     output_path = output_path or settings.vector_index_path
 
@@ -88,6 +157,10 @@ async def build_index(
     logger.info("Connecting to Neo4j...")
     db = Neo4jClient()
     await db.connect()
+
+    # Recreate Neo4j vector indexes if requested
+    if recreate_neo4j_indexes:
+        await recreate_neo4j_vector_indexes(db, dimensions=1024)
 
     try:
         # Fetch memories
@@ -172,6 +245,11 @@ def main():
         action="store_true",
         help="Overwrite existing index",
     )
+    parser.add_argument(
+        "--recreate-neo4j-indexes",
+        action="store_true",
+        help="Drop and recreate Neo4j vector indexes with 1024 dimensions (BGE-M3)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -184,6 +262,7 @@ def main():
         batch_size=args.batch_size,
         index_type=args.index_type,
         force=args.force,
+        recreate_neo4j_indexes=args.recreate_neo4j_indexes,
     ))
 
 
