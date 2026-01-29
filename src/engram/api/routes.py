@@ -293,6 +293,10 @@ async def chat_completions(
     # Note: streaming not implemented, will return non-streaming response
     # Open WebUI handles this gracefully
 
+    # Generate request ID for debugging duplicate requests
+    request_id = str(uuid.uuid4())[:8]
+    logger.info(f"[{request_id}] Chat request received, stream={body.stream}")
+
     db = get_db(request)
 
     # Extract user query from messages (last user message)
@@ -428,6 +432,8 @@ async def chat_completions(
                 thresholds=thresholds,
             )
 
+        logger.info(f"[{request_id}] Chat request completed, confidence={result.confidence:.0%}")
+
         return ChatCompletionResponse(
             id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
             created=int(time.time()),
@@ -452,7 +458,7 @@ async def chat_completions(
         )
 
     except Exception as e:
-        logger.exception(f"Error in chat completion: {e}")
+        logger.exception(f"[{request_id}] Error in chat completion: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Reasoning failed: {str(e)}",
