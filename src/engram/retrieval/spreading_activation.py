@@ -127,12 +127,15 @@ class SpreadingActivation:
                     # Query-oriented edge filtering
                     edge_relevance = 1.0
                     if query_embedding and relation.edge_embedding:
-                        edge_relevance = cosine_similarity(
-                            query_embedding, relation.edge_embedding
-                        )
-                        # Filter out low-relevance edges
-                        if edge_relevance < self.threshold:
-                            continue
+                        # Skip cosine similarity if dimensions don't match
+                        # (can happen after embedding model change)
+                        if len(query_embedding) == len(relation.edge_embedding):
+                            edge_relevance = cosine_similarity(
+                                query_embedding, relation.edge_embedding
+                            )
+                            # Filter out low-relevance edges
+                            if edge_relevance < self.threshold:
+                                continue
 
                     # v4.4: Apply semantic edge boost for universal semantic edges
                     semantic_boost = 1.0

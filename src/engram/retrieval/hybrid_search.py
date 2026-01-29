@@ -438,9 +438,11 @@ class HybridSearch:
             MMR-reranked list of ScoredMemory
         """
         # Prepare candidates: (id, embedding, score)
+        # Only include embeddings with matching dimensions
+        query_dim = len(query_embedding)
         candidates = []
         for sm in scored_memories[:settings.mmr_fetch_k]:
-            if sm.memory.embedding:
+            if sm.memory.embedding and len(sm.memory.embedding) == query_dim:
                 candidates.append((sm.memory.id, sm.memory.embedding, sm.score))
 
         if not candidates:
@@ -499,7 +501,9 @@ class HybridSearch:
             # Relevance score (cosine similarity) - skip if no query embedding
             relevance = 0.5  # Default if no embedding
             if query_embedding and memory.embedding:
-                relevance = cosine_similarity(query_embedding, memory.embedding)
+                # Only compute if dimensions match (after model change)
+                if len(query_embedding) == len(memory.embedding):
+                    relevance = cosine_similarity(query_embedding, memory.embedding)
 
             # RRF score (normalized)
             rrf_score = fused_scores.get(memory_id, 0)

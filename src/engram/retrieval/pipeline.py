@@ -634,9 +634,11 @@ class RetrievalPipeline:
             score = memory.importance / 10.0
 
             if query_embedding and memory.embedding:
-                from engram.retrieval.embeddings import cosine_similarity
-                relevance = cosine_similarity(query_embedding, memory.embedding)
-                score = (score + relevance) / 2
+                # Only compute similarity if dimensions match
+                if len(query_embedding) == len(memory.embedding):
+                    from engram.retrieval.embeddings import cosine_similarity
+                    relevance = cosine_similarity(query_embedding, memory.embedding)
+                    score = (score + relevance) / 2
 
             scored.append(ScoredMemory(memory=memory, score=score, sources=["graph"]))
 

@@ -866,11 +866,15 @@ class Neo4jClient:
         RETURN node, score
         """
         results: list[tuple[Concept, float]] = []
-        async with self.session() as session:
-            result = await session.run(query, k=k, embedding=embedding)
-            async for record in result:
-                concept = Concept.from_dict(dict(record["node"]))
-                results.append((concept, record["score"]))
+        try:
+            async with self.session() as session:
+                result = await session.run(query, k=k, embedding=embedding)
+                async for record in result:
+                    concept = Concept.from_dict(dict(record["node"]))
+                    results.append((concept, record["score"]))
+        except Exception as e:
+            # Handle dimension mismatch or missing index gracefully
+            logger.warning(f"Vector search concepts failed (may need re-indexing): {e}")
         return results
 
     async def fulltext_search_concepts(
@@ -908,11 +912,15 @@ class Neo4jClient:
         RETURN node, score
         """
         results: list[tuple[SemanticMemory, float]] = []
-        async with self.session() as session:
-            result = await session.run(query, k=k, embedding=embedding)
-            async for record in result:
-                memory = SemanticMemory.from_dict(dict(record["node"]))
-                results.append((memory, record["score"]))
+        try:
+            async with self.session() as session:
+                result = await session.run(query, k=k, embedding=embedding)
+                async for record in result:
+                    memory = SemanticMemory.from_dict(dict(record["node"]))
+                    results.append((memory, record["score"]))
+        except Exception as e:
+            # Handle dimension mismatch or missing index gracefully
+            logger.warning(f"Vector search memories failed (may need re-indexing): {e}")
         return results
 
     async def vector_search_episodes(
@@ -925,11 +933,15 @@ class Neo4jClient:
         RETURN node, score
         """
         results: list[tuple[EpisodicMemory, float]] = []
-        async with self.session() as session:
-            result = await session.run(query, k=k, embedding=embedding)
-            async for record in result:
-                episode = EpisodicMemory.from_dict(dict(record["node"]))
-                results.append((episode, record["score"]))
+        try:
+            async with self.session() as session:
+                result = await session.run(query, k=k, embedding=embedding)
+                async for record in result:
+                    episode = EpisodicMemory.from_dict(dict(record["node"]))
+                    results.append((episode, record["score"]))
+        except Exception as e:
+            # Handle dimension mismatch or missing index gracefully
+            logger.warning(f"Vector search episodes failed (may need re-indexing): {e}")
         return results
 
     async def fulltext_search_memories(
