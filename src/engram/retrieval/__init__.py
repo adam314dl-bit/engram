@@ -1,5 +1,14 @@
 """Retrieval layer for Engram."""
 
+# v5: BGE-M3 embeddings (primary)
+from engram.embeddings.bge_service import (
+    BGEEmbeddingService,
+    embed_batch_bge,
+    embed_bge,
+    get_bge_embedding_service,
+)
+
+# Legacy embeddings (kept for backwards compatibility and utility functions)
 from engram.retrieval.embeddings import (
     EmbeddingService,
     cosine_similarity,
@@ -54,7 +63,12 @@ from engram.retrieval.spreading_activation import (
 )
 
 __all__ = [
-    # Embeddings
+    # BGE-M3 Embeddings (v5 - primary)
+    "BGEEmbeddingService",
+    "get_bge_embedding_service",
+    "embed_bge",
+    "embed_batch_bge",
+    # Legacy Embeddings (backwards compatibility)
     "EmbeddingService",
     "get_embedding_service",
     "embed",

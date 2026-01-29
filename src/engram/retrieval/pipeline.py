@@ -21,12 +21,12 @@ from engram.config import settings
 
 if TYPE_CHECKING:
     from engram.retrieval.vector_retriever import VectorRetriever
+from engram.embeddings.bge_service import BGEEmbeddingService, get_bge_embedding_service
 from engram.ingestion.concept_extractor import ConceptExtractor
 from engram.ingestion.llm_client import get_enrichment_llm_client
 from engram.ingestion.person_extractor import PersonQueryType, classify_person_query
 from engram.models import Concept, EpisodicMemory, SemanticMemory
 from engram.preprocessing.transliteration import build_expanded_bm25_query
-from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
 from engram.retrieval.hybrid_search import (
     HybridSearch,
     ScoredEpisode,
@@ -115,7 +115,7 @@ class RetrievalPipeline:
     def __init__(
         self,
         db: Neo4jClient,
-        embedding_service: EmbeddingService | None = None,
+        embedding_service: BGEEmbeddingService | None = None,
         concept_extractor: ConceptExtractor | None = None,
         spreading_activation: SpreadingActivation | None = None,
         hybrid_search: HybridSearch | None = None,
@@ -123,7 +123,7 @@ class RetrievalPipeline:
         vector_retriever: "VectorRetriever | None" = None,
     ) -> None:
         self.db = db
-        self.embeddings = embedding_service or get_embedding_service()
+        self.embeddings = embedding_service or get_bge_embedding_service()
         self.concept_extractor = concept_extractor or ConceptExtractor(
             llm_client=get_enrichment_llm_client()
         )

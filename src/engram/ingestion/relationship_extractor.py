@@ -3,11 +3,11 @@
 import logging
 from dataclasses import dataclass
 
+from engram.embeddings.bge_service import BGEEmbeddingService, get_bge_embedding_service
 from engram.ingestion.concept_extractor import ConceptExtractor
 from engram.ingestion.llm_client import LLMClient, get_llm_client
 from engram.ingestion.parser import generate_id
 from engram.models import Concept, ConceptRelation
-from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +60,10 @@ class RelationshipExtractor:
     def __init__(
         self,
         llm_client: LLMClient | None = None,
-        embedding_service: EmbeddingService | None = None,
+        embedding_service: BGEEmbeddingService | None = None,
     ) -> None:
         self.llm = llm_client or get_llm_client()
-        self.embeddings = embedding_service or get_embedding_service()
+        self.embeddings = embedding_service or get_bge_embedding_service()
 
     async def extract_relationships(
         self,

@@ -19,11 +19,11 @@ from engram.learning.memory_strength import (
     batch_strengthen_memories,
     batch_weaken_memories,
 )
+from engram.embeddings.bge_service import BGEEmbeddingService, get_bge_embedding_service
 from engram.learning.reflection import Reflector, ReflectionResult
 from engram.models import EpisodicMemory, SemanticMemory
 from engram.reasoning.episode_manager import EpisodeManager
 from engram.reasoning.re_reasoning import ReReasoner, ReReasoningResult
-from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
 from engram.storage.neo4j_client import Neo4jClient
 
 logger = logging.getLogger(__name__)
@@ -67,11 +67,11 @@ class FeedbackHandler:
         self,
         db: Neo4jClient,
         llm_client: LLMClient | None = None,
-        embedding_service: EmbeddingService | None = None,
+        embedding_service: BGEEmbeddingService | None = None,
     ) -> None:
         self.db = db
         self.llm = llm_client or get_llm_client()
-        self.embeddings = embedding_service or get_embedding_service()
+        self.embeddings = embedding_service or get_bge_embedding_service()
 
         # Initialize components
         self.episode_manager = EpisodeManager(db=db, embedding_service=self.embeddings)

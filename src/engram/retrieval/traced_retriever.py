@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Generator
 import numpy as np
 
 from engram.config import settings
-from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
+from engram.embeddings.bge_service import BGEEmbeddingService, get_bge_embedding_service
 from engram.retrieval.hybrid_search import ScoredMemory
 from engram.retrieval.observability import (
     ChunkTrace,
@@ -51,11 +51,11 @@ class TracedRetriever:
     def __init__(
         self,
         db: Neo4jClient,
-        embedding_service: EmbeddingService | None = None,
+        embedding_service: BGEEmbeddingService | None = None,
         vector_retriever: "VectorRetriever | None" = None,
     ) -> None:
         self.db = db
-        self.embeddings = embedding_service or get_embedding_service()
+        self.embeddings = embedding_service or get_bge_embedding_service()
         self.vector_retriever = vector_retriever  # v5: FAISS-based retriever
         self.pipeline = RetrievalPipeline(
             db=db,

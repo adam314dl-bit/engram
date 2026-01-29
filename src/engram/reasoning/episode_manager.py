@@ -11,9 +11,9 @@ import uuid
 from datetime import datetime
 
 from engram.config import settings
+from engram.embeddings.bge_service import BGEEmbeddingService, get_bge_embedding_service
 from engram.models import EpisodicMemory
 from engram.reasoning.synthesizer import SynthesisResult
-from engram.retrieval.embeddings import EmbeddingService, get_embedding_service
 from engram.storage.neo4j_client import Neo4jClient
 
 logger = logging.getLogger(__name__)
@@ -33,10 +33,10 @@ class EpisodeManager:
     def __init__(
         self,
         db: Neo4jClient,
-        embedding_service: EmbeddingService | None = None,
+        embedding_service: BGEEmbeddingService | None = None,
     ) -> None:
         self.db = db
-        self.embeddings = embedding_service or get_embedding_service()
+        self.embeddings = embedding_service or get_bge_embedding_service()
 
     async def create_episode(
         self,

@@ -22,7 +22,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from engram.api.graph import router as graph_router
 from engram.api.routes import router
 from engram.config import settings
-from engram.retrieval.embeddings import preload_embedding_model
 from engram.retrieval.reranker import preload_reranker
 from engram.storage.neo4j_client import Neo4jClient
 
@@ -58,13 +57,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await db.connect()
     logger.info("Connected to Neo4j")
 
-    # Preload embedding model only in hybrid mode (skip in bm25_graph mode)
+    # Preload BGE-M3 embedding model only in hybrid mode (skip in bm25_graph mode)
     if settings.retrieval_mode != "bm25_graph":
-        logger.info("Preloading embedding model...")
-        preload_embedding_model()
-        logger.info("Embedding model ready")
-
-        # v5: Preload BGE-M3 for vector retrieval
         logger.info("Preloading BGE-M3 embedding model...")
         preload_bge_model()
         logger.info("BGE-M3 model ready")
